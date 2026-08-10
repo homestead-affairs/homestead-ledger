@@ -1,0 +1,27 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  invariants:
+    # A cold checkout, nothing but pytest, bare `pytest -q` — the same posture as
+    # the engine's CI (homestead I-27/I-28) and homestead-law's. The engine
+    # (homestead.keep) ships on PyPI as `homestead-affairs`, so `pip install -e .`
+    # resolves it from the index like any dependency — no cross-repo checkout.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - run: pip install pytest
+      - run: pip install -e .        # pulls homestead-affairs (homestead.keep) from PyPI
+
+      - name: pytest
+        run: pytest -q
+
+      - name: smoke-run the module headless
+        run: python -m homestead_ledger --smoke

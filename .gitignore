@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+# never, under any circumstances, a household record
+.homestead/
+*.db
+*.jsonl
