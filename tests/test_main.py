@@ -19,6 +19,20 @@ def test_demo_exits_zero_and_prints_the_pipeline(tmp_path, monkeypatch, capsys):
     assert "cover (resting)" in out
 
 
+def test_demo_prints_the_whats_due_queue_and_recurring_pass(capsys):
+    """Bite 2's addition: after the books output, `--demo` prints the
+    obligations queue, its resting cover, and the recurring-charge pass over
+    the demo transactions."""
+    assert main(["--demo"]) == 0
+    out = capsys.readouterr().out
+    assert "what's due" in out
+    assert "overdue by" in out
+    assert "recurring" in out.lower()
+    # books (bite 1) prints "cover (resting)" twice (start and end of its
+    # pipeline); the queue (bite 2) adds a third, independent one.
+    assert out.count("cover (resting)") == 3
+
+
 def test_demo_uses_its_own_throwaway_home_not_the_ambient_one(tmp_path, monkeypatch):
     """`--demo` must not write into whatever HOMESTEAD_HOME the caller
     happens to have set — it opens its own temporary root and restores
