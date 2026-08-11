@@ -25,11 +25,11 @@ system cannot see* — surfaced only as structure, never as content.
 |---|---|---|
 | **0 — bind the seat** | ✅ done | store binding (SQLite over `homestead.keep.store`), the no-egress AST guard (I-17), CI (cold, engine from PyPI, 3 OSes), this plan |
 | **1 — the books** | ✅ done | accounts+transactions pack (classified at import), the registry (I-23), content-fingerprint identity (idempotent import), derived running balance, the display-free `app/window` + headless `--demo`; **+ the I-16 chokepoint added in audit** (mirror-not-judge made structural) |
-| **2 — what's due** | ▶ next | obligations/renewals + the recurring-charge detector + the queue |
-| **3 — the app** | queued | tkinter S1 + the shared surface theme + packaging |
+| **2 — what's due** | ✅ done | the obligations pack (sidecar-declared, classified at import), `all_obligations()` (a second I-23 enumeration), the **queue** (urgency over `homestead.keep.dates`; reads due-dates *through* `serve()`, not `.payload`; gaps first, I-8), the `app/cover` re-identification port (I-31), and the **pure recurring-charge detector** (`recurring.py`, imports nothing from the package). `--demo` shows books → queue → cover → a detected monthly charge. |
+| **3 — the app** | ▶ next | tkinter S1 view (cover→list→detail, reveal-expire) + a stdlib surface theme + packaging |
 | **4 — import + wire + guard** | queued | CSV import + queue-in-app + no-egress guard + optional outward bridge |
 
-**Suite: 87 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
+**Suite: 159 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
 Pins `homestead-affairs>=0.0.2,<1.0` from PyPI (0.0.3 is the current Apache
 release; the `<1.0` cap is a real compatibility range — the engine cuts 1.0.0 on
 a breaking change).
@@ -100,21 +100,21 @@ and `docs/the-fourth-store.md` (it's about Nestor, not money).
 
 Each bite ends with its tests green; the tests come first and start red.
 
-- **Bite 2 — what's due.** *(next)* An **obligations pack** — recurring
-  bills/renewals (rent, insurance, tax, registration, subscriptions) with due
-  dates, classified at import — over `homestead.keep.dates`; the **queue** = *what
-  the season owes*, reusing homestead-law's queue shape; and the **recurring-charge
-  detector** lifted from `private-ledger/subscriptions.py` (pure, `today`-injected)
-  to surface recurring spend and feed "coming due." The chokepoint scan covers the
-  new modules.
-- **Bite 3 — the app.** tkinter S1 list/detail (accounts→transactions;
-  obligations) mirroring law's `app/`, the cover with the re-identification check
-  (a "$X due / 1 overdue" aggregate is L2 only after it passes), account-number
-  patterns→L5 (I-18). **The shared surface theme lands here** — a stdlib-only
-  `theme.py` (`ttk.Style`: a real font, spacing, flat widgets, rungs coloured as
-  meaning) shared with homestead-law so both modules read as one product (the
-  "don't-look-like-Win98" pass; PySide6 stays the reserved v2 escape hatch).
-  Packaging (PyInstaller) lands here, with a window to package.
+- **Bite 3 — the app.** *(next)* A tkinter S1 **view** (`app/view.py`) drawing the
+  `Window`/`cover` state built in bites 1–2, mirroring law's `app/`: the resting
+  cover (obligations queue counts that survive re-identification, I-31), the
+  accounts→transactions list (amounts as derived L4, account# never a row),
+  transaction detail with reveal-expire (I-32), and the what's-due queue. The
+  chokepoint guards it — the view draws served values and reaches no `.payload`.
+  **A stdlib `theme.py`** lands here (`ttk.Style`: a real font, spacing, flat
+  widgets, rungs coloured as meaning — the "don't-look-like-Win98" pass, PySide6
+  the reserved v2 escape hatch). Packaging (PyInstaller spec + a CI artifact job,
+  as the engine/law have) with a window to package.
+  - **Follow-on (theme sharing):** the theme is built in the ledger first, then
+    hoisted into the engine (`homestead` → a new release) and both law and ledger
+    repointed to it, so there is one shared copy and law stops looking dated too.
+    That is a small coordinated PR set after the ledger's app proves the theme —
+    not folded into this bite, to keep it one repo.
 - **Bite 4 — import + wire + guard.** CSV import (header-auto-detect, hash-dedup,
   `--dry-run`); the queue wired into the app; the no-egress guard confirmed; an
   optional aggregate-only outward bridge that degrades to absent.
@@ -122,7 +122,7 @@ Each bite ends with its tests green; the tests come first and start red.
   Decide the distribution name at release time — `homestead-ledger` may be free on
   PyPI (unlike the bare `homestead`, which forced `homestead-affairs`).
 
-### Audit follow-ups (non-blocking, from the bite-1 audit)
+### Audit follow-ups (non-blocking)
 
 - **Payee-category sensitivity** — `description`→L3 uniformly does not yet catch a
   payee that *leaks a category* (a clinic, a named person → L4/L5). The
@@ -130,7 +130,11 @@ Each bite ends with its tests green; the tests come first and start red.
 - **`balance.py` is a second payload boundary** — it reaches `.payload` for
   arithmetic (allow-listed with the chokepoint). Could later fold into the store
   seam so there is a single boundary (the engine's shape).
-- **Cosmetic** — the demo's second cover line prints a doubled `cover —`.
+- **Obligation-kind anonymity axis** — the obligations cover applies I-31 over the
+  single obligation *kind* bite 2 registers, so it shows "Nothing is open" even
+  with items due. Faithful to the re-identification rule; whether *kind* is the
+  right granularity (vs. per-obligation-type matters) is worth a later look.
+- **Cosmetic** — the demo's second checking cover line prints a doubled `cover —`.
 - **Torn-write atomicity** — a partial import (fields 2–4 failing after field 1)
   is detected and surfaced, not silently assumed; a batched/transactional import
   would close it fully.
