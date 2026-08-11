@@ -18,13 +18,18 @@ license = { text = "Apache-2.0" }
 # It pins the engine `homestead.keep` from PyPI as the distribution
 # **homestead-affairs** (the bare `homestead` name on PyPI is an unrelated
 # abandoned package); `import homestead` / `from homestead.keep...` is unchanged
-# — the scikit-learn/sklearn split. Floor 0.0.2 is where homestead.keep.store
-# landed; the `<1.0` cap is a real compatibility range (the engine cuts 1.0.0 on
-# a breaking change rather than declaring it).
+# — the scikit-learn/sklearn split. Floor 0.1.0 is the first version this module
+# actually needs — where the shared `homestead.app.theme` landed and this view
+# began drawing from it. The `<1.0` cap means "every compatible version": the
+# engine's release config (bump-minor-pre-major false) bumps the minor for a
+# feat — so 0.2, 0.3, … all resolve under `<1.0` with no re-pin — and reserves
+# 1.0.0 for the first breaking change. The cap only asks to be revisited when
+# compatibility actually breaks (see the engine's release-please-config.json,
+# and jeles' note there on why `<1.0` must mean something).
 #
 # sqlite3 is stdlib — no dependency line for the store. holidays arrives through
 # homestead.keep (its deadline arithmetic), declared there, not re-declared here.
-dependencies = ["homestead-affairs>=0.0.2,<1.0"]
+dependencies = ["homestead-affairs>=0.1.0,<1.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

@@ -40,10 +40,11 @@ from __future__ import annotations
 import os
 import tempfile
 
+from homestead.app import theme
 from homestead.keep.rungs import Disposition
 
 from homestead_ledger import queue as queue_mod
-from homestead_ledger.app import demo, theme
+from homestead_ledger.app import demo
 from homestead_ledger.app.window import Window
 from homestead_ledger.packs import obligations
 from homestead_ledger.store import Canonical, Sidecar

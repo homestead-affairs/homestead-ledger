@@ -49,12 +49,14 @@ def main(argv: list[str] | None = None) -> int:
     if "--smoke" in argv:
         # Prove the interpreter and every import survived packaging — this
         # module's store, its pack and registry, the books, the derived
-        # balance, and the app surfaces (window, cover, demo, view, theme) —
-        # and exit without a display.
+        # balance, and the app surfaces (window, cover, demo, view) plus the
+        # shared engine theme the view now draws from — and exit without a
+        # display.
+        from homestead.app import theme  # noqa: F401
         from homestead.keep import paths
 
         from homestead_ledger import balance, books, registry, store  # noqa: F401
-        from homestead_ledger.app import demo, theme, view, window  # noqa: F401
+        from homestead_ledger.app import demo, view, window  # noqa: F401
         from homestead_ledger.packs import checking, obligations  # noqa: F401
 
         print(f"homestead-ledger ok · books at {paths.home() / 'homestead-ledger.db'}")
