@@ -121,7 +121,7 @@ def run() -> int:
         def on_open(_event: object = None) -> None:
             selection = listbox.curselection()
             if selection:
-                show_detail(items[selection[0]].ref)
+                show_detail(items[selection[0]].ref, back=show_queue)
 
         listbox.bind("<Double-Button-1>", on_open)
         ttk.Button(content, text="Open", command=on_open).pack(anchor="w", pady=(12, 0))
@@ -154,7 +154,7 @@ def run() -> int:
         def on_open(_event: object = None) -> None:
             selection = listbox.curselection()
             if selection:
-                show_detail(rows[selection[0]].ref)
+                show_detail(rows[selection[0]].ref, back=show_list)
 
         listbox.bind("<Double-Button-1>", on_open)
         ttk.Button(content, text="Open", command=on_open).pack(anchor="w", pady=(12, 0))
@@ -162,7 +162,11 @@ def run() -> int:
             content, text="Close", style="Secondary.TButton", command=show_cover,
         ).pack(anchor="w", pady=(4, 0))
 
-    def show_detail(ref) -> None:
+    def show_detail(ref, back) -> None:
+        # `back` is the pane this detail was opened from — the checking list or
+        # the queue — so "Back" returns where the operator came from. law's view
+        # hard-codes its one list here; the ledger has two panes, so the return
+        # target is passed in rather than assumed.
         served = window.open_detail(ref)
         clear()
         ttk.Label(content, text=ref[1], style="Heading.TLabel").pack(anchor="w")
@@ -174,7 +178,7 @@ def run() -> int:
         )
         ttk.Label(content, text=body, wraplength=520, justify="left").pack(anchor="w")
         ttk.Button(
-            content, text="Back", style="Secondary.TButton", command=show_list,
+            content, text="Back", style="Secondary.TButton", command=back,
         ).pack(anchor="w", pady=(24, 0))
 
     show_cover()
