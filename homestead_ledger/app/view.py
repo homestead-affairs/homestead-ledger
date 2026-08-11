@@ -28,9 +28,20 @@ letting go of the served detail and the working set. law's view adds no timed
 expiry on top of that, so this one doesn't either; inventing a timer neither
 template has would be scope this bite does not own.
 
-Synthetic data only (`app.demo`), in a throwaway store, until bite 4 wires a
-real import — so running this never writes a real household's books. `theme`
-is applied once, to the root, before any pane is drawn.
+**Bite 4 — real books, with a safe demo fallback.** `run()` opens on the
+operator's own store (`store.Canonical()`/`store.Sidecar()`, bound to
+`HOMESTEAD_HOME`/`~/.homestead`) whenever it holds anything, so a statement
+imported with `--import` actually appears in the list, the detail pane, the
+cover, and the what's-due queue. Only when the real store is empty — first
+run, nothing imported yet — does the window fall back to a throwaway demo
+store (a fresh tmpdir, seeded as `app.demo` always has), so the window is
+never blank; the fallback is announced on the cover with `DEMO_BANNER` and
+never touches the real store. `compose_store()` is the decision, factored out
+of `run()` so it can be driven headlessly (`tests/test_view.py`) without
+opening tkinter at all — it returns a `LedgerContext` naming which store won
+and why, and `run()` only draws it.
+
+`theme` is applied once, to the root, before any pane is drawn.
 
 `tkinter` is imported inside `run()` so the module stays importable on a
 headless box (the suite reads this file; it does not open a display).
@@ -39,30 +50,103 @@ from __future__ import annotations
 
 import os
 import tempfile
+from dataclasses import dataclass
+from datetime import date
 
 from homestead.app import theme
 from homestead.keep.rungs import Disposition
 
+from homestead_ledger import registry
 from homestead_ledger import queue as queue_mod
 from homestead_ledger.app import demo
 from homestead_ledger.app.window import Window
-from homestead_ledger.packs import obligations
+from homestead_ledger.packs import checking, obligations
 from homestead_ledger.store import Canonical, Sidecar
+
+__all__ = ["run", "compose_store", "LedgerContext", "DEMO_BANNER"]
+
+#: Shown on the cover in place of the ordinary subheading whenever `run()`
+#: fell back to the throwaway demo store — the "clearly-visible indicator"
+#: piece 1 requires, so demonstration numbers are never mistaken for a real
+#: household's books.
+DEMO_BANNER = "demonstration data — import a statement with `--import` to see your own books"
+
+
+@dataclass(frozen=True)
+class LedgerContext:
+    """Which store `run()` opened the window on, and why. `demo=True` means
+    the real store was empty and this is a throwaway fallback seeded by
+    `app.demo`; `demo=False` means `canonical`/`sidecar` are the operator's
+    own real books. `today` is `date.today()` for the real store, and
+    `demo.TODAY` (a fixed reference date) for the demo fallback, matching how
+    `app/demo.py` already reckons urgency against a stable date."""
+
+    canonical: Canonical
+    sidecar: Sidecar
+    today: str
+    demo: bool
+
+
+def _has_real_data(canonical: Canonical, sidecar: Sidecar) -> bool:
+    """True the moment the real books hold one transaction for a registered
+    account, or the real sidecar holds one record for a registered
+    obligation kind. Iterates the registries (I-23) rather than hand-naming
+    `"checking"`/`"obligations"`, so a future account or obligation kind is
+    picked up with no change here."""
+    for account_name in registry.all_accounts():
+        if canonical.records(account_name):
+            return True
+    for kind in registry.all_obligations():
+        if sidecar.records(kind):
+            return True
+    return False
+
+
+def compose_store() -> LedgerContext:
+    """Decide which store the window opens on, and bind it.
+
+    Opens `Canonical()`/`Sidecar()` against whatever `HOMESTEAD_HOME` (or its
+    `~/.homestead` default) currently resolves to — the operator's real
+    books. If that store holds anything at all, it wins outright and is
+    returned untouched: this function never seeds the real store, on any
+    path.
+
+    Only when the real store is completely empty does this fall back to a
+    fresh throwaway store: a new tmpdir, seeded exactly as `app.demo` seeds
+    the window in bite 3 (`demo.seed()` / `demo.seed_obligations()`). The
+    fallback redirects `HOMESTEAD_HOME` to that tmpdir before seeding, so the
+    operator's real root — checked and found empty just above — is never
+    written to.
+    """
+    canonical = Canonical()
+    sidecar = Sidecar()
+    if _has_real_data(canonical, sidecar):
+        return LedgerContext(
+            canonical=canonical, sidecar=sidecar, today=date.today().isoformat(), demo=False,
+        )
+
+    # The real store is empty — fall back to a throwaway demo store so the
+    # window is never blank on first run. A fresh tmpdir, same posture bite
+    # 3's view took for every run; the real root above is left untouched.
+    os.environ["HOMESTEAD_HOME"] = tempfile.mkdtemp(prefix="homestead-ledger-demo-")
+    demo_canonical = Canonical()
+    demo_sidecar = Sidecar()
+    demo.seed()
+    demo.seed_obligations(demo_sidecar)
+    return LedgerContext(
+        canonical=demo_canonical, sidecar=demo_sidecar, today=demo.TODAY, demo=True,
+    )
 
 
 def run() -> int:
     import tkinter as tk
     from tkinter import ttk
 
-    # A throwaway root, so running the view never touches a real household
-    # store — the same posture law's and the engine's `view.run()` take.
-    os.environ.setdefault("HOMESTEAD_HOME", tempfile.mkdtemp(prefix="homestead-ledger-demo-"))
-    canonical = Canonical()   # the read-only books (I-6) — checking's transactions
-    sidecar = Sidecar()       # the household's own overlay — obligations live here
-    demo.seed()
-    demo.seed_obligations(sidecar)
+    ledger = compose_store()
+    canonical = ledger.canonical   # the read-only books (I-6) — checking's transactions
+    sidecar = ledger.sidecar       # the household's own overlay — obligations live here
     window = Window()
-    today = demo.TODAY   # synthetic data; the real app would use date.today()
+    today = ledger.today
 
     root = tk.Tk()
     root.title("Homestead Ledger")
@@ -79,8 +163,9 @@ def run() -> int:
         window.close()
         clear()
         ttk.Label(content, text="Homestead Ledger", style="Heading.TLabel").pack(anchor="w")
+        subheading = DEMO_BANNER if ledger.demo else "The household's own books."
         ttk.Label(
-            content, text="The household's own books.", style="Subheading.TLabel"
+            content, text=subheading, style="Subheading.TLabel"
         ).pack(anchor="w", pady=(4, 24))
         # The resting cover shows only counts that survive the re-identification
         # check (I-31). Over the single obligation kind bite 2 registers that is
@@ -101,8 +186,11 @@ def run() -> int:
         # would load every obligation kind it spans; bite 2 registers one.
         window.open_list(sidecar.records(obligations.OBLIGATION))
         ttk.Label(content, text="What's due", style="Heading.TLabel").pack(anchor="w")
+        subheading = "gaps first, then overdue, then soonest"
+        if ledger.demo:
+            subheading = f"{subheading} · {DEMO_BANNER}"
         ttk.Label(
-            content, text="gaps first, then overdue, then soonest", style="Subheading.TLabel",
+            content, text=subheading, style="Subheading.TLabel",
         ).pack(anchor="w", pady=(0, 12))
 
         items = queue_mod.queue(sidecar, today=today)
@@ -132,16 +220,17 @@ def run() -> int:
 
     def show_list() -> None:
         clear()
-        window.open_list(canonical.records(demo.ACCOUNT))
-        ttk.Label(content, text=demo.ACCOUNT, style="Heading.TLabel").pack(anchor="w")
+        window.open_list(canonical.records(checking.ACCOUNT))
+        ttk.Label(content, text=checking.ACCOUNT, style="Heading.TLabel").pack(anchor="w")
         # one indicator per pane, not per row (I-33): the pane says an L4 is
         # present in its derived form, never a badge on every line — each
         # row's own colour (`theme.rung_color`) is the per-row signal.
         has_l4 = any(row.rung.value == "L4" for row in window.rows)
+        subheading = "showing derived · L4 present" if has_l4 else "showing"
+        if ledger.demo:
+            subheading = f"{subheading} · {DEMO_BANNER}"
         ttk.Label(
-            content,
-            text="showing derived · L4 present" if has_l4 else "showing",
-            style="Subheading.TLabel",
+            content, text=subheading, style="Subheading.TLabel",
         ).pack(anchor="w", pady=(0, 12))
 
         listbox = tk.Listbox(content, height=12)

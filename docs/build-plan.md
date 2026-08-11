@@ -27,9 +27,9 @@ system cannot see* — surfaced only as structure, never as content.
 | **1 — the books** | ✅ done | accounts+transactions pack (classified at import), the registry (I-23), content-fingerprint identity (idempotent import), derived running balance, the display-free `app/window` + headless `--demo`; **+ the I-16 chokepoint added in audit** (mirror-not-judge made structural) |
 | **2 — what's due** | ✅ done | the obligations pack (sidecar-declared, classified at import), `all_obligations()` (a second I-23 enumeration), the **queue** (urgency over `homestead.keep.dates`; reads due-dates *through* `serve()`, not `.payload`; gaps first, I-8), the `app/cover` re-identification port (I-31), and the **pure recurring-charge detector** (`recurring.py`, imports nothing from the package). `--demo` shows books → queue → cover → a detected monthly charge. |
 | **3 — the app** | ✅ done | tkinter S1 view (cover→list→detail), the stdlib `ttk` surface theme, PyInstaller packaging + a CI artifact job. **Theme follow-on complete:** the theme was hoisted into the engine (`homestead.app.theme`, released as 0.1.0) and both this module and `homestead-law` repointed to it — one shared copy, no drift. |
-| **4 — import + wire + guard** | ▶ next | CSV import (header-auto-detect, hash-dedup, `--dry-run`) + queue-in-app + no-egress guard + optional outward bridge |
+| **4 — import + wire + guard** | ✅ done | **CSV import** (`importer.py` — header-auto-detect for single-amount and debit/credit-split, fingerprint-seam dedup, `--dry-run`; routes every write through `books.import_transaction`, names no `CANONICAL`). **App wired to the real books** — `view.compose_store()` opens the window on the operator's own `~/.homestead` store so an imported statement appears in the list/detail/cover/queue, with a clearly-labelled throwaway-demo fallback on an empty first run (the real root is never seeded). **No-egress confirmed end-to-end** — a runtime guard (`test_no_egress_runtime.py`) poisons `socket` and proves the real import + app-compose paths never dial out, atop the static AST sweep. Outward bridge **deferred to v2** (see below). |
 
-**Suite: 166 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
+**Suite: 195 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
 Pins `homestead-affairs>=0.1.0,<1.0` from PyPI (0.1.0 is where the shared
 `homestead.app.theme` landed — the floor this view needs; the `<1.0` cap is a
 real compatibility range — the engine bumps the minor for a feat, so every
@@ -115,9 +115,15 @@ Each bite ends with its tests green; the tests come first and start red.
     repointed to it, so there is one shared copy and law stops looking dated too.
     A small coordinated PR set (ledger #4, law #5) after the ledger's app proved
     the theme.
-- **Bite 4 — import + wire + guard.** *(next)* CSV import (header-auto-detect, hash-dedup,
-  `--dry-run`); the queue wired into the app; the no-egress guard confirmed; an
-  optional aggregate-only outward bridge that degrades to absent.
+- **Bite 4 — import + wire + guard.** ✅ *done.* CSV import (`importer.py` —
+  header-auto-detect, fingerprint-seam dedup, `--dry-run`); the app wired to the
+  real books (`view.compose_store()` — real store when it holds anything, a
+  labelled throwaway-demo fallback when empty, the real root never seeded); and
+  the no-egress guard confirmed end-to-end (a runtime `socket`-poison test over
+  the real import and app-compose paths, atop the static AST sweep). The
+  **optional aggregate-only outward bridge is deferred to v2** — a money ledger's
+  purest v1 posture is strictly egress-free, and the bridge is already specced;
+  it slots into v2 as an injected, default-absent, aggregates-only seam.
 - **Then:** the ledger's own PyPI release machinery (the shape the engine uses).
   Decide the distribution name at release time — `homestead-ledger` may be free on
   PyPI (unlike the bare `homestead`, which forced `homestead-affairs`).
@@ -147,6 +153,13 @@ Each bite ends with its tests green; the tests come first and start red.
 
 ### Deferred v2+ (all specced by the survey)
 
+The **optional aggregate-only outward bridge** (`private-ledger/willow_bridge.py`'s
+pattern) — an injected, **default-absent** `ingest` seam that emits only
+aggregates that survive re-identification (counts, totals, normalized-merchant
+due facts), never a transaction/description/amount/account number, routed through
+the gate (S4); the package imports no network library, so I-17's AST sweep stays
+green and nothing egresses unless a transport is explicitly injected. Deferred
+from bite 4 to keep v1 strictly egress-free. Then also:
 OFX/PDF/OCR ingestion (`nest-pipeline`); envelope-budget and net-worth views; the
 calibration / grade-your-predictions loop (`the-almanac`'s `calibration.py`, ~70
 stdlib lines); the Nestor merchant-canonicalization seam (`nestor_seam.py`,
