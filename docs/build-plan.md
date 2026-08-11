@@ -26,10 +26,10 @@ system cannot see* — surfaced only as structure, never as content.
 | **0 — bind the seat** | ✅ done | store binding (SQLite over `homestead.keep.store`), the no-egress AST guard (I-17), CI (cold, engine from PyPI, 3 OSes), this plan |
 | **1 — the books** | ✅ done | accounts+transactions pack (classified at import), the registry (I-23), content-fingerprint identity (idempotent import), derived running balance, the display-free `app/window` + headless `--demo`; **+ the I-16 chokepoint added in audit** (mirror-not-judge made structural) |
 | **2 — what's due** | ✅ done | the obligations pack (sidecar-declared, classified at import), `all_obligations()` (a second I-23 enumeration), the **queue** (urgency over `homestead.keep.dates`; reads due-dates *through* `serve()`, not `.payload`; gaps first, I-8), the `app/cover` re-identification port (I-31), and the **pure recurring-charge detector** (`recurring.py`, imports nothing from the package). `--demo` shows books → queue → cover → a detected monthly charge. |
-| **3 — the app** | ▶ next | tkinter S1 view (cover→list→detail, reveal-expire) + a stdlib surface theme + packaging |
-| **4 — import + wire + guard** | queued | CSV import + queue-in-app + no-egress guard + optional outward bridge |
+| **3 — the app** | ✅ done | tkinter S1 view (cover→list→detail), the stdlib `ttk` surface theme, PyInstaller packaging + a CI artifact job. **Theme follow-on complete:** the theme was hoisted into the engine (`homestead.app.theme`, released as 0.1.0) and both this module and `homestead-law` repointed to it — one shared copy, no drift. |
+| **4 — import + wire + guard** | ▶ next | CSV import (header-auto-detect, hash-dedup, `--dry-run`) + queue-in-app + no-egress guard + optional outward bridge |
 
-**Suite: 159 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
+**Suite: 166 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
 Pins `homestead-affairs>=0.1.0,<1.0` from PyPI (0.1.0 is where the shared
 `homestead.app.theme` landed — the floor this view needs; the `<1.0` cap is a
 real compatibility range — the engine bumps the minor for a feat, so every
@@ -101,22 +101,21 @@ and `docs/the-fourth-store.md` (it's about Nestor, not money).
 
 Each bite ends with its tests green; the tests come first and start red.
 
-- **Bite 3 — the app.** *(next)* A tkinter S1 **view** (`app/view.py`) drawing the
+- **Bite 3 — the app.** ✅ *done.* A tkinter S1 **view** (`app/view.py`) draws the
   `Window`/`cover` state built in bites 1–2, mirroring law's `app/`: the resting
   cover (obligations queue counts that survive re-identification, I-31), the
   accounts→transactions list (amounts as derived L4, account# never a row),
-  transaction detail with reveal-expire (I-32), and the what's-due queue. The
-  chokepoint guards it — the view draws served values and reaches no `.payload`.
-  **A stdlib `theme.py`** lands here (`ttk.Style`: a real font, spacing, flat
-  widgets, rungs coloured as meaning — the "don't-look-like-Win98" pass, PySide6
-  the reserved v2 escape hatch). Packaging (PyInstaller spec + a CI artifact job,
-  as the engine/law have) with a window to package.
-  - **Follow-on (theme sharing):** the theme is built in the ledger first, then
-    hoisted into the engine (`homestead` → a new release) and both law and ledger
+  transaction detail, and the what's-due queue. The chokepoint guards it — the
+  view draws served values and reaches no `.payload`. A stdlib `ttk.Style` theme
+  (real font, spacing, flat widgets, rungs coloured as meaning — the
+  "don't-look-like-Win98" pass; PySide6 the reserved v2 escape hatch) landed, and
+  packaging (PyInstaller spec + CI artifact job, as the engine/law have).
+  - **Follow-on (theme sharing):** ✅ *done.* The theme was hoisted into the engine
+    (`homestead.app.theme`, released as **0.1.0**) and both law and ledger
     repointed to it, so there is one shared copy and law stops looking dated too.
-    That is a small coordinated PR set after the ledger's app proves the theme —
-    not folded into this bite, to keep it one repo.
-- **Bite 4 — import + wire + guard.** CSV import (header-auto-detect, hash-dedup,
+    A small coordinated PR set (ledger #4, law #5) after the ledger's app proved
+    the theme.
+- **Bite 4 — import + wire + guard.** *(next)* CSV import (header-auto-detect, hash-dedup,
   `--dry-run`); the queue wired into the app; the no-egress guard confirmed; an
   optional aggregate-only outward bridge that degrades to absent.
 - **Then:** the ledger's own PyPI release machinery (the shape the engine uses).
