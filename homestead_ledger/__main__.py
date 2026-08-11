@@ -27,11 +27,17 @@ import sys
 
 USAGE = """\
 usage: python -m homestead_ledger [--help] [--smoke | --demo]
+       python -m homestead_ledger --import FILE --account-number N [--dry-run] [--account NAME]
 
   --help, -h   show this message and exit
   --smoke      prove every import survived packaging; exit without a display
   --demo       seed a synthetic checking account and obligations and print
                them, headless
+  --import FILE --account-number N
+               import a bank-statement CSV for one account (header
+               auto-detected: single-amount or debit/credit split); prints
+               the imported/skipped/errors tally. --account defaults to
+               "checking"; --dry-run parses and tallies without writing
   (default)    open the tkinter view on the cover — requires tkinter and a
                display; falls back to a guidance message if neither is present
 """
@@ -82,6 +88,55 @@ def main(argv: list[str] | None = None) -> int:
             print()
             print(demo.compose_recurring())
         return 0
+
+    if "--import" in argv:
+        # Bite 4 — a bank-statement CSV import, headless, no tkinter touched.
+        # Imported inside this branch so `--smoke` and every other path stay
+        # clean of the importer's own imports.
+        from homestead_ledger import importer
+        from homestead_ledger.packs import checking
+
+        try:
+            csv_index = argv.index("--import")
+            csv_path = argv[csv_index + 1]
+        except IndexError:
+            print("homestead-ledger: --import requires a file path", file=sys.stderr)
+            return 2
+
+        if "--account-number" not in argv:
+            print("homestead-ledger: --import requires --account-number N", file=sys.stderr)
+            return 2
+        try:
+            number_index = argv.index("--account-number")
+            account_number = argv[number_index + 1]
+        except IndexError:
+            print("homestead-ledger: --account-number requires a value", file=sys.stderr)
+            return 2
+
+        account = checking.ACCOUNT
+        if "--account" in argv:
+            try:
+                account_index = argv.index("--account")
+                account = argv[account_index + 1]
+            except IndexError:
+                print("homestead-ledger: --account requires a value", file=sys.stderr)
+                return 2
+
+        dry_run = "--dry-run" in argv
+
+        try:
+            result = importer.import_csv(
+                csv_path, account=account, account_number=account_number, dry_run=dry_run,
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"homestead-ledger: import failed — {exc}", file=sys.stderr)
+            return 1
+
+        label = "would-import" if dry_run else "imported"
+        print(f"{label}={result.imported} skipped={result.skipped} errors={result.errors}")
+        for message in result.error_messages:
+            print(f"  error: {message}", file=sys.stderr)
+        return 1 if result.errors else 0
 
     # Imported inside main so the module stays importable on a headless box.
     from homestead_ledger.app import view
