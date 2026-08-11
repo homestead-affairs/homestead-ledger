@@ -2,8 +2,8 @@
 
 *Module two of the Homestead · Affairs face: the homesteader keeping their own
 books. A fresh build in this repo on the shared engine — not a port. The engine
-(`homestead.keep`, published as `homestead-affairs`) is already built and
-shipped, so this is a much lighter build than `homestead-law` was: it pins the
+(`homestead.keep`, published as `homestead-affairs`, Apache-2.0) is already built
+and shipped, so this is a much lighter build than `homestead-law` was: it pins the
 engine and adds only the money-domain layer on top.*
 
 **Predecessor:** `safe-app-store/apps/private-ledger` — read as a specification
@@ -18,6 +18,21 @@ deliberate blind spot: *family is the spec, protected by being the one thing the
 system cannot see* — surfaced only as structure, never as content.
 
 ---
+
+## Status
+
+| Bite | State | What landed |
+|---|---|---|
+| **0 — bind the seat** | ✅ done | store binding (SQLite over `homestead.keep.store`), the no-egress AST guard (I-17), CI (cold, engine from PyPI, 3 OSes), this plan |
+| **1 — the books** | ✅ done | accounts+transactions pack (classified at import), the registry (I-23), content-fingerprint identity (idempotent import), derived running balance, the display-free `app/window` + headless `--demo`; **+ the I-16 chokepoint added in audit** (mirror-not-judge made structural) |
+| **2 — what's due** | ▶ next | obligations/renewals + the recurring-charge detector + the queue |
+| **3 — the app** | queued | tkinter S1 + the shared surface theme + packaging |
+| **4 — import + wire + guard** | queued | CSV import + queue-in-app + no-egress guard + optional outward bridge |
+
+**Suite: 87 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
+Pins `homestead-affairs>=0.0.2,<1.0` from PyPI (0.0.3 is the current Apache
+release; the `<1.0` cap is a real compatibility range — the engine cuts 1.0.0 on
+a breaking change).
 
 ## What it is
 
@@ -36,72 +51,89 @@ sharing the `~/.homestead` root with `homestead-law`. Optional fleet sync is an
 | 2 | **CSV import is in v1** — a ledger with no import path is manual-entry-only. Header-auto-detect + hash-dedup + `--dry-run` (the `story-timeline/import_csv.py` shape). OFX/PDF/OCR are v2. |
 | 3 | **Books first, then the "what's due" queue** (mirrors homestead-law's build order). |
 | 4 | Born in this repo, like homestead-law — **not** in `safe-app-store/apps/`. The store's playground/promotion gates apply only if it is ever registered there; the invariants live in-repo, as the engine's do. |
+| 5 | **Rungs (settled in bite 1):** `amount`→**L4** (money category), `account_number`/SSN→**L5** (key material), `date`→**L2** (household activity, not a public record the way a court date is — so L2 not L1), `description`/payee→**L3** (resolves to a party). Declared at schema-definition time; unclassified fails the build. |
+| 6 | **Mirror-not-judge is structural, not disciplinary.** The I-16 chokepoint (`tests/test_invariants_chokepoint.py`) enforces by AST scan that only `books.py` names the `CANONICAL` table, no surface reaches a `.payload` or reflects, and every audit bypass is caught. The read-only handle alone was not enough (the import writes canonical by bypassing it through the raw adapter). |
+| 7 | **Apache-2.0**, matching the engine and the fleet. |
 
 ## The record model — the heart of "mirror not judge"
 
 Money enters as **canonical** and is immutable; the household's judgments live in
 the **sidecar** overlay.
 
-- **Canonical** — imported transactions and statements. Read-only by type (I-6):
-  the app has no write path. Transaction identity is a **content fingerprint**
-  (sha256 of date + amount + description + account), so re-importing the same
-  statement is idempotent and never silently overwrites (I-7 one key, I-9 no
-  silent clobber). Confirmed by `njord/idempotency.py`, `story-timeline` hash-dedup.
+- **Canonical** — imported transactions, one record **per field** keyed by
+  `(account, field, fingerprint)` (not one composed record — a composed record
+  would collapse to the `max` rung, L5, and hide the whole transaction). Read-only
+  by type (I-6): the app has no write path; only `books.py` (the import) writes,
+  and the chokepoint enforces that. Transaction identity is a **content
+  fingerprint** (sha256 of date + amount + description + account), so re-importing
+  the same statement is idempotent and never silently overwrites (I-7, I-9). The
+  import distinguishes an ordinary re-import from a torn partial-import and
+  surfaces the latter for an operator.
 - **Sidecar** — categorization, notes, budget envelopes, a confirmed merchant
-  name, a marked-`do_not_use` flag. The only thing the app writes. The
-  correction-not-mutation shape is `kitchen-pudding`'s: the original claim and the
-  current belief are both always answerable.
-- **Rungs** (engine-enforced): amount-tied-to-account → **L4**; account number /
-  SSN → **L5**; due-date / schedule → **L1/L2**; payee/creditor name → **L3/L4**.
-  A corrupt or unclassified row reads **L5** on the way out.
+  name, a marked-`do_not_use` flag. The only thing the app writes.
+- **Rungs** (engine-enforced) — decision 5 above; a corrupt or unclassified row
+  reads **L5** on the way out.
 
 ## The reuse map
 
 | Layer | Reuse | Source |
 |---|---|---|
 | Record core (canonical/sidecar/rungs/deadlines/gate/sealed log/paths) | pin `homestead-affairs` | the shipped engine |
-| Store binding (SQLite over `homestead.keep.store`) | copy `homestead-law/store.py` | this repo, bite 0 |
-| Transaction dedup / idempotent import | content fingerprint | `njord/idempotency.py`, `story-timeline/import_csv.py` |
-| Recurring-charge detector (pure, stdlib, `today`-injected) | lift near-verbatim | `private-ledger/subscriptions.py` |
-| "What's due" queue | the engine's deadline machinery | homestead-law's queue |
-| No-egress AST test | vendored scanner | `marching-arts/tests/test_no_egress.py` (done, bite 0) |
-| The app (tkinter S1 list/detail/cover) | mirror the engine/law `app/` | `homestead`/`homestead-law` |
-| Optional aggregate-only outward seam | injected `ingest`, degrade-to-no-op | `private-ledger/willow_bridge.py` |
-| CSV/OFX/PDF ingestion *(v2)* | classify→route→scrub→promote | `willow_nest_spec.md`, `nest-seed`, `story-timeline` |
+| Store binding (SQLite over `homestead.keep.store`) | done, bite 0 | `homestead-law/store.py` |
+| Transaction dedup / idempotent import | done, bite 1 | `njord/idempotency.py`, `story-timeline/import_csv.py` |
+| No-egress AST test / the I-16 chokepoint | done, bites 0–1 | `marching-arts/tests/test_no_egress.py`; `homestead/tests/test_invariants_chokepoint.py` |
+| Recurring-charge detector (pure, stdlib, `today`-injected) | **bite 2** — lift near-verbatim | `private-ledger/subscriptions.py` |
+| "What's due" queue | **bite 2** — the engine's deadline machinery | homestead-law's queue |
+| The app (tkinter S1 list/detail/cover) + shared theme | **bite 3** — mirror law's `app/` | `homestead`/`homestead-law` |
+| Optional aggregate-only outward seam | **bite 4** — injected `ingest`, degrade-to-no-op | `private-ledger/willow_bridge.py` |
+| CSV import (header-detect, hash-dedup, `--dry-run`) | **bite 4** | `story-timeline/import_csv.py` |
+| OFX/PDF/OCR ingestion *(v2)* | classify→route→scrub→promote | `willow_nest_spec.md`, `nest-seed` |
 | Merchant/entity resolution *(v2, optional)* | contract-first seam, degrade-to-absent, **never deposits affairs into Nestor** | `docs/drafts/nestor_seam.py` |
 | Grade-your-own-predictions *(v2)* | append-only predictions + `calibration.py` | `the-almanac.md`, `oakenscrolls-office` |
-| Promotion `semantic_seam` *(if ever registered)* | pure stdlib SQLite/FTS5 search, one declared symbol; `conflict_scan` "refutes not resembles" ranking | Jeles corpus pattern; `stores/promote_check.py` |
+| Promotion `semantic_seam` *(if ever registered)* | pure stdlib SQLite/FTS5 search, one declared symbol; `conflict_scan` ranking | Jeles corpus pattern; `stores/promote_check.py` |
 
 **Not reused:** `vault-paths` (superseded by `homestead.keep.paths`), the
 `willow-*`/`pg-*`/`fleet-presence` libs (fleet-internal), `private-ledger/_archived/*`,
 and `docs/the-fourth-store.md` (it's about Nestor, not money).
 
-## Build order
+## Build order — remaining
 
 Each bite ends with its tests green; the tests come first and start red.
 
-- **Bite 0 — the seat is bound.** *(this push)* Repo scaffold, pin
-  `homestead-affairs`, the store binding (SQLite `homestead-ledger.db` in
-  `~/.homestead`), the no-egress AST guard (I-17), CI (cold checkout, engine from
-  PyPI, three OSes), this plan. *Exit: cold `pip install -e .` + bare `pytest`
-  green; no-egress green; `--smoke` runs.*
-- **Bite 1 — the books.** Accounts + transactions schema pack, classified at
-  import (amount→L4, account#→L5), the registry as the only enumeration (I-23),
-  transaction identity = content fingerprint (idempotent), running balance
-  derived. Canonical immutable; sidecar for categorization/notes/budget. The
-  **mirror-not-judge** invariant (no write path to a transaction) lands as a test.
-- **Bite 2 — what's due.** Recurring obligations/renewals with due dates over
-  `homestead.keep.dates`; the queue = *what the season owes*; the recurring-charge
-  detector lifted from private-ledger.
+- **Bite 2 — what's due.** *(next)* An **obligations pack** — recurring
+  bills/renewals (rent, insurance, tax, registration, subscriptions) with due
+  dates, classified at import — over `homestead.keep.dates`; the **queue** = *what
+  the season owes*, reusing homestead-law's queue shape; and the **recurring-charge
+  detector** lifted from `private-ledger/subscriptions.py` (pure, `today`-injected)
+  to surface recurring spend and feed "coming due." The chokepoint scan covers the
+  new modules.
 - **Bite 3 — the app.** tkinter S1 list/detail (accounts→transactions;
   obligations) mirroring law's `app/`, the cover with the re-identification check
   (a "$X due / 1 overdue" aggregate is L2 only after it passes), account-number
-  patterns→L5 (I-18), the single chokepoint; `--demo` headless. Packaging
-  (PyInstaller) lands here, with the window to package.
-- **Bite 4 — import + wire + guard.** CSV import (header-detect, hash-dedup,
+  patterns→L5 (I-18). **The shared surface theme lands here** — a stdlib-only
+  `theme.py` (`ttk.Style`: a real font, spacing, flat widgets, rungs coloured as
+  meaning) shared with homestead-law so both modules read as one product (the
+  "don't-look-like-Win98" pass; PySide6 stays the reserved v2 escape hatch).
+  Packaging (PyInstaller) lands here, with a window to package.
+- **Bite 4 — import + wire + guard.** CSV import (header-auto-detect, hash-dedup,
   `--dry-run`); the queue wired into the app; the no-egress guard confirmed; an
   optional aggregate-only outward bridge that degrades to absent.
-- **Then:** PyPI release machinery (the same shape the engine now uses).
+- **Then:** the ledger's own PyPI release machinery (the shape the engine uses).
+  Decide the distribution name at release time — `homestead-ledger` may be free on
+  PyPI (unlike the bare `homestead`, which forced `homestead-affairs`).
+
+### Audit follow-ups (non-blocking, from the bite-1 audit)
+
+- **Payee-category sensitivity** — `description`→L3 uniformly does not yet catch a
+  payee that *leaks a category* (a clinic, a named person → L4/L5). The
+  "mirror not judge" tension in miniature; a future per-payee sensitivity pass.
+- **`balance.py` is a second payload boundary** — it reaches `.payload` for
+  arithmetic (allow-listed with the chokepoint). Could later fold into the store
+  seam so there is a single boundary (the engine's shape).
+- **Cosmetic** — the demo's second cover line prints a doubled `cover —`.
+- **Torn-write atomicity** — a partial import (fields 2–4 failing after field 1)
+  is detected and surfaced, not silently assumed; a batched/transactional import
+  would close it fully.
 
 ### Deferred v2+ (all specced by the survey)
 
@@ -115,18 +147,23 @@ beyond the engine's sealed log; the promotion semantic-seam.
 
 ## Invariants
 
-**Carried from the engine (free):** I-1…I-15 (dates, the record, rungs), I-16 (one
-chokepoint), I-17 (no egress — re-asserted in-repo by the no-egress AST test),
+**Carried from the engine (free):** I-1…I-15 (dates, the record, rungs),
 I-19/I-20 (`/.homestead` paths), I-21/I-31/I-32/I-35 (cover, reveal-expire,
 re-identification), I-26 (import-pure core), I-27/I-28 (cold install, bare pytest).
 
+**Enforced in-repo:**
+- **I-17 — no egress.** An AST sweep over the package: no network import, no
+  `eval`/`exec`/`__import__`. A money ledger is the canonical "must not egress"
+  case. *(bite 0)*
+- **I-16 — one chokepoint / mirror-not-judge.** Only `books.py` names `CANONICAL`;
+  no surface reaches a `.payload` or reflects; every audit bypass is caught. *(bite 1)*
+
 **New / ledger-specific:**
-- **Mirror, not judge** — the app has no write path to a transaction; money is
-  overlaid, never edited (the money reading of I-6/I-25).
-- **Money classification** — amount→L4, account#/SSN→L5, due-date→L1/L2, at
-  schema-definition time; unclassified fails the build.
-- **Idempotent import** — a transaction's identity is a content fingerprint;
-  re-import never duplicates and never silently overwrites.
+- **Mirror, not judge** — the app never writes a transaction; money is overlaid,
+  never edited (I-6/I-25 for money), enforced by the chokepoint.
+- **Money classification** — decision 5, at schema-definition time.
+- **Idempotent import** — identity is a content fingerprint; re-import never
+  duplicates and never silently overwrites.
 - **Family is never content** — the household graph is surfaced only as structure,
   never rendered as a person's record (the self-portrait's blind spot).
 
