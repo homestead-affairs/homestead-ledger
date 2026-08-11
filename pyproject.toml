@@ -7,7 +7,7 @@ name = "homestead-ledger"
 version = "0.0.1"
 description = "Homestead · Affairs — module two. The household's own books, local-first on SQLite, 'mirror not judge'."
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 
 # Module two of the Homestead · Affairs face — the homesteader keeping their own
 # books. **Mirror, not judge:** the app reflects the household's money and never
