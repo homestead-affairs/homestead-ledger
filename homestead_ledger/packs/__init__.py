@@ -3,7 +3,10 @@
 Mirrors `homestead_law.packs`: a pack declares an account kind's fields and
 their rungs (`homestead.keep.rungs.classify_schema`, run at module import), so
 an unclassified field is a build failure rather than a runtime surprise.
-`checking` is the one pack bite 1 builds — savings and credit-card accounts
-are the next account kinds, not built here (the same "one pack proves the
-seam" posture homestead-law took with custody alone).
+`checking` is the one account pack bite 1 builds — savings and credit-card
+accounts are the next account kinds, not built here (the same "one pack
+proves the seam" posture homestead-law took with custody alone). `obligations`
+is bite 2's schema for a recurring household bill — one schema for every
+obligation kind (rent, insurance, a subscription), the way `checking` is one
+schema for every checking transaction.
 """

@@ -36,15 +36,22 @@ def main(argv: list[str] | None = None) -> int:
     if "--demo" in argv:
         # A throwaway household root, so the demo imports synthetic
         # transactions nowhere real. Compose the surfaces through the gate
-        # and print what a view would draw — headless, on SQLite.
+        # and print what a view would draw — headless, on SQLite. Books
+        # first (bite 1), then what's due — the queue, its resting cover,
+        # and the recurring-charge pass (bite 2).
         import os
         import tempfile
 
         from homestead_ledger.app import demo
+        from homestead_ledger.store import Sidecar
 
         with tempfile.TemporaryDirectory(prefix="homestead-ledger-demo-") as tmp:
             os.environ["HOMESTEAD_HOME"] = tmp
             print(demo.compose_demo())
+            print()
+            print(demo.compose_queue(Sidecar()))
+            print()
+            print(demo.compose_recurring())
         return 0
 
     print("homestead-ledger: the app surface lands in a later bite; try --smoke or --demo")
