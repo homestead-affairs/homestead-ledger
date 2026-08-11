@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "homestead-ledger",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": false,
+      "bump-patch-for-minor-pre-major": false,
+      "include-component-in-tag": false,
+      "changelog-sections": [
+        { "type": "feat", "section": "Added" },
+        { "type": "fix", "section": "Fixed" },
+        { "type": "security", "section": "Security" },
+        { "type": "perf", "section": "Performance" },
+        { "type": "refactor", "section": "Changed" },
+        { "type": "build", "section": "Build" },
+        { "type": "deps", "section": "Build" },
+        { "type": "docs", "section": "Docs", "hidden": true },
+        { "type": "test", "section": "Tests", "hidden": true },
+        { "type": "ci", "section": "CI", "hidden": true },
+        { "type": "chore", "section": "Chores", "hidden": true }
+      ]
+    }
+  },
+
+  "$comment-tag-format": "include-component-in-tag MUST stay false, and it is the setting most likely to be dropped when copying this file: nothing about it looks load-bearing. With it absent, release-please defaults to true and names the tag `homestead-ledger-v0.1.0` instead of `v0.1.0`. That breaks two things at once and both fail silently — release.yml triggers on `v*`, which `homestead-ledger-v0.1.0` does not match, so nothing publishes; and release-please stops recognising the manifest's version as its own previous release, so it walks the whole history and proposes everything as new. tests/test_invariants_release.py checks the produced tag against the workflow trigger, because a comment did not stop this happening in willow-mcp#256.",
+
+  "$comment-versioning": "release-type 'simple' maintains CHANGELOG.md and the tag and edits no version file — correct here because hatch-vcs derives the version from the tag (see [tool.hatch.version]), so there is no second copy to drift. bump-minor-pre-major is FALSE with bump-patch-for-minor-pre-major false, so below 1.0: feat -> minor, fix and everything unlabelled -> patch, and a breaking change -> 1.0.0. This is the pre-1.0 case jeles worked out: with the flag true a breaking change stays at a minor, which makes a downstream `<1.0.0` cap meaningless (it accepts every version this config can produce). This is a shipped app, versioned for its own releases — not a dependency someone else pins against — but the same discipline holds: `<1.0` from a consumer should mean something the day one exists, so 1.0 arrives when compatibility breaks, not when someone declares it. The flags are dead weight past 1.0 (isPreMajor gates them); the wiring test flips them out then.",
+
+  "$comment-what-cuts-a-release": "EVERY type listed above without \"hidden\": true cuts a release on its own — not just feat and fix. The fleet learned this the expensive way: a single `ci:` commit that changed a workflow file and nothing a user installs was tagged and published to PyPI (jeles v0.4.1). That is survivable while release PRs are merged by hand, because you see what is in them; release-please.yml here arms auto-merge, so an un-hidden type ships to PyPI unattended, and a PyPI version can never be reused.",
+
+  "$comment-hidden-rule": "The line is: does this commit change what someone gets from `pip install homestead-ledger`? docs/test/ci do not — tests and workflows are not packaged, and a README edit only moves the PyPI page — so they are hidden and ride along with the next real release. build and deps stay visible because a dependency or packaging change genuinely alters the installed artifact, and hiding them would mean a dependency fix never reaching anyone, silently. refactor and perf stay visible because they change shipped code, and a version number is what you point at when a refactor turns out to have broken something. Hidden also means absent from CHANGELOG.md — release-please has no 'list it but do not release on it' setting, so this is a real trade, taken deliberately.",
+
+  "$comment-sections": "Section names mirror Keep a Changelog. Commit types outside this list (the fleet also uses hooks:, gate:, skills:, server:, envelopes:, and this repo's own store:/gate:/surface:-shaped prefixes) are ignored for both the changelog and the version bump — so a run of those produces no release at all until a feat: or fix: lands."
+}

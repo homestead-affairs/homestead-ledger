@@ -125,8 +125,16 @@ Each bite ends with its tests green; the tests come first and start red.
   purest v1 posture is strictly egress-free, and the bridge is already specced;
   it slots into v2 as an injected, default-absent, aggregates-only seam.
 - **Then:** the ledger's own PyPI release machinery (the shape the engine uses).
-  Decide the distribution name at release time — `homestead-ledger` may be free on
-  PyPI (unlike the bare `homestead`, which forced `homestead-affairs`).
+  ✅ *done.* release-please + Trusted Publishing (OIDC) ported from the engine:
+  `release-please-config.json` (`bump-minor-pre-major` false, so 1.0 means a
+  break), the `release-please.yml` / `release.yml` workflows (PAT-cut tag →
+  top-level publish, the fleet's hard-won provenance shape), hatch-vcs deriving
+  the version from the tag, `tools/changelog_dedup.py`, a seeded `CHANGELOG.md`,
+  and `tests/test_invariants_release.py` guarding that the four files agree.
+  The distribution name is **`homestead-ledger`** (confirmed free on PyPI — no
+  `-affairs` workaround the bare `homestead` forced). One-time account setup (the
+  PyPI pending publisher + `pypi` environment + `RELEASE_PLEASE_TOKEN`) is the
+  only thing between here and the first `0.0.2` release.
 
 ### Audit follow-ups (non-blocking)
 
