@@ -30,9 +30,10 @@ system cannot see* — surfaced only as structure, never as content.
 | **4 — import + wire + guard** | queued | CSV import + queue-in-app + no-egress guard + optional outward bridge |
 
 **Suite: 159 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
-Pins `homestead-affairs>=0.0.2,<1.0` from PyPI (0.0.3 is the current Apache
-release; the `<1.0` cap is a real compatibility range — the engine cuts 1.0.0 on
-a breaking change).
+Pins `homestead-affairs>=0.1.0,<1.0` from PyPI (0.1.0 is where the shared
+`homestead.app.theme` landed — the floor this view needs; the `<1.0` cap is a
+real compatibility range — the engine bumps the minor for a feat, so every
+pre-1.0 release resolves, and reserves 1.0.0 for the first breaking change).
 
 ## What it is
 
