@@ -25,3 +25,29 @@ jobs:
 
       - name: smoke-run the module headless
         run: python -m homestead_ledger --smoke
+
+  artifact:
+    # bite 3's deliverable is a *double-clickable artifact*, so CI builds it
+    # and runs it. Without this job a spec that dies on startup (imports
+    # missing from the PyInstaller bundle, an entry point that moved) stays
+    # green here while every other test passes — mirrors the engine's own
+    # `artifact` job (`homestead/.github/workflows/ci.yml`).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - run: pip install pyinstaller .   # pulls homestead-affairs (homestead.keep) from PyPI
+      - run: pyinstaller --clean --noconfirm packaging/homestead-ledger.spec
+
+      - name: smoke-run the built artifact
+        shell: bash
+        run: |
+          BIN=dist/HomesteadLedger
+          [ -f "$BIN.exe" ] && BIN="$BIN.exe"
+          "$BIN" --smoke
