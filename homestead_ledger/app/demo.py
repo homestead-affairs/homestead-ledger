@@ -33,8 +33,11 @@ ACCOUNT = "checking"
 #: `app/demo.py::TODAY`).
 TODAY = "2026-08-10"
 
-#: Three invented transactions, one account. Fixed so the demo's output is
-#: stable across runs — the running app uses real imports (bite 4).
+#: Invented transactions, one account. Fixed so the demo's output is stable
+#: across runs — the running app uses real imports (bite 4). Three one-off
+#: merchants, plus a **recurring** monthly charge (Netflix, three months) so the
+#: recurring-charge pass has a real pattern to find, the way a real statement
+#: would — a subscription is just a checking transaction.
 _DEMO_TRANSACTIONS: list[Transaction] = [
     Transaction(
         account=ACCOUNT, date="2026-08-01", amount="-84.23",
@@ -47,6 +50,19 @@ _DEMO_TRANSACTIONS: list[Transaction] = [
     Transaction(
         account=ACCOUNT, date="2026-08-05", amount="-64.10",
         description="Electric Co", account_number="9821",
+    ),
+    # A monthly subscription, three months running — the recurring pattern.
+    Transaction(
+        account=ACCOUNT, date="2026-05-15", amount="-15.99",
+        description="Netflix", account_number="9821",
+    ),
+    Transaction(
+        account=ACCOUNT, date="2026-06-15", amount="-15.99",
+        description="Netflix", account_number="9821",
+    ),
+    Transaction(
+        account=ACCOUNT, date="2026-07-15", amount="-15.99",
+        description="Netflix", account_number="9821",
     ),
 ]
 
@@ -165,9 +181,12 @@ def compose_queue(store: Sidecar, today: str = TODAY) -> str:
 def compose_recurring(today: str = TODAY) -> str:
     """The recurring-charge detector run over the same synthetic checking
     transactions the books demo seeds — headless, no store involved
-    (`recurring.py` takes plain transaction data, never a handle). With only
-    three distinct one-off merchants in the demo data, nothing clears the
-    minimum-occurrence bar; the line says so rather than staying silent."""
+    (`recurring.py` takes plain transaction data, never a handle). The demo
+    data carries a monthly Netflix charge across three months, so the detector
+    surfaces it (cadence, next-expected); the one-off merchants fall below the
+    minimum-occurrence bar and are correctly ignored. The `if not found`
+    branch stays as an honest fallback if the demo data ever loses its
+    pattern."""
     from datetime import date as _date
 
     txns = [(t.date, float(t.amount), t.description) for t in _DEMO_TRANSACTIONS]

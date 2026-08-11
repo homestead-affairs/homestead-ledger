@@ -55,10 +55,15 @@ def test_compose_queue_shows_the_payee_and_due_date_not_the_raw_amount(tmp_path,
 
 def test_compose_recurring_runs_over_the_demo_transactions(tmp_path, monkeypatch):
     """The optional recurring-charge pass over the same synthetic checking
-    transactions the books demo already seeds — three distinct one-off
-    merchants, so nothing qualifies as recurring (occurrences < 3), and the
-    output says so rather than staying silent."""
+    transactions the books demo already seeds. The demo data carries a monthly
+    Netflix charge across three months, so the detector surfaces exactly that
+    one recurring charge — while the one-off merchants (occurrences < 3) are
+    correctly ignored."""
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
     demo.seed()
     out = demo.compose_recurring()
     assert "recurring" in out.lower()
+    # the monthly subscription is detected; the one-offs are not
+    assert "netflix" in out.lower()
+    assert "detected:" in out            # the "found" branch, not the empty fallback
+    assert "monthly" in out.lower()
