@@ -53,4 +53,4 @@ The full build plan — the reuse map, the bite order, the invariants that carry
 from the engine and the ones new to money — is in
 [`docs/build-plan.md`](docs/build-plan.md).
 
-MIT.
+Apache-2.0.
