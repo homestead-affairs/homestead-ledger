@@ -138,6 +138,12 @@ Each bite ends with its tests green; the tests come first and start red.
 - **Torn-write atomicity** — a partial import (fields 2–4 failing after field 1)
   is detected and surfaced, not silently assumed; a batched/transactional import
   would close it fully.
+- **`RecordExists` disambiguation is by message text** *(bite 4)* — the importer
+  tells an ordinary idempotent re-import (skip) from a torn-write signal (error)
+  by matching `books.py`'s prose (`"already on the books"`). It is the only
+  signal `books.py` exposes today, and it is tested, but it couples the importer
+  to a sentence. A later cleanup would have `books.import_transaction` raise two
+  distinct `RecordExists` subclasses so the caller branches on type, not text.
 
 ### Deferred v2+ (all specced by the survey)
 
