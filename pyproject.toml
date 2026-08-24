@@ -63,6 +63,7 @@ dependencies = ["homestead-affairs>=0.1.0,<1.0"]
 # silent skip — the exact failure mode they exist to catch. Dev-only, so the
 # runtime `dependencies` list above is untouched.
 dev = ["pytest>=8.0", "pyyaml", "tomli; python_version<'3.11'"]
+entity = ["nestor-meaning>=0.11.0,<1.0"]
 
 [project.scripts]
 homestead-ledger = "homestead_ledger.__main__:main"
