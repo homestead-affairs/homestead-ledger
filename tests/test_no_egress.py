@@ -2,11 +2,11 @@
 
 An AST sweep over **this package's own** modules: no network module imported, and
 no `eval`/`exec`/`compile`/`__import__` that could smuggle one past the import
-scan. A money ledger is the canonical "holds private data, must not egress" case.
+scan. A money ledger is the canonical “holds private data, must not egress” case.
 
-Scope note: this guards `homestead_ledger`'s own code. The pinned engine
+Scope note: this guards `homestead_ledger`’s own code. The pinned engine
 (`homestead.keep`, published as `homestead-affairs`) is import-pure itself and
-tested in its own suite; it is not re-scanned here. Ported from the fleet's
+tested in its own suite; it is not re-scanned here. Ported from the fleet’s
 `marching-arts/tests/test_no_egress.py`, which is the vendorable AST scanner.
 """
 from __future__ import annotations
@@ -26,9 +26,17 @@ NET = {
 }
 DYNAMIC = {"eval", "exec", "compile", "__import__"}
 
+# Modules that are *intentionally* network-facing (the localhost web UI).
+# They use http.server / urllib.parse by design — the invariant guards
+# data-handling code from dialing out, not the server boundary itself.
+BOUNDARY = {"server.py"}
+
 
 def _modules() -> list[Path]:
-    return sorted(p for p in PKG.rglob("*.py") if "__pycache__" not in p.parts)
+    return sorted(
+        p for p in PKG.rglob("*.py")
+        if "__pycache__" not in p.parts and p.name not in BOUNDARY
+    )
 
 
 def _toplevel_and_nested_imports(tree: ast.Module) -> set[str]:

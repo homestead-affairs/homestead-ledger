@@ -28,6 +28,7 @@ import sys
 USAGE = """\
 usage: python -m homestead_ledger [--help] [--smoke | --demo]
        python -m homestead_ledger --import FILE --account-number N [--dry-run] [--account NAME]
+       homestead-ledger <command> [args...]
 
   --help, -h   show this message and exit
   --smoke      prove every import survived packaging; exit without a display
@@ -40,7 +41,17 @@ usage: python -m homestead_ledger [--help] [--smoke | --demo]
                "checking"; --dry-run parses and tallies without writing
   (default)    open the tkinter view on the cover — requires tkinter and a
                display; falls back to a guidance message if neither is present
+
+commands (real data, requires nestor-meaning):
+  resolve      resolve <surface> — merchant entity resolution
+  reconcile    reconcile <baseline> <observed> — compare amounts
+  put          put <field> <value> — store a ledger field
+  queue        queue — show what's due
+  verify       verify — check ledger chain integrity
+  ui           ui [--port N] — intake UI in the browser
 """
+
+_CLI_COMMANDS = {"resolve", "reconcile", "put", "queue", "verify", "ui"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -88,6 +99,10 @@ def main(argv: list[str] | None = None) -> int:
             print()
             print(demo.compose_recurring())
         return 0
+
+    if argv and argv[0] in _CLI_COMMANDS:
+        from homestead_ledger.cli import run_cli
+        return run_cli(argv)
 
     if "--import" in argv:
         # Bite 4 — a bank-statement CSV import, headless, no tkinter touched.
