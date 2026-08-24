@@ -69,10 +69,10 @@ entity = ["nestor-meaning>=0.11.0,<1.0"]
 homestead-ledger = "homestead_ledger.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/rudi193-cmd/homestead-ledger"
-Repository = "https://github.com/rudi193-cmd/homestead-ledger"
-Issues = "https://github.com/rudi193-cmd/homestead-ledger/issues"
-Changelog = "https://github.com/rudi193-cmd/homestead-ledger/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/homestead-affairs/homestead-ledger"
+Repository = "https://github.com/homestead-affairs/homestead-ledger"
+Issues = "https://github.com/homestead-affairs/homestead-ledger/issues"
+Changelog = "https://github.com/homestead-affairs/homestead-ledger/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 # Derived from the git tag (hatch-vcs). At an exact tag `vX.Y.Z` the version is
