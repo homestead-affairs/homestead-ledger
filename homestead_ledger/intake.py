@@ -67,7 +67,7 @@ _DATE_US = re.compile(
 # ── due date patterns ───────────────────────────────────────────────────
 
 _DUE_DATE = re.compile(
-    r"(?:Due|Payment[ \t]+Due|Due[ \t]+Date|Pay[ \t]+by|Due[ \t]+by)"
+    r"(?:Due|Payment[ \t]Due|Due[ \t]Date|Pay[ \t]by|Due[ \t]by)"
     r"[:\s]+(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2}|(?:"
     + _MONTH_RE + r")\.?\s+\d{1,2},?\s+\d{4})",
     re.IGNORECASE,
@@ -77,8 +77,8 @@ _DUE_DATE = re.compile(
 # ── merchant/payee patterns ─────────────────────────────────────────────
 
 _MERCHANT_LABEL = re.compile(
-    r"(?:Pay[ \t]+to|Payee|Merchant|From|Billed[ \t]+by|Vendor|Company)"
-    r"[:\s]+([A-Z][A-Za-z0-9'.,&\- ]+?)(?:\n|$)",
+    r"(?:Pay[ \t]to|Payee|Merchant|From|Billed[ \t]by|Vendor|Company)"
+    r"[:\s]+([A-Z][A-Za-z0-9'.,& -]+?)(?:\n|$)",
 )
 _MERCHANT_RECEIPT = re.compile(
     r"^([A-Z][A-Z0-9 &'.#-]{2,30})\n",
@@ -89,7 +89,7 @@ _MERCHANT_RECEIPT = re.compile(
 # ── account reference ───────────────────────────────────────────────────
 
 _ACCOUNT_REF = re.compile(
-    r"(?:Account|Acct)\.?[ \t]*(?:#|No\.?|Number)?[:\s]*"
+    r"(?:Account|Acct)\.?[ \t]?(?:#|No\.?|Number)?[:\s]*"
     r"(?:\*{2,}|\.\.\.)?\s*(\d{4})\b",
     re.IGNORECASE,
 )
