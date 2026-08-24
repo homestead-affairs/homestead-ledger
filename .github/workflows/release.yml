@@ -69,7 +69,7 @@ jobs:
       # below would compare the build against "main" and fail confusingly.
       TAG: ${{ inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Check out the tag itself, not the branch head it may sit behind.
           ref: ${{ inputs.tag || github.ref_name }}
