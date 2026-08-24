@@ -28,7 +28,7 @@ class Extracted:
     field: str | None = None
 
 
-# ── amount patterns ──────────────────────────────────────────────────────────
+# ── amount patterns ────────────────────────────────────────────────────────────
 
 _AMOUNT = re.compile(
     r"\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+\.\d{2})\b"
@@ -40,7 +40,7 @@ _AMOUNT_LABEL = re.compile(
 )
 
 
-# ── date patterns ────────────────────────────────────────────────────────────
+# ── date patterns ──────────────────────────────────────────────────────────────
 
 _MONTHS: dict[str, str] = {
     "january": "01", "february": "02", "march": "03", "april": "04",
@@ -64,21 +64,21 @@ _DATE_US = re.compile(
 )
 
 
-# ── due date patterns ─────────────────────────────────────────────────────────
+# ── due date patterns ───────────────────────────────────────────────────────────
 
 _DUE_DATE = re.compile(
     r"(?:Due|Payment[ \t]Due|Due[ \t]Date|Pay[ \t]by|Due[ \t]by)"
-    r":?[ \t]?(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2}|(?:"
-    + _MONTH_RE + r")\.?[ \t]+\d{1,2},?[ \t]+\d{4})",
+    r":?[ \t](\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2}|(?:"
+    + _MONTH_RE + r")\.?[ \t]\d{1,2},?[ \t]\d{4})",
     re.IGNORECASE,
 )
 
 
-# ── merchant/payee patterns ───────────────────────────────────────────────────
+# ── merchant/payee patterns ─────────────────────────────────────────────────────
 
 _MERCHANT_LABEL = re.compile(
     r"(?:Pay[ \t]to|Payee|Merchant|From|Billed[ \t]by|Vendor|Company)"
-    r":?[ \t]?([A-Z][A-Za-z0-9'.,& -]+?)(?:\n|$)",
+    r":?[ \t]([A-Z][A-Za-z0-9'.,& -]+?)(?:\n|$)",
 )
 _MERCHANT_RECEIPT = re.compile(
     r"^([A-Z][A-Z0-9 &'.#-]{2,30})\n",
@@ -86,7 +86,7 @@ _MERCHANT_RECEIPT = re.compile(
 )
 
 
-# ── account reference ───────────────────────────────────────────────────────
+# ── account reference ─────────────────────────────────────────────────────────
 
 _ACCOUNT_REF = re.compile(
     r"(?:Account|Acct)\.?[ \t]?(?:#|No\.?|Number)?:?[ \t]?"
@@ -95,7 +95,7 @@ _ACCOUNT_REF = re.compile(
 )
 
 
-# ── extraction ─────────────────────────────────────────────────────────────
+# ── extraction ───────────────────────────────────────────────────────────────
 
 def _valid_date(year: int, month: int, day: int) -> bool:
     return 1 <= month <= 12 and 1 <= day <= 31 and 1900 <= year <= 2100
