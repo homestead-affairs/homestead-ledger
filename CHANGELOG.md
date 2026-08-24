@@ -5,14 +5,10 @@
 
 ### Build
 
-* **deps:** bump actions/checkout from 4 to 7 ([f073d28](https://github.com/homestead-affairs/homestead-ledger/commit/f073d2825b676ce436c24be2f8fe71e963ce1d37))
-* **deps:** bump actions/checkout from 4 to 7 ([3bc20fb](https://github.com/homestead-affairs/homestead-ledger/commit/3bc20fbf9a5815a68638c719291bb9a315c4d683))
-* **deps:** bump actions/download-artifact from 4 to 8 ([47be106](https://github.com/homestead-affairs/homestead-ledger/commit/47be10687c76ff409d5a94a5e787a0056b5d52b4))
-* **deps:** bump actions/download-artifact from 4 to 8 ([f99cc35](https://github.com/homestead-affairs/homestead-ledger/commit/f99cc355269532387b75a1f0c7df52464b7ac526))
-* **deps:** bump actions/setup-python from 5 to 7 ([60324dd](https://github.com/homestead-affairs/homestead-ledger/commit/60324dda875a1528e4ca471037dc00f5e9232c95))
-* **deps:** bump actions/setup-python from 5 to 7 ([366d497](https://github.com/homestead-affairs/homestead-ledger/commit/366d4979303cd958ca958e9801988ff5a0a10e68))
-* **deps:** bump actions/upload-artifact from 4 to 7 ([a28f2c5](https://github.com/homestead-affairs/homestead-ledger/commit/a28f2c5f493091e43380a3f12d10f2f00ed124f1))
 * **deps:** bump actions/upload-artifact from 4 to 7 ([c845819](https://github.com/homestead-affairs/homestead-ledger/commit/c845819a5a89b845fd7a291298f7edd60fe023e9))
+* **deps:** bump actions/download-artifact from 4 to 8 ([f99cc35](https://github.com/homestead-affairs/homestead-ledger/commit/f99cc355269532387b75a1f0c7df52464b7ac526))
+* **deps:** bump actions/checkout from 4 to 7 ([3bc20fb](https://github.com/homestead-affairs/homestead-ledger/commit/3bc20fbf9a5815a68638c719291bb9a315c4d683))
+* **deps:** bump actions/setup-python from 5 to 7 ([366d497](https://github.com/homestead-affairs/homestead-ledger/commit/366d4979303cd958ca958e9801988ff5a0a10e68))
 
 ## [0.1.0](https://github.com/rudi193-cmd/homestead-ledger/compare/v0.0.1...v0.1.0) (2026-08-11)
 
