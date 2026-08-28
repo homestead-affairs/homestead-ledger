@@ -5,6 +5,16 @@ on:
   pull_request:
   workflow_dispatch: {}
 
+concurrency:
+  # Rapid pushes to a PR branch stacked full runs of a 3-OS matrix. Nothing
+  # here needs a superseded run's result, and the cancelled run was holding
+  # the runners the current commit is queued behind.
+  #
+  # Scoped to workflow AND ref, so a PR cancelling its own older run can
+  # never reach main's.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # `fetch-depth: 0` on every checkout is not optional now: the version is derived
 # from the git tag (hatch-vcs, pyproject `dynamic = ["version"]`), and the
 # default shallow checkout carries no tags — `pip install -e .` would then build
