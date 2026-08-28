@@ -34,13 +34,23 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        # pyproject classifies 3.10, 3.11 and 3.12; CI ran 3.12 alone, so two
+        # of the three advertised versions had never executed. The extra legs
+        # are ubuntu-only: cross-producting versions with OSes buys nine cells
+        # to answer a question about the interpreter, not the platform.
+        python-version: ["3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: ubuntu-latest
+            python-version: "3.11"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v7
-        with: { python-version: "3.12" }
+        with: { python-version: "${{ matrix.python-version }}" }
 
       - run: pip install pytest
       - run: pip install -e .        # pulls homestead-affairs (homestead.keep) from PyPI
