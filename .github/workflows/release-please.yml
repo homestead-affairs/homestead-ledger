@@ -26,11 +26,12 @@ name: Release Please
 #   whoever armed it, so armed with GITHUB_TOKEN the release PR would merge and
 #   this workflow would never run again to cut the tag.
 #
-# SETUP — `RELEASE_PLEASE_TOKEN` must exist as a repository secret: a
-# fine-grained PAT scoped to this repo with Contents: read/write and Pull
-# requests: read/write (classic equivalent: `repo`). Without it the action falls
-# back to GITHUB_TOKEN, the release PR still opens and looks healthy, and
-# publishing silently stops happening.
+# SETUP — the willow-ci GitHub App (id 4749508) must be installed on this org
+# with Contents: read/write and Pull requests: read/write, and the org must
+# carry the variable WILLOW_CI_APP_ID and the secret WILLOW_CI_PRIVATE_KEY.
+# Without them the mint step fails loudly, which is the point: the retired
+# RELEASE_PLEASE_TOKEN degraded to GITHUB_TOKEN instead, and the release PR
+# still opened and looked healthy while publishing silently stopped.
 #
 # The version itself is not stored anywhere — hatch-vcs derives it from the tag
 # (see [tool.hatch.version]). That is why `release-type: simple` is correct: it
@@ -58,6 +59,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Mints a short-lived installation token for the willow-ci GitHub App
+      # (org variable WILLOW_CI_APP_ID + org secret WILLOW_CI_PRIVATE_KEY).
+      #
+      # GitHub suppresses workflow runs for events generated with GITHUB_TOKEN,
+      # so a tag cut with it starts no release workflow and nothing reaches
+      # PyPI — everything reads as fine. An App installation token is not
+      # GITHUB_TOKEN, so its tag triggers workflows normally, exactly as the
+      # PAT did. Unlike the PAT it is minted per run and expires in an hour;
+      # its sibling ENGINE_PROPAGATION_TOKEN expired on 2026-08-04 and stopped
+      # eleven repos receiving engine changes for three and a half weeks with
+      # no signal.
+      #
+      # This step is also the guard: if the App is not installed or the key is
+      # wrong it fails here and loudly, rather than degrading to GITHUB_TOKEN.
+      - name: Mint a willow-ci installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.WILLOW_CI_APP_ID }}
+          private-key: ${{ secrets.WILLOW_CI_PRIVATE_KEY }}
+
       # Needed by the changelog step below, which derives entries from
       # `git log <previous tag>..<this release>` rather than trusting the
       # generated text. `fetch-depth: 0` plus tags is load-bearing — a shallow
@@ -73,11 +95,11 @@ jobs:
           # default, the changelog commit is pushed as github-actions[bot], the
           # release PR's CI comes back `action_required` (held for manual
           # approval), and auto-merge waits on a check that never reports.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: googleapis/release-please-action@v5
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
@@ -92,7 +114,7 @@ jobs:
       # the section from the non-merge commits so the duplicate never ships.
       - name: Rebuild the changelog section from the commits
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -150,7 +172,7 @@ jobs:
       # merge commits. This step and the one above are the fix.
       - name: Make the GitHub Release body match the changelog
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -204,13 +226,13 @@ jobs:
       # push to main, which is also the self-heal: release-please rewrites the PR
       # as commits land, and this puts the arming back either way.
       #
-      # `RELEASE_PLEASE_TOKEN`, and NOT `GITHUB_TOKEN`: GitHub attributes an
+      # The App installation token, and NOT `GITHUB_TOKEN`: GitHub attributes an
       # auto-merge to whoever armed it, so a merge armed with GITHUB_TOKEN
       # generates no workflow runs — the release PR merges, this workflow never
       # runs again, and the tag that publishes to PyPI is never created.
       - name: Arm auto-merge on the release PR
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
