@@ -395,3 +395,66 @@ def _declared_engine_floor(pyproject: Path | None = None) -> str:
     match = _FLOOR_RE.search((pyproject or PYPROJECT).read_text(encoding="utf-8"))
     assert match, "pyproject.toml declares no homestead-affairs floor to read"
     return match.group(1)
+
+
+def _files_quoting_a_stale_floor(floor: str) -> list[str]:
+    """Every prose file that quotes an engine floor other than `floor`.
+
+    Struck-through history is fine and expected — the house style keeps the
+    old sentence on the page — so a `~~...~~` span is stripped before the
+    live text is read. Reported by basename: a path is never compared, so
+    this holds identically on Windows and POSIX.
+    """
+    quoted = re.compile(r"homestead-affairs>=(\d+\.\d+\.\d+)")
+    struck = re.compile(r"~~.*?~~", re.DOTALL)
+    stale = []
+    for path in (README, SYNC, PKG / "accounts.py"):
+        live = struck.sub("", path.read_text(encoding="utf-8"))
+        if any(found != floor for found in quoted.findall(live)):
+            stale.append(path.name)
+    return sorted(stale)
+
+
+def test_the_prose_quotes_the_floor_pyproject_declares():
+    """README.md, sync.py and accounts.py each quote the engine floor by
+    number. A bite that raises the floor and leaves one of them behind is
+    the drift this sweep exists to catch, so it fails here, named."""
+    floor = _declared_engine_floor()
+    stale = _files_quoting_a_stale_floor(floor)
+    assert not stale, (
+        f"pyproject.toml declares homestead-affairs>={floor},<1.0; these "
+        f"files quote a different floor in live (not struck-through) prose: "
+        f"{stale} — correct the sentence, striking the old number through."
+    )
+
+
+def test_the_floor_agreement_guard_fires_on_a_planted_raise(tmp_path):
+    """Planted: `pyproject.toml` raised to a floor the prose does not know
+    yet — exactly the shape `G7b-floor-0.13` produced against this branch's
+    first draft. The floor must be read off the plant, and all three prose
+    files must be named against it."""
+    floor = _declared_engine_floor()
+    planted = tmp_path / "pyproject.toml"
+    planted.write_text(
+        PYPROJECT.read_text(encoding="utf-8").replace(
+            f'"homestead-affairs>={floor},<1.0"',
+            '"homestead-affairs>=9.9.9,<1.0"',
+        ),
+        encoding="utf-8",
+    )
+    assert _declared_engine_floor(planted) == "9.9.9", "the plant did not apply"
+    assert _files_quoting_a_stale_floor("9.9.9") == [
+        "README.md", "accounts.py", "sync.py",
+    ]
+
+
+def test_the_floor_guard_reads_only_live_prose(tmp_path):
+    """The other half: a struck-through old floor must *not* fire it, or
+    the house style ("struck through, never deleted") could never be kept
+    and the guard would have to be deleted at the first raise."""
+    floor = _declared_engine_floor()
+    text = README.read_text(encoding="utf-8")
+    assert "~~`homestead-affairs>=0.1.0,<1.0`~~" in text, (
+        "the README's struck-through original floor is the fixture here"
+    )
+    assert "README.md" not in _files_quoting_a_stale_floor(floor)

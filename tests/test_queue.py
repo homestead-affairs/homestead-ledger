@@ -158,6 +158,67 @@ def test_the_cover_shows_a_count_spread_across_two_kinds(tmp_path, monkeypatch):
     assert cover(store, today=TODAY) == {"overdue": 2}
 
 
+# ── the distribution gate (X7-drift fix): (2, 0) is not a spread ─────────────
+
+
+def test_the_cover_hides_a_count_concentrated_in_one_of_two_kinds(tmp_path, monkeypatch):
+    """The leak this repo carried until the X7 sweep. Two obligation kinds
+    are registered and two bills are overdue, so both the roster gate and
+    the count gate pass — but both bills are `obligations`, and "2 overdue"
+    is that one kind's news wearing a household number (I-31). The
+    distribution the cover now passes is what says so.
+
+    The (1, 1) half of the same law is the test directly above: same
+    aggregate, genuinely spread, still shown."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    store = Sidecar()
+    _register_second_obligation_kind(monkeypatch, "subscriptions")
+    _obligation(store, "obligations", "rent", Rung.L2, "2026-08-05", "overdue")
+    _obligation(store, "obligations", "insurance", Rung.L2, "2026-08-04", "overdue")
+
+    assert counts(store, today=TODAY)["overdue"] == 2, "the aggregate still counts two"
+    assert queue_mod.counts_by_kind(store, today=TODAY) == {
+        "obligations": {"overdue": 2, "due_soon": 0},
+        "subscriptions": {"overdue": 0, "due_soon": 0},
+    }
+    assert cover(store, today=TODAY) == {}
+
+
+def test_the_distribution_names_every_registered_kind_even_a_silent_one(tmp_path, monkeypatch):
+    """`counts_by_kind` is keyed by the roster, not by what happens to have
+    records — the engine refuses a distribution naming a matter outside the
+    roster it was given, and a roster entry missing from the distribution
+    would quietly read as "contributes nothing" rather than being stated."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    store = Sidecar()
+    _register_second_obligation_kind(monkeypatch, "subscriptions")
+
+    assert set(queue_mod.counts_by_kind(store, today=TODAY)) == {
+        "obligations", "subscriptions",
+    }
+
+
+def test_the_aggregate_is_always_its_own_distribution_summed(tmp_path, monkeypatch):
+    """`counts` is summed from `counts_by_kind`, never counted a second time
+    beside it — a total that disagrees with its distribution is refused
+    outright at the cover (I-11), which would take the resting screen down
+    over a slip nobody would otherwise see. Held over a household carrying
+    every shape the queue scores: overdue, due soon, far off, and a gap."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    store = Sidecar()
+    _register_second_obligation_kind(monkeypatch, "subscriptions")
+    _obligation(store, "obligations", "rent", Rung.L2, "2026-08-05", "overdue")
+    _obligation(store, "obligations", "gym", Rung.L2, "2026-08-14", "due soon")
+    _obligation(store, "obligations", "tax", Rung.L2, "2026-12-01", "far off")
+    _obligation(store, "obligations", "broken", Rung.L2, "not-a-date", "a gap")
+    _obligation(store, "subscriptions", "netflix", Rung.L2, "2026-08-04", "overdue")
+
+    spread = queue_mod.counts_by_kind(store, today=TODAY)
+    totals = counts(store, today=TODAY)
+    for category in ("overdue", "due_soon"):
+        assert totals[category] == sum(per[category] for per in spread.values())
+
+
 # ── the queue reaches no payload (the chokepoint holds it too) ────────────────
 
 def test_queue_module_reaches_no_payload():

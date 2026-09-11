@@ -397,3 +397,55 @@ def test_cover_shows_a_count_once_two_instances_exist():
     accounts.add_account(sidecar, "visa-chase", kind="credit_card", number="2")
     assert accounts.cover(sidecar) == {"instances": 2}
     assert K == 2
+
+
+# ── why this cover passes no distribution (X7-drift audit ruling) ───────────
+#
+# The sibling gate `queue.cover` now passes `by_kind`, because its roster
+# (registered obligation kinds) and its counts (bills spread across them) are
+# different things, and a `(2, 0)` spread leaked through the roster gate
+# alone. This cover's roster and its count are the *same set*: `instances` is
+# `len(household_labels(...))` and every label contributes exactly one
+# instance. The only distribution that exists is one-per-label, so the
+# contributor gate is the roster gate restated and passing it would change
+# nothing while adding a refusal surface. That is an argument, and an
+# argument nobody re-derives goes stale — so it is a test.
+
+
+def test_the_only_distribution_this_cover_has_is_one_instance_per_label():
+    """Wiring `by_kind` here is provably a no-op: over every household size
+    from none to several, the wired answer and the unwired answer agree."""
+    from homestead_ledger.app.cover import cover_counts
+
+    sidecar = Sidecar()
+    labels: list[str] = []
+    for n in range(5):
+        assert accounts.cover(sidecar) == cover_counts(
+            labels,
+            by_kind={label: {"instances": 1} for label in labels},
+            instances=len(labels),
+        ), f"the two answers disagree at {n} instances"
+        label = f"chk-{n}"
+        accounts.add_account(sidecar, label, kind="checking", number=str(n))
+        labels.append(label)
+
+
+def test_no_label_can_contribute_two_instances_or_zero():
+    """The premise the no-op argument rests on, checked rather than assumed:
+    `instances()` is keyed by label, so a household of N labels is a count of
+    exactly N with every label contributing exactly one — there is no
+    `(2, 0)` spread to construct, which is why there is nothing for a
+    distribution to tighten."""
+    sidecar = Sidecar()
+    accounts.add_account(sidecar, "chk-main", kind="checking", number="1")
+    accounts.add_account(sidecar, "visa-chase", kind="credit_card", number="2")
+    # A second field on an existing label must not add an instance, and the
+    # roster must hold no label twice.
+    accounts.add_account(
+        sidecar, "chk-main", kind="checking", number="1",
+        institution="Sunrise Credit Union", replace=True,
+    )
+
+    labels = accounts.household_labels(sidecar)
+    assert len(labels) == len(set(labels)) == 2
+    assert accounts.cover(sidecar) == {"instances": 2}
