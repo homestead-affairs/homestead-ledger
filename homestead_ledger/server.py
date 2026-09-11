@@ -609,8 +609,16 @@ function loadBudget() {
       html+='<div class="qi"><span class="qs">'+esc(e.category)+'</span>'
         +'<span class="sm'+(e.state==='over limit'?' s-err':'')+'">'+esc(e.state)+'</span></div>';
     });
-    html+='<div class="qn">needs a category: '+data.uncategorised+'</div>';
-    div.innerHTML=html||'<p class="empty">No limits and no spending on file yet.</p>';
+    // The two gap counts ride with the rows, and an empty month says so
+    // once — the same branch `budget show` takes when there is nothing on
+    // file at all.
+    if(html==='' && !data.uncategorised && !data.undated){
+      html='<p class="empty">No limits and no spending on file yet.</p>';
+    } else {
+      html+='<div class="qn">needs a category: '+data.uncategorised+'</div>';
+      if(data.undated) html+='<div class="qn">needs a date: '+data.undated+'</div>';
+    }
+    div.innerHTML=html;
     // Suggestions for the "set a limit" category field — real, rendered
     // categories only, built with textContent so a household-typed word
     // needs no escaping (never the derived placeholder, which names no
@@ -618,7 +626,11 @@ function loadBudget() {
     var seen={}, list=document.getElementById('bcategories');
     list.innerHTML='';
     (data.envelopes||[]).forEach(function(e){
-      if(e.category&&!seen[e.category]){
+      // A real category is one closed-shape word and never contains a
+      // space; the derived stand-in a protected category shows instead is
+      // a sentence, and suggesting it would only offer the operator a
+      // value the shape gate refuses.
+      if(e.category&&e.category.indexOf(' ')<0&&!seen[e.category]){
         seen[e.category]=true;
         var opt=document.createElement('option');
         opt.textContent=e.category;
@@ -1072,7 +1084,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # defaulted to "today" behind the caller's back.
             month = qs.get("month", "")
             try:
-                rows, uncategorised = budget.envelopes(canonical, sidecar, month)
+                rows, gaps = budget.envelopes(canonical, sidecar, month)
             except ValueError as exc:
                 return self._json({"error": str(exc)}, 400)
             self._json({
@@ -1083,7 +1095,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                      "state": budget.state_text(e)}
                     for e in rows
                 ],
-                "uncategorised": uncategorised,
+                "uncategorised": gaps.uncategorised,
+                "undated": gaps.undated,
             })
 
         def _get_transfer_suggestions(self):

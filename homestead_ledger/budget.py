@@ -4,14 +4,14 @@ envelope state a household reads them through.
 `(budget, "limit", "<category>.<YYYY-MM>")` is the one record `set_limit`
 writes (decision 9) — never a figure the books themselves produced
 ("mirror, not judge", restated for a number the household typed).
-`category` is held to the identical closed shape `overlay.py` classifies a
-transaction's own category against — mirrored here rather than imported
-(`overlay._CATEGORY` is private) — and the identical protected-word rule,
-reused rather than mirrored: `overlay._is_protected` is called directly,
-so a change to the word list or the containment rule can never drift
-between the two doors. **A protected category's *limit* is `L4` either
-way** (money has no lower floor); what still argues up is the category's
-own *name* wherever an envelope names one on a list
+`category` is held to `overlay.py`'s own rule, **called rather than
+mirrored** — `overlay._category` validates the shape and
+`overlay._is_protected` decides the protected word, both private to that
+module and both reached directly, so neither the shape nor the word list
+can drift between the two doors (an earlier draft kept a second copy of
+the regex here, held equal by nothing). **A protected category's *limit*
+is `L4` either way** (money has no lower floor); what still argues up is
+the category's own *name* wherever an envelope names one on a list
 (`_displayed_category`, the same stand-in `overlay.tags_of` gives).
 
 **`envelopes()` never stores anything.** It is arithmetic over the books
@@ -22,6 +22,24 @@ touches to decide "over or within" comes through the gate first
 (`Served.value` at `S1_DETAIL`); a caller reads only `category`,
 `spent_state`, `limit_state` and the boolean `over` (I-8/I-15: never a
 figure on `S1_LIST`).
+
+**A month's spend is net of what came back.** An envelope is what the
+household has actually spent on a category this month, so a refund — an
+inflow on a categorised row — subtracts from that category's spend rather
+than being ignored. Ignoring it was the earlier draft's rule and it gave a
+wrong answer: a $120 purchase with a $40 refund against a $100 limit read
+"over limit" when the household was $20 under it. An *un*categorised
+inflow is still ignored entirely (a paycheck is not a negative grocery
+bill), and a category with no outflow of its own this month gets no
+envelope from a refund alone.
+
+**A row whose date is not ISO belongs to no month.** `balance.
+dated_transactions` hands back the date string as stored, and a row
+imported before the ISO fix (`importer.py`) can still be a slashed
+statement date. Such a row cannot be placed on a calendar at all, so it
+joins no month's arithmetic and is counted instead — `Gaps.undated`, the
+"needs a date" count, beside `Gaps.uncategorised` — never guessed into a
+month and never silently dropped (I-11).
 """
 from __future__ import annotations
 
@@ -39,18 +57,21 @@ from homestead_ledger.packs import overlay as overlay_pack
 from homestead_ledger.store import Canonical, RecordExists, Ref, Replaced, Sidecar, key
 
 __all__ = [
-    "MATTER", "FIELDS", "Envelope",
+    "MATTER", "FIELDS", "Envelope", "Gaps",
     "set_limit", "limits", "limit_detail", "envelopes", "state_text",
 ]
 
 MATTER = pack.MATTER
 FIELDS = pack.FIELDS
 
-#: Mirrors `overlay._CATEGORY` — held equal to it by `tests/test_budget.py`.
-_CATEGORY = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
-
 #: `YYYY-MM`, zero-padded, 01-12 only.
 _MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+#: A stored transaction date this module will place in a month: ISO
+#: `YYYY-MM-DD`, with a real month and a plausible day. Anything else —
+#: a pre-ISO slashed statement date, a corrupt cell — belongs to no
+#: calendar month and is counted, never guessed at (I-11).
+_ISO_DATE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 
 #: A positive amount, at most two decimal places, no sign and no exponent —
 #: stricter than `money.decimal_amount`, which accepts `1e3` and rounds
@@ -71,15 +92,11 @@ HAS_SPEND = "spending on file"
 
 
 def _category(value: object) -> str:
-    text = str(value).strip()
-    if not _CATEGORY.match(text):
-        raise ValueError(
-            "a category is a short, closed-shape word: lowercase letters, "
-            "digits and hyphens, 1-40 characters, starting with a letter "
-            "(groceries, medical-copay) — the same shape `transaction tag "
-            "--category` takes"
-        )
-    return text
+    """`overlay`'s own category rule, called rather than copied — one
+    validator for the two doors a category can arrive at (`transaction tag
+    --category` and `budget set`), so a change to the shape can never leave
+    one door wider than the other."""
+    return overlay._category(value)
 
 
 def _month(value: object) -> str:
@@ -154,7 +171,13 @@ def limits(store: Sidecar, month: str, *, surface: Surface = Surface.S1_LIST) ->
     """Every category's limit on file for `month`, served at `surface` —
     never `.payload`. `L4`'s ceiling on `S1_LIST` is derive with no
     exception, so this always reads as `pack.SCHEMA["limit"]["derived"]`
-    there; `limit_detail` (`S1_DETAIL`) is where the actual figure renders."""
+    there; `limit_detail` (`S1_DETAIL`) is where the actual figure renders.
+
+    **The keys are the real category words**, protected ones included — a
+    limit is filed under the word the household typed, and grouping spend
+    against it needs that word. A *surface* showing these keys passes each
+    through `_displayed_category` first, the way `envelopes` does; nothing
+    in this module hands the raw mapping to a door."""
     mon = _month(month)
     suffix = f".{mon}"
     out: dict[str, str] = {}
@@ -196,6 +219,19 @@ class Envelope:
     over: bool
 
 
+@dataclass(frozen=True)
+class Gaps:
+    """What a month's envelopes could not place, by count only — never a
+    figure and never a reference (I-8/I-15): `uncategorised` is how many
+    outflows are still waiting on a category, `undated` how many rows carry
+    a date no calendar can read (`transaction list --gaps` is where a
+    household goes to find them). A count is the one thing a surface may
+    show about a row it cannot otherwise name."""
+
+    uncategorised: int = 0
+    undated: int = 0
+
+
 def state_text(envelope: Envelope) -> str:
     """The one label a surface shows for `envelope`. "no limit set" beats
     "no spend": a category with neither a limit nor any spending reads as
@@ -209,20 +245,31 @@ def state_text(envelope: Envelope) -> str:
 
 def envelopes(
     canonical: Canonical, store: Sidecar, month: str,
-) -> tuple[list[Envelope], int]:
-    """Every category's spend-versus-limit state for `month`, and the count
-    of transactions with no category at all — "uncategorised", by count
-    only, never folded into a figure.
+) -> tuple[list[Envelope], Gaps]:
+    """Every category's spend-versus-limit state for `month`, and the
+    `Gaps` the month could not place — by count only, never folded into a
+    figure.
 
     Spend is read through `balance.dated_transactions` (no `.payload` of
-    this module's own) over every registered account instance, filtered to
-    `month`, to outflows only (`amount < 0`, `recurring.py`'s own
-    convention), with `overlay.excluded_fingerprints` (`do_not_use`) and
+    this module's own) over every registered account instance, with
+    `overlay.excluded_fingerprints` (`do_not_use`) and
     `transfers.paired_fingerprints` (a transfer's two legs are not
-    spending) dropped before anything is summed. A transaction's category
-    comes from `overlay.tags_of` at `S1_DETAIL` — the real word, needed to
-    group spend under the same key a limit is filed under; only the
-    *result* (`Envelope.category`) derives on the way out.
+    spending) dropped first, then filtered to `month` by the row's own
+    stored ISO date — a row whose date is not ISO joins no month and is
+    counted as `Gaps.undated` instead.
+
+    **Spend is net.** An outflow (`amount < 0`, `recurring.py`'s own
+    convention) adds to its category; an inflow on a *categorised* row — a
+    refund — subtracts from it, because what a household has spent on
+    groceries this month is what it paid less what came back. An inflow on
+    an uncategorised row is ignored entirely rather than counted as a gap,
+    and a category whose only row this month is an inflow gets no envelope:
+    a refund alone is not spending.
+
+    A transaction's category comes from `overlay.tags_of` at `S1_DETAIL` —
+    the real word, needed to group spend under the same key a limit is
+    filed under; only the *result* (`Envelope.category`) derives on the way
+    out.
 
     A limit's real figure is read once, through the gate at `S1_DETAIL`
     (`Served.value`, never `.payload`), purely to decide `over` — the
@@ -237,17 +284,31 @@ def envelopes(
     # `_get_subscriptions` takes.
     excluded = overlay.excluded_fingerprints(store) | transfers.paired_fingerprints(store)
 
-    spent_by_category: dict[str, Decimal] = {}
+    net_by_category: dict[str, Decimal] = {}
+    spending_categories: set[str] = set()
     uncategorised = 0
+    undated = 0
     for label in accounts.instances(store):
         for item_id, txn_date, amount, _description in dated_transactions(canonical, label):
-            if item_id in excluded or amount >= 0 or not str(txn_date).startswith(mon):
+            if item_id in excluded:
+                continue
+            text = str(txn_date)
+            if not _ISO_DATE.fullmatch(text):
+                undated += 1      # belongs to no month, this one included
+                continue
+            if text[:7] != mon:
                 continue
             category = overlay.tags_of(store, item_id, surface=Surface.S1_DETAIL).get("category")
             if category is None:
-                uncategorised += 1
+                if amount < 0:
+                    uncategorised += 1   # an untagged inflow is not a gap in spending
                 continue
-            spent_by_category[category] = spent_by_category.get(category, Decimal("0")) + Decimal(str(abs(amount)))
+            if amount < 0:
+                spending_categories.add(category)
+            # An outflow adds, a refund subtracts: `-amount` is positive for
+            # the first and negative for the second, and each row becomes a
+            # `Decimal` on its own rather than summing floats.
+            net_by_category[category] = net_by_category.get(category, Decimal("0")) + Decimal(str(-amount))
 
     limit_by_category: dict[str, Decimal] = {}
     for category, text in limits(store, mon, surface=Surface.S1_DETAIL).items():
@@ -257,13 +318,15 @@ def envelopes(
             continue   # a corrupt limit on file joins no comparison (I-11)
 
     out: list[Envelope] = []
-    for category in sorted(set(spent_by_category) | set(limit_by_category)):
-        spent = spent_by_category.get(category)
+    for category in sorted(spending_categories | set(limit_by_category)):
+        # Only a category with an outflow of its own this month has a spend
+        # to show; a refund with nothing to refund leaves the envelope empty.
+        spent = net_by_category.get(category) if category in spending_categories else None
         limit = limit_by_category.get(category)
         out.append(Envelope(
             category=_displayed_category(category),
-            spent_state=HAS_SPEND if spent is not None else NO_SPEND,
+            spent_state=HAS_SPEND if spent is not None and spent > 0 else NO_SPEND,
             limit_state=LIMIT_SET if limit is not None else NO_LIMIT,
             over=spent is not None and limit is not None and spent > limit,
         ))
-    return out, uncategorised
+    return out, Gaps(uncategorised=uncategorised, undated=undated)

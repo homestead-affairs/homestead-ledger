@@ -721,17 +721,20 @@ def _cmd_budget(argv: list[str]) -> int:
         rest, month = _flag(rest, "--month")
         month = month or dt.date.today().strftime("%Y-%m")
         try:
-            rows, uncategorised = budget.envelopes(Canonical(), sidecar, month)
+            rows, gaps = budget.envelopes(Canonical(), sidecar, month)
         except ValueError as exc:
             print(f"  refused: {exc}", file=sys.stderr)
             return 1
-        if not rows and not uncategorised:
+        if not rows and not gaps.uncategorised and not gaps.undated:
             print(f"  {month}: nothing to show — no limits and no spending on file")
             return 0
         print(f"  {month}:")
         for row in rows:
             print(f"  {row.category}: {budget.state_text(row)}")
-        print(f"  needs a category: {uncategorised}")
+        print(f"  needs a category: {gaps.uncategorised}")
+        # A row whose date no calendar can read sits in no month at all —
+        # `transaction list --gaps` is where the operator goes to fix one.
+        print(f"  needs a date: {gaps.undated}")
         return 0
 
     print(f"unknown subcommand {sub!r} — one of: set, show", file=sys.stderr)
