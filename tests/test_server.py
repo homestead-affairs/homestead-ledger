@@ -1448,3 +1448,230 @@ def test_api_budget_and_schedules_take_the_same_per_call_flag(ui):
     assert data["needs_use"] == 0 and data["commingling"] == 0
     status, data = ui.json("/api/budget?month=2026-01&include_business=true")
     assert status == 200 and data["uncategorised"] == 1
+
+
+# ── G9c: owner/restricted on the account form, allowable uses, the ────────
+# ── include-business switch (the two UI gaps the G8 audit found) ──────────
+
+
+def test_account_form_offers_owner_and_restricted(ui):
+    """The two fields the G8 audit found missing from the browser's own
+    account form — `add_account` has taken `owner`/`restricted` since G8,
+    but nothing on the page ever posted either."""
+    status, body = ui.get("/")
+    page = body.decode()
+    assert 'id="aowner"' in page and 'id="arestricted"' in page
+    assert '<option value="household" selected>' in page
+    assert '<option value="business">' in page
+
+
+def test_storing_an_account_posts_owner_and_restricted_through_the_door(ui):
+    status, data = ui.add_account(label="grant-main", kind="checking",
+                                  number="5551", owner="business", restricted=True)
+    assert status == 200 and data["ok"] is True
+
+    from homestead_ledger import accounts
+    from homestead_ledger.store import Sidecar
+
+    sidecar = Sidecar()
+    assert accounts.owner_of(sidecar, "grant-main") == "business"
+    assert accounts.is_restricted(sidecar, "grant-main") is True
+    assert "5551" not in json.dumps(data)
+
+
+def test_api_accounts_lists_owner_and_restricted_and_never_the_number(ui):
+    """The Records tab's own "Accounts on file" list — a second, richer
+    door than `/api/status` (whose `accounts` shape an earlier bite's test
+    pins to exactly `{label, kind}`), never the account number (I-13)."""
+    _planted_number = "60071234"
+    ui.add_account(label="chk-main", kind="checking", number="1111")
+    ui.add_account(label="grant-main", kind="checking", number=_planted_number,
+                   owner="business", restricted=True)
+
+    status, data = ui.json("/api/accounts")
+    assert status == 200
+    by_label = {r["label"]: r for r in data["rows"]}
+    assert by_label["chk-main"]["owner"] == "household"
+    assert by_label["chk-main"]["restricted"] is False
+    assert by_label["grant-main"]["owner"] == "business"
+    assert by_label["grant-main"]["restricted"] is True
+    assert _planted_number not in json.dumps(data)
+
+
+def test_get_allowable_uses_requires_a_label_and_refuses_an_unknown_one(ui):
+    status, data = ui.json("/api/account/allowable-uses")
+    assert status == 400 and "label" in data["error"]
+
+    status, data = ui.json("/api/account/allowable-uses?label=nope")
+    assert status == 404 and "nope" in data["error"]
+
+
+def test_get_allowable_uses_returns_the_closed_list_and_restricted_flag(ui):
+    from homestead_ledger import overlay
+    from homestead_ledger.store import Sidecar
+
+    ui.add_account(label="chk-main", kind="checking", number="1111")
+    ui.add_account(label="grant-main", kind="checking", number="5551", restricted=True)
+    overlay.set_allowable_uses(Sidecar(), "grant-main", ["software", "contractor-fees"])
+
+    status, data = ui.json("/api/account/allowable-uses?label=chk-main")
+    assert status == 200 and data == {"label": "chk-main", "restricted": False, "uses": []}
+
+    status, data = ui.json("/api/account/allowable-uses?label=grant-main")
+    assert status == 200
+    assert data["restricted"] is True
+    assert data["uses"] == ["contractor-fees", "software"]
+
+
+def test_post_allowable_uses_round_trip_and_the_use_tag_validates_against_it(ui):
+    """The door the account list's own mini-form posts to — added by this
+    bite. Once the closed list is on file, `transaction tag --use` accepts
+    a word from it and refuses one that is not, without this door's help."""
+    ui.add_account(label="grant-main", kind="checking", number="5551", restricted=True)
+    status, data = ui.json("/api/account/allowable-uses",
+                           {"label": "grant-main", "uses": ["software", "rent"]})
+    assert status == 200 and data["ok"] is True and data["label"] == "grant-main"
+
+    status, data = ui.json("/api/account/allowable-uses?label=grant-main")
+    assert data["uses"] == ["rent", "software"]
+
+    fp = _post_transaction(ui, "grant-main", date="2026-01-05",
+                           amount="-40.00", description="AWS")
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fp, "use": "software"})
+    assert status == 200 and data["ok"] is True and data["fields"] == ["use"]
+
+    fp2 = _post_transaction(ui, "grant-main", date="2026-01-06",
+                            amount="-10.00", description="Snack")
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fp2, "use": "payroll"})
+    assert status == 400 and data["ok"] is False
+
+
+def test_post_allowable_uses_without_the_list_key_is_refused_by_name(ui):
+    ui.add_account(label="grant-main", kind="checking", number="5551", restricted=True)
+    status, data = ui.json("/api/account/allowable-uses", {"label": "grant-main"})
+    assert status == 400 and data["ok"] is False and "uses" in data["error"]
+
+
+def test_post_allowable_uses_refuses_a_not_computed_here_member_by_name(ui):
+    """`overlay.NOT_COMPUTED_HERE` — checked before shape validation, so a
+    word like `409a` (which the closed-shape regex would also refuse, for
+    an unrelated reason) is refused with the accountant sentence
+    specifically, by name, before anything is written."""
+    ui.add_account(label="grant-main", kind="checking", number="5551", restricted=True)
+    status, data = ui.json("/api/account/allowable-uses",
+                           {"label": "grant-main", "uses": ["software", "409a"]})
+    assert status == 400 and data["ok"] is False
+    assert "409a" in data["error"] and "accountant" in data["error"]
+
+    status, data = ui.json("/api/account/allowable-uses?label=grant-main")
+    assert data["uses"] == []
+
+
+def test_post_allowable_uses_refuses_markup_at_the_shape_gate_without_echoing_it(ui):
+    """A use word with markup fails the same closed shape a category
+    takes — 400, before anything is stored, and the door's own refusal
+    never repeats the value typed (I-15)."""
+    ui.add_account(label="grant-main", kind="checking", number="5551", restricted=True)
+    planted = "<img src=x onerror=alert(1)>"
+    status, data = ui.json("/api/account/allowable-uses",
+                           {"label": "grant-main", "uses": [planted]})
+    assert status == 400 and data["ok"] is False
+    assert "onerror" not in data["error"] and planted not in data["error"]
+
+    status, data = ui.json("/api/account/allowable-uses?label=grant-main")
+    assert data["uses"] == []
+
+
+def test_post_allowable_uses_occupied_is_409_not_400(ui):
+    ui.add_account(label="grant-main", kind="checking", number="5551", restricted=True)
+    ui.json("/api/account/allowable-uses", {"label": "grant-main", "uses": ["software"]})
+    status, data = ui.json("/api/account/allowable-uses",
+                           {"label": "grant-main", "uses": ["rent"]})
+    assert status == 409 and data["ok"] is False
+    status, data = ui.json("/api/account/allowable-uses",
+                           {"label": "grant-main", "uses": ["rent"], "replace": True})
+    assert status == 200 and data["ok"] is True
+    status, data = ui.json("/api/account/allowable-uses?label=grant-main")
+    assert data["uses"] == ["rent"]
+
+
+def test_the_tag_forms_use_select_is_hidden_until_the_door_says_restricted(ui):
+    """Structural: the row exists, hidden, and `refreshUseSelect` — called
+    from `loadTransactions`, so an account switch always redraws it — is
+    the one place that ever un-hides it, from `/api/account/allowable-uses`
+    and nothing else."""
+    status, body = ui.get("/")
+    page = body.decode()
+    assert '<div class="rf" id="guserow" style="display:none">' in page
+    assert "function refreshUseSelect" in page
+    m = re.search(r"function refreshUseSelect\(\) \{(.*?)\n\}", page, re.S)
+    assert m is not None
+    assert "/api/account/allowable-uses" in m.group(1)
+    assert "data.restricted" in m.group(1)
+    m2 = re.search(r"function loadTransactions\(\) \{(.*?)\n\}", page, re.S)
+    assert "refreshUseSelect();" in m2.group(1)
+
+
+def test_exactly_one_include_business_checkbox_on_the_page(ui):
+    """The include-business switch lives in exactly one place, the header —
+    never stored, never a server-side default (a stored default would be a
+    permission). Planted: two copies would let the header and a tab's own
+    control disagree about which scope is on, so the count must tell 1
+    from 2, not merely "at least one"."""
+    status, body = ui.get("/")
+    page = body.decode()
+    assert page.count('id="ib-toggle"') == 1
+
+    planted = page + '<input type="checkbox" id="ib-toggle">'
+    assert planted.count('id="ib-toggle"') == 2
+
+
+def test_budget_schedules_subscriptions_fetches_all_read_the_same_toggle(ui):
+    """Every fetch to the three household-aggregate list doors reads the
+    checkbox at the call site (`includeBusiness()`) rather than a value
+    captured once at page load, which could go stale the moment the
+    household flips the switch without navigating away and back."""
+    status, body = ui.get("/")
+    page = body.decode()
+    for fn_name, path in (
+        ("loadBudget", "/api/budget"),
+        ("loadSchedules", "/api/schedules"),
+        ("loadSubscriptions", "/api/subscriptions"),
+    ):
+        m = re.search(r"function %s\(\) \{(.*?)\n\}" % fn_name, page, re.S)
+        assert m is not None, fn_name
+        fn_body = m.group(1)
+        assert path in fn_body, fn_name
+        assert "includeBusiness()" in fn_body, fn_name
+
+
+def test_a_visible_note_names_the_scope_beside_each_affected_list(ui):
+    status, body = ui.get("/")
+    page = body.decode()
+    assert 'id="budgetnote"' in page
+    assert 'id="schedulesnote"' in page
+    assert 'id="subsnote"' in page
+    assert "function scopeNote" in page
+    for fn_name, note_id in (
+        ("loadBudget", "budgetnote"), ("loadSchedules", "schedulesnote"),
+        ("loadSubscriptions", "subsnote"),
+    ):
+        m = re.search(r"function %s\(\) \{(.*?)\n\}" % fn_name, page, re.S)
+        assert note_id in m.group(1) and "scopeNote()" in m.group(1)
+
+
+def test_no_raw_figure_or_number_crosses_any_new_door(ui):
+    """The no-raw-figure posture holds on the doors this bite adds, the
+    same as every door before it: an account's own number never crosses
+    `/api/accounts`, and an allowable-use word is a reference (a category-
+    shaped word), never a money figure, on either allowable-uses door."""
+    _planted_number = "60099999"
+    ui.add_account(label="grant-main", kind="checking", number=_planted_number,
+                   restricted=True)
+    overlay_body = {"label": "grant-main", "uses": ["software"]}
+    status, data = ui.json("/api/account/allowable-uses", overlay_body)
+    assert _planted_number not in json.dumps(data)
+    status, data = ui.json("/api/account/allowable-uses?label=grant-main")
+    assert _planted_number not in json.dumps(data)
+    status, data = ui.json("/api/accounts")
+    assert _planted_number not in json.dumps(data)

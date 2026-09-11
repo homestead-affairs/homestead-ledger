@@ -160,6 +160,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
 <header>
   <h1>homestead-ledger</h1>
   <span class="sub">the household's own entry desk</span>
+  <label class="chk" style="margin-left:auto"><input type="checkbox" id="ib-toggle" onchange="onIncludeBusinessToggle()"> include business-owned accounts</label>
 </header>
 <nav>
   <button class="tb on" onclick="show('records',this)">Records</button>
@@ -167,6 +168,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
   <button class="tb" onclick="show('queue',this)">What's Due</button>
   <button class="tb" onclick="show('entities',this)">Entities</button>
   <button class="tb" onclick="show('subscriptions',this)">Subscriptions</button>
+  <button class="tb" onclick="show('schedules',this)">Schedules</button>
   <button class="tb" onclick="show('budget',this)">Budget</button>
   <button class="tb" onclick="show('sync',this)">Sync</button>
 </nav>
@@ -199,12 +201,20 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
     </div>
     <div class="rf">
       <input id="ainstitution" placeholder="Institution (optional)" style="max-width:220px">
+      <select id="aowner" style="max-width:160px">
+        <option value="household" selected>household</option>
+        <option value="business">business</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="arestricted"> restricted (grant account)</label>
       <label class="chk"><input type="checkbox" id="areplace"> replace if the label exists</label>
       <button class="btn bg" onclick="storeAccount()">Add</button>
     </div>
-    <div class="why">A label is the household's own short name for one real account — never a kind name, never the number itself. Kind L2 &middot; institution L3 &middot; number L5 (never shown again on any surface).</div>
+    <div class="why">A label is the household's own short name for one real account — never a kind name, never the number itself. Kind L2 &middot; institution L3 &middot; number L5 (never shown again on any surface) &middot; owner/restricted L2. Restricted marks a grant account whose spend must map to a closed list of allowable uses, entered below &mdash; set once, never cleared.</div>
     <div id="amsg"></div>
   </div>
+
+  <h2>Accounts on file</h2>
+  <div id="alist"></div>
 
   <h2>Mark an obligation paid</h2>
   <div class="card">
@@ -243,13 +253,16 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
       <datalist id="gcategories"></datalist>
       <input id="gmerchant" placeholder="Confirmed merchant (optional)" style="max-width:220px">
     </div>
+    <div class="rf" id="guserow" style="display:none">
+      <select id="guse" style="max-width:220px"></select>
+    </div>
     <div class="rf">
       <input id="gnote" placeholder="Note (optional)">
       <label class="chk"><input type="checkbox" id="gdonotuse"> do not use (exclude from recurring, budget and every export)</label>
       <label class="chk"><input type="checkbox" id="greplace"> replace existing tag(s)</label>
       <button class="btn bg" onclick="storeTag()">Tag</button>
     </div>
-    <div class="why">Category L3, raised automatically wherever it names a protected matter (medical, legal, &hellip;) &mdash; the advisory only ever raises this, never lowers it. Note L4. Confirmed merchant L3. Do-not-use L2.</div>
+    <div class="why">Category L3, raised automatically wherever it names a protected matter (medical, legal, &hellip;) &mdash; the advisory only ever raises this, never lowers it. Note L4. Confirmed merchant L3. Do-not-use L2. The allowable-use select above shows only when the transaction's own account is restricted, from that account's closed list.</div>
     <div id="gmsg"></div>
   </div>
 
@@ -287,7 +300,14 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
 
 <section id="t-subscriptions" class="tab">
   <h2>Detected subscriptions</h2>
+  <div class="why" id="subsnote"></div>
   <div id="slist"></div>
+</section>
+
+<section id="t-schedules" class="tab">
+  <h2>Liabilities on file</h2>
+  <div class="why" id="schedulesnote"></div>
+  <div id="schedlist"></div>
 </section>
 
 <section id="t-budget" class="tab">
@@ -310,6 +330,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
     <input id="bviewmonth" placeholder="Month YYYY-MM" style="max-width:150px">
     <button class="btn bp" onclick="loadBudget()">Show</button>
   </div>
+  <div class="why" id="budgetnote"></div>
   <div id="blist"></div>
 </section>
 
@@ -337,11 +358,32 @@ function show(name, btn) {
   document.querySelectorAll('.tb').forEach(function(el){el.classList.remove('on')});
   document.getElementById('t-'+name).classList.add('on');
   btn.classList.add('on');
-  if(name==='records'){loadObligations();loadTransactions();loadAccountsForPaid();}
+  if(name==='records'){loadObligations();loadTransactions();loadAccountsForPaid();loadAccountList();}
   if(name==='queue') loadQueue();
   if(name==='subscriptions') loadSubscriptions();
+  if(name==='schedules') loadSchedules();
   if(name==='budget') loadBudget();
   if(name==='sync') loadSyncMatters();
+}
+
+// Whether the household wants business-owned accounts folded into the
+// aggregate lists — the checkbox's own DOM state is the only place this
+// lives (never stored, never a server-side default: a stored default here
+// would be a permission, not a per-call scope).
+function includeBusiness() {
+  return document.getElementById('ib-toggle').checked;
+}
+
+function scopeNote() {
+  return includeBusiness()
+    ? 'Showing: household + business-owned accounts.'
+    : 'Showing: household accounts only.';
+}
+
+function onIncludeBusinessToggle() {
+  if(document.getElementById('t-budget').classList.contains('on')) loadBudget();
+  if(document.getElementById('t-schedules').classList.contains('on')) loadSchedules();
+  if(document.getElementById('t-subscriptions').classList.contains('on')) loadSubscriptions();
 }
 
 // YYYY-MM for the current calendar month — the one default this page
@@ -376,16 +418,97 @@ function storeAccount() {
     kind:document.getElementById('akind').value,
     number:document.getElementById('anumber').value.trim(),
     institution:document.getElementById('ainstitution').value.trim(),
+    owner:document.getElementById('aowner').value,
+    restricted:document.getElementById('arestricted').checked,
     replace:document.getElementById('areplace').checked};
   fetch('/api/account',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
   .then(function(r){return r.json()}).then(function(data){
     if(data.ok){
       msg.innerHTML='<span class="sm s-ok">Stored '+esc(data.label)+(data.replaced?' (replaced)':'')+'</span>';
       ['alabel','anumber','ainstitution'].forEach(function(id){document.getElementById(id).value='';});
+      document.getElementById('aowner').value='household';
+      document.getElementById('arestricted').checked=false;
       document.getElementById('areplace').checked=false;
       loadAccounts();
+      loadAccountList();
     } else {msg.innerHTML='<span class="sm s-err">'+esc(data.error||'Failed')+'</span>';}
   }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
+}
+
+// The Records tab's own read of the accounts the household has registered —
+// label, kind, who owns it and whether it is restricted — never the number
+// (I-13, the same posture `/api/status`'s own `accounts` already holds).
+// A restricted account gets its own allowable-uses mini-form, built with
+// `createElement`/`textContent` throughout rather than `innerHTML`, so an
+// award-letter word typed in never needs escaping and there is nothing here
+// for a label or a use word to break out of.
+function loadAccountList() {
+  var div=document.getElementById('alist');
+  div.innerHTML='<p class="empty">Loading&#8230;</p>';
+  fetch('/api/accounts').then(function(r){return r.json()}).then(function(data){
+    var found=data.rows||[];
+    div.innerHTML='';
+    if(!found.length){div.innerHTML='<p class="empty">No accounts on file yet.</p>';return;}
+    found.forEach(function(a){
+      var card=document.createElement('div'); card.className='card';
+      var cr=document.createElement('div'); cr.className='cr';
+      var lab=document.createElement('span'); lab.className='rk'; lab.textContent=a.label;
+      var kind=document.createElement('span'); kind.className='mv';
+      kind.textContent=a.kind+(a.institution?(' · '+a.institution):'');
+      cr.appendChild(lab); cr.appendChild(kind);
+      var marks=[];
+      if(a.owner==='business') marks.push('business');
+      if(a.restricted) marks.push('restricted');
+      if(marks.length){
+        var mark=document.createElement('span'); mark.className='sm'; mark.textContent=marks.join(', ');
+        cr.appendChild(mark);
+      }
+      card.appendChild(cr);
+      if(a.restricted){
+        var list=document.createElement('div'); list.className='mv'; list.style.marginTop='6px';
+        list.textContent='Allowable uses: loading…';
+        var form=document.createElement('div'); form.className='rf'; form.style.marginTop='8px';
+        var input=document.createElement('input');
+        input.placeholder='Allowable uses, comma separated (software, contractor-fees)';
+        input.style.flex='1';
+        var replLabel=document.createElement('label'); replLabel.className='chk';
+        var replBox=document.createElement('input'); replBox.type='checkbox';
+        replLabel.appendChild(replBox); replLabel.appendChild(document.createTextNode(' replace'));
+        var btn=document.createElement('button'); btn.className='btn bg bs'; btn.textContent='Set';
+        var msg=document.createElement('span'); msg.className='sm';
+        form.appendChild(input); form.appendChild(replLabel); form.appendChild(btn); form.appendChild(msg);
+        btn.addEventListener('click', function(){
+          var uses=input.value.split(',').map(function(s){return s.trim()}).filter(Boolean);
+          fetch('/api/account/allowable-uses',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({label:a.label,uses:uses,replace:replBox.checked})})
+          .then(function(r){return r.json()}).then(function(res){
+            if(res.ok){
+              msg.className='sm s-ok'; msg.textContent='Stored';
+              input.value=''; replBox.checked=false;
+              loadAllowableUsesInto(list, a.label);
+              refreshUseSelect();
+            } else {msg.className='sm s-err'; msg.textContent=res.error||'Failed';}
+          }).catch(function(){msg.className='sm s-err'; msg.textContent='Error';});
+        });
+        card.appendChild(list);
+        card.appendChild(form);
+        loadAllowableUsesInto(list, a.label);
+      }
+      div.appendChild(card);
+    });
+  }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load accounts</p>';});
+}
+
+// Fills `div` with `label`'s allowable-use words, read back through the same
+// door `refreshUseSelect()` uses for the tag form's own select — one GET,
+// two readers, so the two halves of the page cannot disagree about what is
+// on file.
+function loadAllowableUsesInto(div, label) {
+  fetch('/api/account/allowable-uses?label='+encodeURIComponent(label))
+  .then(function(r){return r.json()}).then(function(data){
+    var uses=data.uses||[];
+    div.textContent='Allowable uses: '+(uses.length?uses.join(', '):'none on file yet');
+  }).catch(function(){div.textContent='Allowable uses: failed to load';});
 }
 
 function loadAccountsForPaid() {
@@ -451,6 +574,7 @@ function storeTag() {
     category:document.getElementById('gcategory').value.trim(),
     merchant:document.getElementById('gmerchant').value.trim(),
     note:document.getElementById('gnote').value.trim(),
+    use:document.getElementById('guse').value,
     do_not_use:document.getElementById('gdonotuse').checked,
     replace:document.getElementById('greplace').checked};
   fetch('/api/transaction/tag',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
@@ -458,6 +582,7 @@ function storeTag() {
     if(data.ok){
       msg.innerHTML='<span class="sm s-ok">Tagged ('+esc((data.fields||[]).join(', '))+')</span>';
       ['gcategory','gmerchant','gnote'].forEach(function(id){document.getElementById(id).value='';});
+      document.getElementById('guse').value='';
       document.getElementById('gdonotuse').checked=false;
       document.getElementById('greplace').checked=false;
       loadTransactions();
@@ -473,6 +598,30 @@ function storeTag() {
 // enumeration, on this surface too).
 function currentAccount() {
   return document.getElementById('taccount').value.trim();
+}
+
+// The tag form's own allowable-use select: shown only when the account the
+// transaction list is currently open on is restricted, populated from that
+// account's closed list — never a household-typed word, and never posted
+// unless the household actually picks one (an empty selection reaches the
+// door as "not given", the same posture `gcategory`/`gmerchant` already take
+// when left blank).
+function refreshUseSelect() {
+  var row=document.getElementById('guserow');
+  var sel=document.getElementById('guse');
+  var account=currentAccount();
+  if(!account){row.style.display='none';sel.innerHTML='';return;}
+  fetch('/api/account/allowable-uses?label='+encodeURIComponent(account))
+  .then(function(r){return r.json()}).then(function(data){
+    if(!data.restricted){row.style.display='none';sel.innerHTML='';return;}
+    row.style.display='';
+    sel.innerHTML='<option value="">(no use)</option>';
+    (data.uses||[]).forEach(function(u){
+      var opt=document.createElement('option');
+      opt.value=u; opt.textContent=u;
+      sel.appendChild(opt);
+    });
+  }).catch(function(){row.style.display='none';sel.innerHTML='';});
 }
 
 function loadAccounts() {
@@ -555,6 +704,7 @@ function openObligation(id) {
 function loadTransactions() {
   var div=document.getElementById('tlist');
   var account=currentAccount();
+  refreshUseSelect();
   if(!account){div.innerHTML='<p class="sm s-err">No account kinds loaded</p>';return;}
   fetch('/api/transactions?account='+encodeURIComponent(account)).then(function(r){return r.json()}).then(function(data){
     if(data.error){div.innerHTML='<p class="sm s-err">'+esc(data.error)+'</p>';return;}
@@ -621,8 +771,10 @@ function loadBudget() {
   var monthField=document.getElementById('bviewmonth');
   if(!monthField.value.trim()) monthField.value=currentMonth();
   var month=monthField.value.trim();
+  document.getElementById('budgetnote').textContent=scopeNote();
   div.innerHTML='<p class="empty">Loading&#8230;</p>';
-  fetch('/api/budget?month='+encodeURIComponent(month)).then(function(r){return r.json()}).then(function(data){
+  fetch('/api/budget?month='+encodeURIComponent(month)+(includeBusiness()?'&include_business=true':''))
+  .then(function(r){return r.json()}).then(function(data){
     if(data.error){div.innerHTML='<p class="sm s-err">'+esc(data.error)+'</p>';return;}
     var html='';
     (data.envelopes||[]).forEach(function(e){
@@ -776,8 +928,10 @@ function doResolve() {
 
 function loadSubscriptions() {
   var div=document.getElementById('slist');
+  document.getElementById('subsnote').textContent=scopeNote();
   div.innerHTML='<p class="empty">Loading&#8230;</p>';
-  fetch('/api/subscriptions').then(function(r){return r.json()}).then(function(data){
+  fetch('/api/subscriptions'+(includeBusiness()?'?include_business=true':''))
+  .then(function(r){return r.json()}).then(function(data){
     if(!data.subscriptions||!data.subscriptions.length){
       div.innerHTML='<p class="empty">No recurring charges detected.</p>';return;}
     var html='';
@@ -790,6 +944,26 @@ function loadSubscriptions() {
     });
     div.innerHTML=html;
   }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load subscriptions</p>';});
+}
+
+function loadSchedules() {
+  var div=document.getElementById('schedlist');
+  document.getElementById('schedulesnote').textContent=scopeNote();
+  div.innerHTML='<p class="empty">Loading&#8230;</p>';
+  fetch('/api/schedules'+(includeBusiness()?'?include_business=true':''))
+  .then(function(r){return r.json()}).then(function(data){
+    if(!data.rows||!data.rows.length){div.innerHTML='<p class="empty">No liability accounts on file.</p>';return;}
+    var html='';
+    data.rows.forEach(function(r){
+      html+='<div class="qi">'
+        +'<span class="rb r-'+attr(r.rung)+'">'+esc(r.rung)+'</span>'
+        +'<span class="rk">'+esc(r.label)+'</span>'
+        +'<span class="qs">'+esc(r.kind)+(r.institution?(' &middot; '+esc(r.institution)):'')+'</span>'
+        +'<span class="qn">'+esc(r.balance_as_of)+'</span>'
+        +'</div>';
+    });
+    div.innerHTML=html;
+  }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load schedules</p>';});
 }
 
 var _syncEnvelopeId=null;
@@ -852,7 +1026,7 @@ function sendSync() {
     document.getElementById('syncpreview').innerHTML='';
   }).catch(function(){msg.textContent='Error';});
 }
-loadAccounts();loadObligations();loadAccountsForPaid();
+loadAccounts();loadObligations();loadAccountsForPaid();loadAccountList();
 </script>
 </body>
 </html>
@@ -1073,6 +1247,10 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                 return self._get_grant_report(qs)
             if p.path == "/api/transaction/transfers/suggest":
                 return self._get_transfer_suggestions()
+            if p.path == "/api/accounts":
+                return self._get_accounts()
+            if p.path == "/api/account/allowable-uses":
+                return self._get_allowable_uses(qs)
             if p.path == "/api/sync/matters":
                 return self._get_sync_matters()
             self.send_error(404)
@@ -1278,6 +1456,40 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
             # kept here a second time.
             self._json({"matters": list(sync.known_matters(sidecar))})
 
+        def _get_accounts(self):
+            # G8-business-books: the Records tab's own "Accounts on file"
+            # list — label, kind, institution, owner and whether restricted,
+            # the same fields the CLI's own `account list` composes
+            # (`accounts.rows()` plus `owner_of`/`is_restricted`) — never the
+            # number (I-13). `/api/status`'s own `accounts` stays exactly
+            # `{label, kind}` (pinned by an earlier bite's test); this is a
+            # second, richer door rather than a widened one.
+            self._json({"rows": [
+                {"label": r.label, "kind": r.kind, "institution": r.institution,
+                 "owner": accounts.owner_of(sidecar, r.label),
+                 "restricted": accounts.is_restricted(sidecar, r.label),
+                 "rung": r.rung.value}
+                for r in accounts.rows(sidecar)
+            ]})
+
+        def _get_allowable_uses(self, qs):
+            # G8-business-books: the closed list of allowable uses an
+            # account's award terms permit, read back the way the CLI's own
+            # `account allowable-uses <label>` (no `--set`) already reads it
+            # — `overlay.allowable_uses_of`, served on `S1_LIST`. Also
+            # carries `restricted`, so the tag form's own `use` select can
+            # decide whether to show itself without a second door.
+            label = qs.get("label", "")
+            if not label:
+                return self._json({"error": "label is required"}, 400)
+            if not accounts.label_exists(sidecar, label):
+                return self._json({"error": accounts.unknown_label(label)}, 404)
+            self._json({
+                "label": label,
+                "restricted": accounts.is_restricted(sidecar, label),
+                "uses": sorted(overlay.allowable_uses_of(sidecar, label)),
+            })
+
         # ── POST ──────────────────────────────────────────────────────
 
         def do_POST(self):
@@ -1315,6 +1527,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                 return self._post_budget_limit(body)
             if p == "/api/transaction/transfer":
                 return self._post_transfer(body)
+            if p == "/api/account/allowable-uses":
+                return self._post_allowable_uses(body)
             if p == "/api/sync/preview":
                 return self._post_sync_preview(body)
             if p == "/api/sync/send":
@@ -1542,6 +1756,29 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                 return self._json({"ok": False, "error": str(exc)}, 400)
             self._json({"ok": True, "fp_out": ref[2], "fp_in": fp_in,
                         "replaced": replaced is not None})
+
+        def _post_allowable_uses(self, body):
+            # G8-business-books: the closed list an account's award terms
+            # permit, entered from those terms — never guessed, never
+            # computed. `overlay.set_allowable_uses` gives every word the
+            # same shape gate a CLI `--set` already takes and refuses a
+            # `NOT_COMPUTED_HERE` member (409a, payroll, …) by name; a
+            # malformed word's own text is never echoed back either way —
+            # `allowable_uses` is L3 (I-15).
+            replace = body.get("replace") is True
+            label = self._field(body, "label")
+            uses = _string_list(body, "uses")
+            if uses is None:
+                return self._json(
+                    {"ok": False, "error": "uses is required (a list of words)"}, 400,
+                )
+            try:
+                ref, replaced = overlay.set_allowable_uses(sidecar, label, uses, replace=replace)
+            except RecordExists as exc:
+                return self._json({"ok": False, "error": str(exc)}, 409)
+            except ValueError as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
+            self._json({"ok": True, "label": ref[2], "replaced": replaced is not None})
 
         def _post_sync_preview(self, body):
             # Composes and holds an `Envelope` — never sends, never

@@ -349,7 +349,12 @@ of the three states it was composed in — no business account on file, one
 on file and left out, or one on file and pulled in by the flag — because a
 notice that is constant is a notice that is false for somebody. This package tracks none of
 payroll, tax, 409A elections, or cap-table math — each is refused by name,
-pointing at the accountant.
+pointing at the accountant. The browser page carries all of this: the
+account form's own `owner`/`restricted` fields and its allowable-uses
+mini-form, an allowable-use select on the tag form once an account is
+restricted, and a header switch that folds business-owned accounts into
+the Budget, Schedules and Subscriptions tabs per call, with a note beside
+each naming which scope it is showing.
 
 ## Sync
 
