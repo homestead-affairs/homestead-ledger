@@ -71,6 +71,8 @@ commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
   transaction  transaction add <date> <amount> <description> --account LABEL
                transaction list --account LABEL [--gaps]
   queue        queue — what's due
+  budget       budget set <category> <YYYY-MM> <amount> [--replace]
+               budget show [--month YYYY-MM]
   ui           ui [--port N] — entry forms, intake, queue and subscriptions in the browser
 
 commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
@@ -80,7 +82,8 @@ commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
 """
 
 _CLI_COMMANDS = {
-    "account", "obligation", "transaction", "resolve", "reconcile", "put", "queue", "verify", "ui",
+    "account", "obligation", "transaction", "resolve", "reconcile", "put", "queue",
+    "budget", "verify", "ui",
 }
 
 
@@ -110,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
             accounts,
             balance,
             books,
+            budget,
             cadence,
             cli,
             fingerprint,
@@ -129,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         from homestead_ledger.app import cover, demo, view, window  # noqa: F401
         from homestead_ledger.packs import (  # noqa: F401
             accounts as _accounts_pack,
+            budget as _budget_pack,
             checking,
             credit_card,
             loan,

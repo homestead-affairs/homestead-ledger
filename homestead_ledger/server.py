@@ -166,6 +166,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
   <button class="tb" onclick="show('queue',this)">What's Due</button>
   <button class="tb" onclick="show('entities',this)">Entities</button>
   <button class="tb" onclick="show('subscriptions',this)">Subscriptions</button>
+  <button class="tb" onclick="show('budget',this)">Budget</button>
 </nav>
 <main>
 
@@ -287,6 +288,29 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
   <div id="slist"></div>
 </section>
 
+<section id="t-budget" class="tab">
+  <h2>Set a category's limit</h2>
+  <div class="card">
+    <div class="rf">
+      <input id="bcategory" list="bcategories" placeholder="Category (groceries, medical-copay)" style="max-width:220px">
+      <datalist id="bcategories"></datalist>
+      <input id="bmonth" placeholder="Month YYYY-MM" style="max-width:150px">
+      <input id="bamount" placeholder="Limit (400.00)" style="max-width:150px">
+      <label class="chk"><input type="checkbox" id="breplace"> replace if this category/month has one</label>
+      <button class="btn bg" onclick="storeLimit()">Set limit</button>
+    </div>
+    <div class="why">A limit never renders again once set — only whether a category's spending is within it, over it, unset, or absent this month.</div>
+    <div id="bmsg"></div>
+  </div>
+
+  <h2>This month's envelopes</h2>
+  <div class="rf">
+    <input id="bviewmonth" placeholder="Month YYYY-MM" style="max-width:150px">
+    <button class="btn bp" onclick="loadBudget()">Show</button>
+  </div>
+  <div id="blist"></div>
+</section>
+
 </main>
 <script>
 function show(name, btn) {
@@ -297,6 +321,14 @@ function show(name, btn) {
   if(name==='records'){loadObligations();loadTransactions();loadAccountsForPaid();}
   if(name==='queue') loadQueue();
   if(name==='subscriptions') loadSubscriptions();
+  if(name==='budget') loadBudget();
+}
+
+// YYYY-MM for the current calendar month — the one default this page
+// carries, so a household opening the tab sees this month with no typing.
+function currentMonth() {
+  var d=new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
 }
 
 function storeObligation() {
@@ -542,6 +574,55 @@ function loadTransactions() {
   }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load the books</p>';});
 }
 
+function storeLimit() {
+  var msg=document.getElementById('bmsg');
+  var body={category:document.getElementById('bcategory').value.trim(),
+    month:(document.getElementById('bmonth').value.trim()||currentMonth()),
+    amount:document.getElementById('bamount').value.trim(),
+    replace:document.getElementById('breplace').checked};
+  fetch('/api/budget/limit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  .then(function(r){return r.json()}).then(function(data){
+    if(data.ok){
+      msg.innerHTML='<span class="sm s-ok">Limit set for '+esc(data.category)+' '+esc(data.month)+(data.replaced?' (replaced)':'')+'</span>';
+      ['bcategory','bamount'].forEach(function(id){document.getElementById(id).value='';});
+      document.getElementById('breplace').checked=false;
+      loadBudget();
+    } else {msg.innerHTML='<span class="sm s-err">'+esc(data.error||'Failed')+'</span>';}
+  }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
+}
+
+function loadBudget() {
+  var div=document.getElementById('blist');
+  var monthField=document.getElementById('bviewmonth');
+  if(!monthField.value.trim()) monthField.value=currentMonth();
+  var month=monthField.value.trim();
+  div.innerHTML='<p class="empty">Loading&#8230;</p>';
+  fetch('/api/budget?month='+encodeURIComponent(month)).then(function(r){return r.json()}).then(function(data){
+    if(data.error){div.innerHTML='<p class="sm s-err">'+esc(data.error)+'</p>';return;}
+    var html='';
+    (data.envelopes||[]).forEach(function(e){
+      html+='<div class="qi"><span class="qs">'+esc(e.category)+'</span>'
+        +'<span class="sm'+(e.state==='over limit'?' s-err':'')+'">'+esc(e.state)+'</span></div>';
+    });
+    html+='<div class="qn">needs a category: '+data.uncategorised+'</div>';
+    div.innerHTML=html||'<p class="empty">No limits and no spending on file yet.</p>';
+    // Suggestions for the "set a limit" category field — real, rendered
+    // categories only, built with textContent so a household-typed word
+    // needs no escaping (never the derived placeholder, which names no
+    // real category).
+    var seen={}, list=document.getElementById('bcategories');
+    list.innerHTML='';
+    (data.envelopes||[]).forEach(function(e){
+      if(e.category&&!seen[e.category]){
+        seen[e.category]=true;
+        var opt=document.createElement('option');
+        opt.textContent=e.category;
+        list.appendChild(opt);
+      }
+    });
+  }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load the budget</p>';});
+}
+
 function esc(s) {
   var d=document.createElement('div'); d.textContent=(s===null||s===undefined)?'':s; return d.innerHTML;
 }
@@ -703,7 +784,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import InvalidKey, RecordExists
 
-    from homestead_ledger import accounts, balance, books, money, nestor_seam, obligations, overlay, registry
+    from homestead_ledger import accounts, balance, books, budget, money, nestor_seam, obligations, overlay, registry
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
     from homestead_ledger.intake import extract
@@ -842,6 +923,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._get_resolve(qs)
             if p.path == "/api/subscriptions":
                 return self._get_subscriptions()
+            if p.path == "/api/budget":
+                return self._get_budget(qs)
             self.send_error(404)
 
         def _get_queue(self):
@@ -933,6 +1016,27 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 for c in found
             ]})
 
+        def _get_budget(self, qs):
+            # Bite G4-budget: every category's spend-versus-limit state for
+            # one month, served through `budget.envelopes` — derived states
+            # only (I-8/I-15). A bad month is refused by name, never
+            # defaulted to "today" behind the caller's back.
+            month = qs.get("month", "")
+            try:
+                rows, uncategorised = budget.envelopes(canonical, sidecar, month)
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
+            self._json({
+                "month": month,
+                "envelopes": [
+                    {"category": e.category, "spent_state": e.spent_state,
+                     "limit_state": e.limit_state, "over": e.over,
+                     "state": budget.state_text(e)}
+                    for e in rows
+                ],
+                "uncategorised": uncategorised,
+            })
+
         # ── POST ──────────────────────────────────────────────────────
 
         def do_POST(self):
@@ -966,6 +1070,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._post_transaction(body)
             if p == "/api/transaction/tag":
                 return self._post_transaction_tag(body)
+            if p == "/api/budget/limit":
+                return self._post_budget_limit(body)
             self.send_error(404)
 
         def _field(self, body, name):
@@ -1144,6 +1250,27 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             except (ValueError, RecordExists) as exc:
                 return self._json({"ok": False, "error": str(exc)}, 400)
             self._json({"ok": True, "fields": sorted(written)})
+
+        def _post_budget_limit(self, body):
+            # `replace` is checked for JSON `true` and nothing else — the
+            # same I-9/checkbox reasoning every other door on this page
+            # gives its own `replace` field.
+            replace = body.get("replace") is True
+            try:
+                ref, replaced = budget.set_limit(
+                    sidecar,
+                    self._field(body, "category"),
+                    self._field(body, "month"),
+                    self._field(body, "amount"),
+                    replace=replace,
+                )
+            except (ValueError, RecordExists) as exc:
+                # I-15: `budget.set_limit`'s own refusals never echo the
+                # amount, so there is nothing here to accidentally repeat.
+                return self._json({"ok": False, "error": str(exc)}, 400)
+            category, _dot, month = ref[2].rpartition(".")
+            self._json({"ok": True, "category": category, "month": month,
+                        "replaced": replaced is not None})
 
     return http.server.HTTPServer((host, port), _H)
 

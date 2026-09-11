@@ -234,6 +234,18 @@ Each of the four fields is its own record, independently gated (I-9): setting
 already-tagged field needs `--replace` to say so explicitly. A tag never
 rewrites, reorders, or removes the transaction it describes.
 
+## Budgets
+
+`budget set <category> <YYYY-MM> <amount> [--replace]` records a per-category
+spending limit for one calendar month, and `budget show [--month YYYY-MM]`
+lists every category's state against it — within limit, over limit, no limit
+set, or no spend — never the limit or the amount spent, alongside a count of
+transactions still waiting on a category. The comparison is computed fresh
+from the books and the limits on record every time it is asked, and nothing
+about it is stored on its own. A protected category's name derives on this
+list exactly as it does when tagging a transaction, and a transaction marked
+do-not-use never counts toward it.
+
 ## The method
 
 Test-first, as in `homestead`: every claim is a check somebody can run. From a
