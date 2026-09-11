@@ -642,7 +642,9 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import InvalidKey, RecordExists
 
-    from homestead_ledger import accounts, balance, books, money, nestor_seam, obligations, registry
+    from homestead_ledger import (
+        accounts, balance, books, money, nestor_seam, obligations, registry, schedules,
+    )
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
     from homestead_ledger.intake import extract
@@ -777,6 +779,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._get_transactions(qs)
             if p.path == "/api/queue":
                 return self._get_queue()
+            if p.path == "/api/schedules":
+                return self._get_schedules()
             if p.path == "/api/resolve":
                 return self._get_resolve(qs)
             if p.path == "/api/subscriptions":
@@ -791,6 +795,21 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 {"kind": i.kind, "id": i.ref[2], "rung": i.rung.value, "shown": i.shown,
                  "overdue": i.overdue, "days_until": i.days_until, "gap": i.gap}
                 for i in items
+            ]})
+
+        def _get_schedules(self):
+            # S1_LIST semantics (`schedules.rows`): the amount fields derive
+            # here — "a balance is on file" — never the number, and never
+            # the rendered value either; only the terminal export
+            # (`schedules export`, an operator act) renders those. There is
+            # deliberately no POST door here: an export is confirmed at the
+            # terminal, not from the browser.
+            self._json({"rows": [
+                {"label": r.label, "kind": r.kind, "institution": r.institution,
+                 "opened": r.opened, "balance_as_of": r.balance_as_of,
+                 "rate": r.rate, "limit": r.limit, "min_payment": r.min_payment,
+                 "rung": r.rung.value}
+                for r in schedules.rows(sidecar)
             ]})
 
         def _get_obligations(self):
