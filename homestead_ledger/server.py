@@ -20,7 +20,7 @@ over the real books.
 
 **Chokepoint**: this module never accesses ``.payload``.  Records reach the
 browser as ``Row.text`` / served values, queue items as ``Due.shown``, and the
-recurring pass reads the books through ``balance.transaction_tuples`` at the
+recurring pass reads the books through ``balance.dated_transactions`` at the
 payload boundary.  Merchant resolution comes through Nestor's public API —
 optional, and absent without the ``entity`` extra.
 
@@ -232,6 +232,24 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
     <div id="tmsg"></div>
   </div>
 
+  <h2>Tag a transaction</h2>
+  <div class="card">
+    <div class="rf">
+      <input id="gfp" placeholder="Transaction fingerprint (click a row below to fill)" style="max-width:320px">
+      <input id="gcategory" list="gcategories" placeholder="Category (groceries, medical-copay)" style="max-width:220px">
+      <datalist id="gcategories"></datalist>
+      <input id="gmerchant" placeholder="Confirmed merchant (optional)" style="max-width:220px">
+    </div>
+    <div class="rf">
+      <input id="gnote" placeholder="Note (optional)">
+      <label class="chk"><input type="checkbox" id="gdonotuse"> do not use (exclude from recurring, budget and every export)</label>
+      <label class="chk"><input type="checkbox" id="greplace"> replace existing tag(s)</label>
+      <button class="btn bg" onclick="storeTag()">Tag</button>
+    </div>
+    <div class="why">Category L3, raised automatically wherever it names a protected matter (medical, legal, &hellip;) &mdash; the advisory only ever raises this, never lowers it. Note L4. Confirmed merchant L3. Do-not-use L2.</div>
+    <div id="gmsg"></div>
+  </div>
+
   <h2>Obligations on file</h2>
   <div id="olist"></div>
   <div id="odetail"></div>
@@ -375,6 +393,26 @@ function storeTransaction() {
   }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
 }
 
+function storeTag() {
+  var msg=document.getElementById('gmsg');
+  var body={fingerprint:document.getElementById('gfp').value.trim(),
+    category:document.getElementById('gcategory').value.trim(),
+    merchant:document.getElementById('gmerchant').value.trim(),
+    note:document.getElementById('gnote').value.trim(),
+    do_not_use:document.getElementById('gdonotuse').checked,
+    replace:document.getElementById('greplace').checked};
+  fetch('/api/transaction/tag',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  .then(function(r){return r.json()}).then(function(data){
+    if(data.ok){
+      msg.innerHTML='<span class="sm s-ok">Tagged ('+esc((data.fields||[]).join(', '))+')</span>';
+      ['gcategory','gmerchant','gnote'].forEach(function(id){document.getElementById(id).value='';});
+      document.getElementById('gdonotuse').checked=false;
+      document.getElementById('greplace').checked=false;
+      loadTransactions();
+    } else {msg.innerHTML='<span class="sm s-err">'+esc(data.error||'Failed')+'</span>';}
+  }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
+}
+
 // The one place this page reads which account it is working on. There is no
 // literal fallback: the account instances come from /api/status and nowhere
 // else, so a page that failed to load them says so rather than posting to,
@@ -471,13 +509,36 @@ function loadTransactions() {
     if(!data.rows||!data.rows.length){div.innerHTML='<p class="empty">Nothing on the books for '+esc(account)+' yet.</p>';return;}
     var html='';
     data.rows.forEach(function(r){
-      html+='<div class="qi">'
+      // `data-fp` is the fingerprint as *data*, never spliced into an
+      // onclick string (the `data-oid` posture above).
+      html+='<div class="qi rw" data-fp="'+attr(r.item_id)+'">'
         +'<span class="rb r-'+attr(r.rung)+'">'+esc(r.rung)+'</span>'
         +'<span class="rk">'+esc(r.item_id.slice(0,12))+' &middot; '+esc(r.field)+'</span>'
         +'<span class="qs">'+esc(r.text)+'</span>'
+        +(r.category?'<span class="sm">'+esc(r.category)+'</span>':'')
+        +(r.note?'<span class="sm">'+esc(r.note)+'</span>':'')
+        +(r.do_not_use?'<span class="sm s-err">do-not-use</span>':'')
         +'</div>';
     });
     div.innerHTML=html;
+    div.querySelectorAll('[data-fp]').forEach(function(el){
+      el.addEventListener('click',function(){
+        document.getElementById('gfp').value=el.getAttribute('data-fp');
+      });
+    });
+    // Suggestions for the tag form's category field — real, rendered
+    // categories only (never the derived placeholder), built with
+    // `textContent` so a household-typed word needs no escaping.
+    var seen={}, list=document.getElementById('gcategories');
+    list.innerHTML='';
+    data.rows.forEach(function(r){
+      if(r.category&&r.category!=='a category is on file'&&!seen[r.category]){
+        seen[r.category]=true;
+        var opt=document.createElement('option');
+        opt.textContent=r.category;
+        list.appendChild(opt);
+      }
+    });
   }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load the books</p>';});
 }
 
@@ -642,7 +703,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import InvalidKey, RecordExists
 
-    from homestead_ledger import accounts, balance, books, money, nestor_seam, obligations, registry
+    from homestead_ledger import accounts, balance, books, money, nestor_seam, obligations, overlay, registry
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
     from homestead_ledger.intake import extract
@@ -822,10 +883,19 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # render, the amount derives, the account number is never a row.
             window = Window()
             rows = window.open_list(canonical.records(account))
-            self._json({"rows": [
-                {"item_id": r.ref[2], "field": r.ref[1], "rung": r.rung.value, "text": r.text}
-                for r in rows
-            ]})
+            # Bite 4: each row also carries the overlay, served the same
+            # S1_LIST way — `do_not_use` is a reference (set membership),
+            # never a value read off the field.
+            excluded = overlay.excluded_fingerprints(sidecar)
+            out_rows = []
+            for r in rows:
+                tags = overlay.tags_of(sidecar, r.ref[2])
+                out_rows.append({
+                    "item_id": r.ref[2], "field": r.ref[1], "rung": r.rung.value,
+                    "text": r.text, "category": tags.get("category"),
+                    "note": tags.get("note"), "do_not_use": r.ref[2] in excluded,
+                })
+            self._json({"rows": out_rows})
 
         def _get_resolve(self, qs):
             if not nestor_ok:
@@ -842,15 +912,19 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 self._json({"error": str(exc)}, 500)
 
         def _get_subscriptions(self):
-            # The recurring pass over the real books — the household's own
-            # numbers, reflected. `transaction_tuples` is the payload-boundary
-            # read; the detector is a pure function over what it is handed.
-            # Bite 2b: transactions are filed under instance labels, not bare
-            # kind names, so the scan is over `accounts.instances()`.
+            # The recurring pass over the real books. Bite 4: a transaction
+            # marked `do_not_use` is filtered out here, at the caller —
+            # `recurring.py` never learns the overlay exists.
             today = dt.date.today()
+            excluded = overlay.excluded_fingerprints(sidecar)
             found = []
             for label in accounts.instances(sidecar):
-                txns = balance.transaction_tuples(canonical, label)
+                txns = [
+                    (txn_date, amount, description)
+                    for item_id, txn_date, amount, description
+                    in balance.dated_transactions(canonical, label)
+                    if item_id not in excluded
+                ]
                 found.extend(detect_recurring(txns, today=today))
             self._json({"subscriptions": [
                 {"merchant": c.merchant, "cadence": c.cadence, "amount": c.amount,
@@ -890,6 +964,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._post_obligation_paid(body)
             if p == "/api/transaction":
                 return self._post_transaction(body)
+            if p == "/api/transaction/tag":
+                return self._post_transaction_tag(body)
             self.send_error(404)
 
         def _field(self, body, name):
@@ -1041,6 +1117,33 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             except RecordExists as exc:
                 return self._json({"ok": False, "error": str(exc)}, 409)
             self._json({"ok": True, "id": item_id})
+
+        def _post_transaction_tag(self, body):
+            # A transaction fingerprint, this door's one place a browser can
+            # name one — never an account number, and `overlay.tag` refuses
+            # by name (never echoing the row) when it is not on the books.
+            fingerprint = self._field(body, "fingerprint")
+
+            def optional(name: str) -> str | None:
+                value = self._field(body, name).strip()
+                return value or None
+
+            # JSON `true` and nothing else — the same I-9/checkbox reasoning
+            # `_post_obligation`'s `replace` already carries.
+            replace = body.get("replace") is True
+            do_not_use = body.get("do_not_use") is True
+            try:
+                written = overlay.tag(
+                    sidecar, fingerprint,
+                    category=optional("category"),
+                    note=optional("note"),
+                    confirmed_merchant=optional("merchant"),
+                    do_not_use=do_not_use,
+                    replace=replace,
+                )
+            except (ValueError, RecordExists) as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
+            self._json({"ok": True, "fields": sorted(written)})
 
     return http.server.HTTPServer((host, port), _H)
 

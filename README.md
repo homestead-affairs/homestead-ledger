@@ -195,6 +195,45 @@ split is refused unless `--liability-columns CHARGE,PAYMENT` says which column
 means which: an issuer's own column names do not say, and guessing would
 misstate a debt.
 
+## Tagging a transaction
+
+The books are read-only ("mirror, not judge") — a household still wants to
+say things *about* one transaction without ever touching the row itself:
+`transaction tag <fingerprint> [--category C] [--note N] [--merchant M]
+[--do-not-use] [--replace]` (the browser has the same four fields, on the
+Records tab). The fingerprint is what `transaction add`/`--import` already
+print and `transaction list` already shows by reference — a transaction must
+already be on the books before it can be tagged, and an unknown fingerprint
+is refused by name, never by echoing what a lookup happened to find.
+
+- **`--category`** is a short, closed-shape word (lowercase letters, digits
+  and hyphens — `groceries`, `medical-copay`): **L3**, so an ordinary one
+  renders on the list. A category whose text *contains* a word from a closed,
+  hand-reviewed list — `medical`, `therapy`, `pharmacy`, `attorney`, `legal`,
+  `court`, `bankruptcy`, `child-support`, `union`, `church`, `donation`,
+  `political` — is written at **L4** instead, automatically: the list renders
+  "a category is on file" rather than the word itself, and the real word is
+  there only once the transaction's detail is opened. **This advisory only
+  ever raises a category's rung, never lowers one** — there is no path that
+  takes an already-flagged category back down, the same "argue up, never
+  down" rule the engine's own content-shape advisory follows.
+- **`--merchant`** confirms a resolved payee name (L3, renders).
+- **`--note`** is free text (L4 always — open text can name anything, so it
+  is classified at the ceiling from the start, unlike `--category`'s floor):
+  it derives ("a note is on file") on the transaction list and renders only
+  once the transaction's own detail is opened.
+- **`--do-not-use`** (L2) excludes the transaction from the recurring-charge
+  pass, from a budget envelope, and — once built — from every sync envelope
+  and export: a household's own transfer, a duplicate import, or a row that
+  should never shape a pattern. It marks by reference on the list (a
+  `do-not-use` flag), never a value read off the field. Transfers and the
+  budget pass are later consumers of this same exclusion.
+
+Each of the four fields is its own record, independently gated (I-9): setting
+`--category` today does not occupy `--note` for next month, and re-tagging an
+already-tagged field needs `--replace` to say so explicitly. A tag never
+rewrites, reorders, or removes the transaction it describes.
+
 ## The method
 
 Test-first, as in `homestead`: every claim is a check somebody can run. From a

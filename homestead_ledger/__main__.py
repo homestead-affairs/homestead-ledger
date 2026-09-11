@@ -119,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             nestor_seam,
             nestor_store,
             obligations,
+            overlay,
             queue,
             recurring,
             registry,
@@ -132,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             credit_card,
             loan,
             obligations as _obligations_pack,
+            overlay as _overlay_pack,
             savings,
         )
 
