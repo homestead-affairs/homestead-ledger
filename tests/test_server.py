@@ -1233,7 +1233,10 @@ def test_a_fleet_url_written_between_preview_and_send_does_not_redirect(ui, monk
     _, preview = ui.json("/api/sync/preview", {
         "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
     })
-    assert preview["destination_preview"].endswith("/exports/sync")
+    # Compared as path parts, not a posix suffix: on Windows the preview
+    # spells the drop dir with backslashes.
+    from pathlib import Path as _P
+    assert _P(preview["destination_preview"]).parts[-2:] == ("exports", "sync")
 
     (ui.home / "fleet.url").write_text("https://late.invalid/ingest\n", "utf-8")
 
