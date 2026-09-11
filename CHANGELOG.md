@@ -5,7 +5,6 @@
 
 ### Added
 
-* a closed cadence set, roll-forward on payment, and marking an obligation paid by reference ([ab7a123](https://github.com/homestead-affairs/homestead-ledger/commit/ab7a12354db52e24f2a123791de7fc4a6273b8fb))
 * cadence-driven due-date roll-forward and obligation paid-by tracking ([f23a1d8](https://github.com/homestead-affairs/homestead-ledger/commit/f23a1d8cbeef74bf996bd8d0d4b04c343dcc81f9))
 
 
