@@ -70,6 +70,8 @@ commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
                obligation paid <id> --account LABEL --fingerprint <fp> [--on YYYY-MM-DD] [--replace]
   transaction  transaction add <date> <amount> <description> --account LABEL
                transaction list --account LABEL [--gaps]
+               transaction transfer <fp_out> <fp_in> [--replace]
+               transaction transfer --suggest
   queue        queue — what's due
   schedules    schedules show — the liability schedule, amounts derived
                schedules export [--out DIR] — the same schedule to a JSON
@@ -129,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
             schedules,
             server,
             store,
+            transfers,
+            transfers_boundary,
         )
         from homestead_ledger.app import cover, demo, view, window  # noqa: F401
         from homestead_ledger.packs import (  # noqa: F401
@@ -138,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             loan,
             obligations as _obligations_pack,
             savings,
+            transfers as _transfers_pack,
         )
 
         print(f"homestead-ledger ok · books at {paths.home() / 'homestead-ledger.db'}")

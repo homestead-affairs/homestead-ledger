@@ -471,10 +471,11 @@ function loadTransactions() {
     if(!data.rows||!data.rows.length){div.innerHTML='<p class="empty">Nothing on the books for '+esc(account)+' yet.</p>';return;}
     var html='';
     data.rows.forEach(function(r){
+      var xfer=r.transfer_to?(' &middot; transfer &rarr; '+esc(r.transfer_to)):'';
       html+='<div class="qi">'
         +'<span class="rb r-'+attr(r.rung)+'">'+esc(r.rung)+'</span>'
         +'<span class="rk">'+esc(r.item_id.slice(0,12))+' &middot; '+esc(r.field)+'</span>'
-        +'<span class="qs">'+esc(r.text)+'</span>'
+        +'<span class="qs">'+esc(r.text)+xfer+'</span>'
         +'</div>';
     });
     div.innerHTML=html;
@@ -644,6 +645,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
 
     from homestead_ledger import (
         accounts, balance, books, money, nestor_seam, obligations, registry, schedules,
+        transfers,
     )
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
@@ -785,6 +787,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._get_resolve(qs)
             if p.path == "/api/subscriptions":
                 return self._get_subscriptions()
+            if p.path == "/api/transaction/transfers/suggest":
+                return self._get_transfer_suggestions()
             self.send_error(404)
 
         def _get_queue(self):
@@ -842,7 +846,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             window = Window()
             rows = window.open_list(canonical.records(account))
             self._json({"rows": [
-                {"item_id": r.ref[2], "field": r.ref[1], "rung": r.rung.value, "text": r.text}
+                {"item_id": r.ref[2], "field": r.ref[1], "rung": r.rung.value, "text": r.text,
+                 "transfer_to": transfers.other_label(sidecar, r.ref[2])}
                 for r in rows
             ]})
 
@@ -866,16 +871,32 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # read; the detector is a pure function over what it is handed.
             # Bite 2b: transactions are filed under instance labels, not bare
             # kind names, so the scan is over `accounts.instances()`.
+            # G4-transfers: a transfer's two legs are excluded here, at the
+            # caller — `transaction_tuples`/`balance.py` itself stays every
+            # transaction, paired or not; `transfers.exclude_from` is the
+            # filter (never inline here — this door reads no payload, I-16).
             today = dt.date.today()
             found = []
             for label in accounts.instances(sidecar):
                 txns = balance.transaction_tuples(canonical, label)
+                txns = transfers.exclude_from(canonical, sidecar, label, txns)
                 found.extend(detect_recurring(txns, today=today))
             self._json({"subscriptions": [
                 {"merchant": c.merchant, "cadence": c.cadence, "amount": c.amount,
                  "next_expected": c.next_expected, "confidence": c.confidence,
                  "status": c.status}
                 for c in found
+            ]})
+
+        def _get_transfer_suggestions(self):
+            # References only: two fingerprints and whether the match is the
+            # only one that fits. No amount and no date crosses this door
+            # (I-15) — a suggestion is a proposal to look at two rows, not a
+            # second way to read what they say.
+            found = transfers.suggest(sidecar)
+            self._json({"pairs": [
+                {"fp_out": fp_out, "fp_in": fp_in, "ambiguous": ambiguous}
+                for fp_out, fp_in, ambiguous in found
             ]})
 
         # ── POST ──────────────────────────────────────────────────────
@@ -909,6 +930,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._post_obligation_paid(body)
             if p == "/api/transaction":
                 return self._post_transaction(body)
+            if p == "/api/transaction/transfer":
+                return self._post_transfer(body)
             self.send_error(404)
 
         def _field(self, body, name):
@@ -1060,6 +1083,19 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             except RecordExists as exc:
                 return self._json({"ok": False, "error": str(exc)}, 409)
             self._json({"ok": True, "id": item_id})
+
+        def _post_transfer(self, body):
+            # JSON `true` and nothing else — the same I-9 posture every other
+            # `replace` checkbox on this door already carries.
+            replace = body.get("replace") is True
+            fp_out = self._field(body, "fp_out")
+            fp_in = self._field(body, "fp_in")
+            try:
+                ref, replaced = transfers.pair(sidecar, fp_out, fp_in, replace=replace)
+            except (ValueError, RecordExists) as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
+            self._json({"ok": True, "fp_out": ref[2], "fp_in": fp_in,
+                        "replaced": replaced is not None})
 
     return http.server.HTTPServer((host, port), _H)
 
