@@ -1042,18 +1042,53 @@ def _global_scan_helper_names() -> frozenset[str]:
     return frozenset(names)
 
 
-def _calls_any_by_name(node: ast.AST, names: frozenset[str]) -> bool:
-    """True if `node` calls any of `names`, bare (`helper(...)`) or through
-    an attribute (`module.helper(...)`)."""
+def _imported_names(tree: ast.Module) -> frozenset[str]:
+    """Every name this module binds with `from ... import name` (or `as`),
+    anywhere — function-body imports included, which is how most of this
+    suite reaches another module's scan helper."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            names.update(alias.asname or alias.name for alias in node.names)
+    return frozenset(names)
+
+
+def _calls_any_by_name(
+    node: ast.AST, bare: frozenset[str], attrs: frozenset[str] | None = None
+) -> bool:
+    """True if `node` delegates to a known scan helper: a bare call to one of
+    `bare`, or `module.helper(...)` for one of `attrs`.
+
+    The two sets differ on purpose. An attribute call names the module it
+    comes from, so matching the attribute alone is safe. A *bare* name is
+    only that helper if this module actually has it — imported, or defined
+    here — otherwise a local function that happens to share a name with some
+    other module's scan helper would clear every inline scan beside it
+    (audit, 2026-09-11).
+    """
+    attrs = bare if attrs is None else attrs
     for call in _calls_in(node):
-        if isinstance(call.func, ast.Name) and call.func.id in names:
+        if isinstance(call.func, ast.Name) and call.func.id in bare:
             return True
-        if isinstance(call.func, ast.Attribute) and call.func.attr in names:
+        if isinstance(call.func, ast.Attribute) and call.func.attr in attrs:
             return True
     return False
 
 
-def _is_inline_scan(node: ast.AST, global_helpers: frozenset[str]) -> bool:
+def _resolvable_helpers(source: str, global_helpers: frozenset[str]) -> frozenset[str]:
+    """The known scan helpers this module can reach by a *bare* name: the
+    ones it imports, and the ones it defines itself."""
+    tree = ast.parse(source)
+    return global_helpers & (
+        _imported_names(tree) | frozenset(_scan_helpers(source))
+    )
+
+
+def _is_inline_scan(
+    node: ast.AST,
+    global_helpers: frozenset[str],
+    bare_helpers: frozenset[str] | None = None,
+) -> bool:
     """A test body counts as an inline scan when it reads a real file and,
     in its own body — not by calling a scan helper `tests/` already defines
     somewhere — walks source and judges it directly (`ast.parse`/`ast.walk`
@@ -1080,7 +1115,8 @@ def _is_inline_scan(node: ast.AST, global_helpers: frozenset[str]) -> bool:
         return False
     if not _reads_file_text(node):
         return False  # not reading a real file — a string the test built
-    if _calls_any_by_name(node, global_helpers):
+    bare = global_helpers if bare_helpers is None else bare_helpers
+    if _calls_any_by_name(node, bare, global_helpers):
         return False  # delegates to a helper already held to its own plant
     return (
         (_walks_source(node) and _isinstance_against_ast_type(node))
@@ -1107,10 +1143,11 @@ def _inline_scan_tests(source: str, global_helpers: frozenset[str]) -> list[str]
     """Every test function in one tests module whose own body is itself a
     scan by the rule above."""
     tree = ast.parse(source)
+    bare = _resolvable_helpers(source, global_helpers)
     return sorted(
         name
         for name, node in _test_functions(tree)
-        if _is_inline_scan(node, global_helpers)
+        if _is_inline_scan(node, global_helpers, bare)
     )
 
 
@@ -1316,6 +1353,8 @@ def test_the_inline_scan_check_clears_a_test_that_delegates_to_a_known_helper(tm
         "from pathlib import Path\n"
         f"TARGET = Path({str(target)!r})\n"
         "\n"
+        "from tests.test_no_egress import _toplevel_and_nested_imports\n"
+        "\n"
         "def test_the_module_does_not_import_homestead():\n"
         "    imported = _toplevel_and_nested_imports(TARGET)\n"
         "    assert 'homestead' not in imported\n",
@@ -1366,6 +1405,7 @@ def test_delegating_clears_a_test_that_also_asks_its_own_question(tmp_path):
         tmp_path,
         "test_planted_delegate_and_check.py",
         "from pathlib import Path\n"
+        "from tests.test_i44_no_drafting import _drafting_or_filing_reaches\n"
         "\n"
         "def test_the_planted_purpose_is_reported():\n"
         "    source = Path('x').read_text(encoding='utf-8')\n"
@@ -1376,6 +1416,46 @@ def test_delegating_clears_a_test_that_also_asks_its_own_question(tmp_path):
     assert _inline_scan_tests(source, frozenset()) == [
         "test_the_planted_purpose_is_reported"
     ], "and with no helper behind it, the same body is an inline scan"
+
+
+def test_a_local_function_sharing_a_helpers_name_does_not_clear_a_scan(tmp_path):
+    """Planted: the shadow. Delegation is recognised by *name*, across the
+    whole of `tests/`, so a module with a local function that happens to
+    share a scan helper's name would have every inline scan beside it
+    cleared by a call to something else entirely. A bare name only counts
+    when this module imports it or defines it."""
+    shadow = _write(
+        tmp_path,
+        "test_planted_shadowed_helper.py",
+        "from pathlib import Path\n"
+        "\n"
+        "def _sections(text):\n"
+        "    return text\n"
+        "\n"
+        "def test_no_banned_word():\n"
+        "    text = Path('x').read_text(encoding='utf-8')\n"
+        "    assert _sections(text)\n"
+        "    assert 'banned' not in text\n",
+    )
+    assert _inline_scan_tests(shadow, frozenset({"_sections"})) == [
+        "test_no_banned_word"
+    ], "a local `_sections` is not another module's `_sections`"
+
+    imported = _write(
+        tmp_path,
+        "test_planted_imported_helper.py",
+        "from pathlib import Path\n"
+        "from tests.test_docs_drift import _sections\n"
+        "\n"
+        "def test_no_banned_word():\n"
+        "    text = Path('x').read_text(encoding='utf-8')\n"
+        "    assert _sections(text)\n"
+        "    assert 'banned' not in text\n",
+    )
+    assert _inline_scan_tests(imported, frozenset({"_sections"})) == [], (
+        "and the same call, of the helper this module really imported, is "
+        "the delegation it looks like"
+    )
 
 
 def test_the_inline_scan_check_does_not_fire_on_the_real_tree():
