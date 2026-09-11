@@ -5,7 +5,7 @@
 
 ### Added
 
-* account instances — a label, never a kind, and one number record ([3725c95](https://github.com/homestead-affairs/homestead-ledger/commit/3725c950ce7305edfd489d66bde23f9a9086adba))
+* account instances — a label, never a kind, and one number record ([6fa5d6a](https://github.com/homestead-affairs/homestead-ledger/commit/6fa5d6a3eee809428f954f412f8a294ef6daa40e))
 
 
 ### Fixed
