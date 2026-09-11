@@ -98,6 +98,14 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
+      # `pytest` is not a dependency of this package (it is dev-only, and this
+      # leg deliberately does not take the whole `dev` extra), and
+      # `setup-python` puts a bare interpreter first on PATH — so pytest has
+      # to be installed by name here, exactly as the `invariants` job above
+      # does it and as the engine's own `fleet` leg does. Without this line
+      # the job dies at `pytest: command not found` and the leg proves
+      # nothing about psycopg at all.
+      - run: pip install pytest
       - run: pip install -e . "psycopg[binary]>=3.1,<4"
       # The whole suite, not just test_sync.py: psycopg's presence is what
       # this leg exists to exercise, and the rest of the suite has never
