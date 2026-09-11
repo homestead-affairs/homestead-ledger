@@ -24,6 +24,18 @@ record (step 5 of the classification procedure).
     limit (a credit limit)             → L4  (money category)
     payment_due_day                    → L2  (household schedule)
     min_payment                        → L4  (money category)
+    owner (household or business)      → L2  (household metadata — G8)
+    restricted (maps to allowable uses)→ L2  (household metadata — G8)
+
+**`owner`/`restricted` (G8-business-books).** A household that also runs a
+business — a grant, an accelerator application, a company — holds some
+accounts on the business's own behalf. `owner` says which; an instance with
+no record here reads as `household` (decision, not a guess: an account
+nobody has ever called business-owned is not one). `restricted` marks a
+grant account whose spend must map to a closed list of allowable uses
+(`overlay.py`'s own `allowable_uses`/`use` records) — set independently of
+`owner`, because a restricted account is about *how* it must be spent, not
+*who* holds it.
 
 **Why `number` is here at all, given the pack that classifies a
 *transaction's* own `account_number` already exists.** Before this bite, a
@@ -112,6 +124,21 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "which day of the month a payment is due is a household schedule "
         "fact — step 1 and step 2 both answer no, the same reasoning "
         "packs/obligations.py gives due_date.",
+    ),
+    "owner": _field(
+        Rung.L2,
+        "step 1 and step 2 both answer no — whether an instance is held by "
+        "the household or by a separate business it runs is household "
+        "metadata (G8-business-books), the same posture this pack already "
+        "gives kind. An instance with no record here is the household's own "
+        "(the pin: absence means household, never a guess about a business).",
+    ),
+    "restricted": _field(
+        Rung.L2,
+        "step 1 and step 2 both answer no — whether an account's spend must "
+        "map to a closed list of allowable uses (a grant account) is "
+        "household metadata about how the account is used, the same "
+        "posture packs/overlay.py gives do_not_use, one level up.",
     ),
     "min_payment": _field(
         Rung.L4,

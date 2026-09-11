@@ -18,6 +18,8 @@ envelopes and every export (`overlay.excluded_fingerprints`).
     confirmed_merchant (a resolved name)    → L3
     do_not_use (excluded from aggregates)   → L2
     note (free text)                        → L4
+    use (allowable-use bucket, per fp)      → L3  (G8-business-books)
+    allowable_uses (closed set, per label)  → L3  (G8-business-books)
 
 **Why `category` is L3 and not L4 outright — and why the advisory only ever
 argues up.** An ordinary category (`groceries`) identifies a kind of
@@ -127,6 +129,25 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "floor and composed up only when needed, so it is classified at "
         "the ceiling from the start.",
         derived="a note is on file",
+    ),
+    # ── G8-business-books ────────────────────────────────────────────────
+    "use": _field(
+        Rung.L3,
+        "step 1 answers no; step 2 answers 'identifies which allowable-use "
+        "bucket a restricted account's transaction maps to' — a kind of "
+        "spending, the same posture this pack already gives category. "
+        "Step 3 finds no protected category of its own.",
+        derived="a use is on file",
+    ),
+    "allowable_uses": _field(
+        Rung.L3,
+        "step 1 answers no; step 2 answers 'identifies the closed list of "
+        "spending categories a grant account's award terms permit' — the "
+        "same kind-of-spending reasoning `category` and `use` already get, "
+        "one level up (a set of words rather than one). Step 3 finds no "
+        "protected category: the words are the operator's own, entered "
+        "from the funder's letter.",
+        derived="an allowable-uses list is on file",
     ),
 }
 

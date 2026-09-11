@@ -10,7 +10,8 @@ subscription, and a running balance would double-count money the household
 never actually spent. `transfers.py` is the writer and reader; this module
 is only the schema.
 
-    pair (counterpart fp, from label, to label)  →  L2  (references only)
+    pair (counterpart fp, from label, to label,
+          commingling flag — G8-business-books)  →  L2  (references only)
 
 The value is a mapping, not a bare rung, for the reason every other pack's
 is: `classify_schema` reads the `"rung"` key and ignores the rest, so the

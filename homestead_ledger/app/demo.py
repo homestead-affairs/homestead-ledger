@@ -213,3 +213,38 @@ def compose_recurring(today: str = TODAY) -> str:
     for charge in found:
         lines.append(f"  {charge.merchant} — {charge.cadence}, next expected {charge.next_expected}")
     return "\n".join(lines)
+
+
+# ── G8-business-books: one business account, one restricted (grant) one ────
+
+#: Synthetic instances only — `owner`/`restricted` on demo accounts, so
+#: `--demo` proves the household/business split works end to end without a
+#: real household ever holding either.
+BUSINESS_LABEL = "biz-checking"
+GRANT_LABEL = "grant-checking"
+
+
+def seed_business_accounts(store: Sidecar) -> None:
+    """Register one business-owned account and one restricted (grant)
+    account — the two new instance flags G8-business-books adds."""
+    accounts.add_account(store, BUSINESS_LABEL, kind="checking", number="5551", owner="business")
+    accounts.add_account(store, GRANT_LABEL, kind="checking", number="5552", restricted=True)
+
+
+def compose_business_books(store: Sidecar) -> str:
+    """Seed the two new instances and show what each aggregate now sees —
+    headless, through the gate: every household aggregate's default scope
+    excludes the business account; the resting cover always does."""
+    seed_business_accounts(store)
+    lines = ["business books — accounts on file:"]
+    for label in accounts.instances(store):
+        lines.append(
+            f"  {label}: owner={accounts.owner_of(store, label)} "
+            f"restricted={accounts.is_restricted(store, label)}"
+        )
+    lines.append(
+        f"household-only scope: {len(accounts.household_labels(store))} of "
+        f"{len(accounts.instances(store))} account(s) "
+        f"(--include-business widens every aggregate to all of them)"
+    )
+    return "\n".join(lines)

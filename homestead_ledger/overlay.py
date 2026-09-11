@@ -35,23 +35,54 @@ import re
 from homestead.keep.logs import Event, VisibleLog
 from homestead.keep.rungs import Classified, Disposition, Rung, Surface, serve
 
-from homestead_ledger import accounts
+from homestead_ledger import accounts, transfers
 from homestead_ledger.packs import overlay as pack
 from homestead_ledger.store import Canonical, RecordExists, Ref, Replaced, Sidecar, key
 
 __all__ = [
-    "MATTER", "FIELDS", "PROTECTED_CATEGORY_WORDS",
+    "MATTER", "FIELDS", "PROTECTED_CATEGORY_WORDS", "NOT_COMPUTED_HERE",
     "unknown_fingerprint", "ambiguous_fingerprint",
     "tag", "tags_of", "excluded_fingerprints",
+    "set_allowable_uses", "allowable_uses_of",
 ]
 
 MATTER = pack.MATTER
 FIELDS = pack.FIELDS
 PROTECTED_CATEGORY_WORDS = pack.PROTECTED_CATEGORY_WORDS
 
-#: The three fields `tags_of` reads back. `do_not_use` is deliberately not
+#: The four fields `tags_of` reads back. `do_not_use` is deliberately not
 #: among them — a caller checks it by reference (`excluded_fingerprints`).
-_TAG_FIELDS = ("category", "confirmed_merchant", "note")
+_TAG_FIELDS = ("category", "confirmed_merchant", "note", "use")
+
+#: **This ledger tracks references; it computes none of these (G8-
+#: business-books, open item 6).** A category, an allowable use, or a CLI
+#: subcommand naming one of these words is refused by name, pointing at the
+#: accountant, rather than silently accepted as a spending word this
+#: package has an opinion about. Closed and hand-reviewed, the same posture
+#: `PROTECTED_CATEGORY_WORDS` takes for its own vocabulary — checked before
+#: shape validation, so even a word the category/use shape would otherwise
+#: reject outright (`409a`, `cap-table` — neither starts with a letter or
+#: contains no hyphen at the front) is refused with this message rather
+#: than a generic shape complaint.
+NOT_COMPUTED_HERE = ("409a", "cap-table", "payroll", "tax")
+
+#: The sentence every `NOT_COMPUTED_HERE` refusal carries — CLI subcommand
+#: or `--category`/`--use` value, one string so the two doors cannot drift.
+_NOT_COMPUTED_HERE_MESSAGE = (
+    "UNCERTAIN: not computed here — confirm with your accountant"
+)
+
+
+def refuse_if_out_of_scope(value: object) -> None:
+    """Refuse `value` **by name** when it is one of `NOT_COMPUTED_HERE` —
+    checked before any shape validation, so `409a`/`cap-table` (which the
+    category/use shape would otherwise refuse for an unrelated reason) are
+    refused with the accountant message specifically. Called from both
+    `_category` and `_use` below and from `cli.py`'s own subcommand
+    refusals, so the one message cannot drift between the two doors."""
+    text = str(value).strip().lower()
+    if text in NOT_COMPUTED_HERE:
+        raise ValueError(f"{text!r} — {_NOT_COMPUTED_HERE_MESSAGE}")
 
 #: Lowercase letters, digits and hyphens, 1-40 characters, starting with a
 #: letter — the same posture every closed id in this package takes
@@ -138,11 +169,29 @@ def _resolve(canonical: Canonical, sidecar: Sidecar, fingerprint: str) -> str:
 
 def _category(value: object) -> str:
     text = str(value).strip()
+    refuse_if_out_of_scope(text)
     if not _CATEGORY.match(text):
         raise ValueError(
             "a category is a short, closed-shape word: lowercase letters, "
             "digits and hyphens, 1-40 characters, starting with a letter "
             "(groceries, medical-copay)"
+        )
+    return text
+
+
+def _use(value: object) -> str:
+    """An allowable-use word: the same closed shape a category takes,
+    validated by the same regex object (`_CATEGORY`) rather than a second
+    copy of it — an allowable use *is* a category-shaped word, one entered
+    from an award letter instead of typed at the register."""
+    text = str(value).strip()
+    refuse_if_out_of_scope(text)
+    if not _CATEGORY.match(text):
+        raise ValueError(
+            "an allowable use is a short, closed-shape word: lowercase "
+            "letters, digits and hyphens, 1-40 characters, starting with a "
+            "letter (software, contractor-fees) — from the award letter's "
+            "own terms"
         )
     return text
 
@@ -192,6 +241,7 @@ def tag(
     note: str | None = None,
     confirmed_merchant: str | None = None,
     do_not_use: bool | None = None,
+    use: str | None = None,
     replace: bool = False,
     canonical: Canonical | None = None,
 ) -> dict[str, tuple[Ref, Replaced | None]]:
@@ -210,8 +260,22 @@ def tag(
     defaults to `Canonical()`; a caller passes one only to point at another
     database.
 
-    At least one of `category`/`note`/`confirmed_merchant`/`do_not_use` must
-    be given.
+    At least one of `category`/`note`/`confirmed_merchant`/`do_not_use`/`use`
+    must be given.
+
+    **G8-business-books: `use`.** The allowable-use bucket this transaction's
+    spend maps to, validated against `label`'s own closed set
+    (`set_allowable_uses`) — `label` is read off the same fingerprint
+    resolution this call already does, never a second lookup a caller could
+    disagree with. No set on file for the account, or a word outside it, is
+    refused **by name**: the message names the field and the account label
+    (a key), and echoes neither the word refused nor the list on file —
+    both are `L3`, and I-15 keeps an L3 value out of error text however
+    ordinary the word looks. `account allowable-uses <label>` is where the
+    list is read back.
+    Unlike `do_not_use` there is no "set once" restriction here: a `use` may
+    be replaced the same way `category` can, through the ordinary
+    `RecordExists`/`--replace` gate.
 
     **Each field is its own gate, independently (I-9) — unlike
     `add_account`/`add_obligation`, whose several fields belong to *one row*
@@ -258,11 +322,34 @@ def tag(
         values["note"] = Classified(FIELDS["note"], text, pack.SCHEMA["note"]["derived"])
     if do_not_use:
         values["do_not_use"] = Classified(FIELDS["do_not_use"], "true")
+    if use is not None:
+        text = _use(use)
+        label = transfers._locate(canon, store, fp)
+        allowed = allowable_uses_of(store, label) if label is not None else frozenset()
+        if not allowed:
+            raise ValueError(
+                f"{label!r} has no allowable uses on file yet — "
+                "`account allowable-uses <label> --set a,b,c` first, from "
+                "the award letter's own terms"
+            )
+        if text not in allowed:
+            # I-15: the refusal names the field and the account (a key the
+            # operator typed), and echoes neither the word it refused nor
+            # the words on file — `allowable_uses`/`use` are both L3, and
+            # an error message is exactly where an L3 value must not
+            # appear. `account allowable-uses <label>` is the door that
+            # reads the list back, on a surface entitled to show it.
+            raise ValueError(
+                f"that use is not one of {label!r}'s allowable uses on "
+                f"file — `account allowable-uses {label}` lists what is, "
+                "and `--set` enters a word from the award letter's own terms"
+            )
+        values["use"] = Classified(FIELDS["use"], text, pack.SCHEMA["use"]["derived"])
 
     if not values:
         raise ValueError(
             "tag at least one of category, note, confirmed_merchant, "
-            "do_not_use — there is nothing to write otherwise"
+            "do_not_use, use — there is nothing to write otherwise"
         )
 
     out: dict[str, tuple[Ref, Replaced | None]] = {}
@@ -325,3 +412,65 @@ def excluded_fingerprints(store: Sidecar) -> frozenset[str]:
         item_id for (_, field, item_id), _record in store.records(MATTER)
         if field == "do_not_use"
     )
+
+
+# ── G8-business-books: allowable uses, per account label ────────────────────
+
+
+def set_allowable_uses(
+    store: Sidecar, label: str, uses: object, *, replace: bool = False,
+) -> tuple[Ref, Replaced | None]:
+    """The closed set of allowable-use words a grant account's award terms
+    permit, entered by the operator (from the award letter, never computed
+    or guessed) and keyed by the account **label** — `(overlay,
+    "allowable_uses", <label>)` — unlike every other overlay record, which
+    is keyed by a transaction fingerprint: this is a fact about the account,
+    not about one row on it.
+
+    Refuses, before writing anything: a label with no account instance on
+    file (`accounts.unknown_label`), an empty list (a closed set with
+    nothing in it validates nothing), or any word that fails `_use`'s shape
+    or is one of `NOT_COMPUTED_HERE`. Words are de-duplicated and stored
+    sorted, so the set on file never depends on the order they were typed
+    in. The occupied-key refusal is the store's, not a check's (I-9).
+    """
+    if not accounts.label_exists(store, label):
+        raise ValueError(accounts.unknown_label(label))
+    words = sorted({_use(u) for u in uses})
+    if not words:
+        raise ValueError(
+            "allowable-uses needs at least one word — a closed list from "
+            "the award letter's own terms"
+        )
+    record = Classified(FIELDS["allowable_uses"], words, pack.SCHEMA["allowable_uses"]["derived"])
+    ref = key(MATTER, "allowable_uses", label)
+    if replace:
+        replaced = store.put(MATTER, "allowable_uses", label, record, overwrite=True)
+    else:
+        try:
+            replaced = store.put(MATTER, "allowable_uses", label, record, overwrite=False)
+        except RecordExists:
+            raise RecordExists(
+                f"{MATTER}/allowable_uses/{label} already exists. A write "
+                "never silently overwrites (I-9): pass --replace (the CLI) "
+                'or "replace": true (the UI) to replace it.'
+            ) from None
+    VisibleLog().record(Event.RECORD_ADDED, ref=(MATTER, label))
+    return ref, replaced
+
+
+def allowable_uses_of(store: Sidecar, label: str) -> frozenset[str]:
+    """`label`'s allowable-use words on file, served through the gate —
+    `allowable_uses` is `L3`, so this renders on `S1_LIST` with no purpose
+    needed. Empty when nothing is on file yet: a grant account can hold
+    transactions before the operator has typed the award terms in, and an
+    empty closed set is the honest state of that gap (I-11 — not guessed,
+    not defaulted to "anything goes")."""
+    try:
+        record = store.get(MATTER, "allowable_uses", label)
+    except KeyError:
+        return frozenset()
+    served = serve(record, Surface.S1_LIST)
+    if served.disposition is Disposition.DENY or not isinstance(served.value, list):
+        return frozenset()
+    return frozenset(str(v) for v in served.value)

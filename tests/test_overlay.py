@@ -66,6 +66,8 @@ def test_the_pack_classifies_at_import_and_spans_the_declared_rungs():
         "confirmed_merchant": Rung.L3,
         "do_not_use": Rung.L2,
         "note": Rung.L4,
+        "use": Rung.L3,
+        "allowable_uses": Rung.L3,
     }
 
 
