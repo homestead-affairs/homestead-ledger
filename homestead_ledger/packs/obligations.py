@@ -24,7 +24,7 @@ Nothing about a due date raises it to L1 (it is posted nowhere public) or to
 L3/L4 (it does not itself resolve to a party or carry a money category the
 way `amount` does).
 
-**Why `cadence` also lands on L2.** "Monthly" / "quarterly" / "annual" is
+**Why `cadence` also lands on L2.** "Monthly" / "quarterly" / "yearly" is
 descriptive metadata about the household's own schedule — it carries no
 identity and no protected category by itself, the same posture `due_date`
 has. It is not `amount`'s domain (no money value) and not `name`'s (no

@@ -39,7 +39,17 @@ operator's door and blocks until Ctrl+C.
 """
 from __future__ import annotations
 
+from homestead_ledger.cadence import CADENCES
+
 __all__ = ["build_server", "serve"]
+
+#: The `<option>`s for the cadence `<select>`, generated from the one
+#: enumeration (`cadence.CADENCES`) rather than typed out here a second
+#: time — the literal this page's `<select>` used to carry (`monthly`,
+#: `weekly`, `biweekly`, `quarterly`, `annual`, `once`) named `annual` where
+#: `CADENCES` says `yearly` and had no arithmetic holding either spelling to
+#: anything; `tests/test_server.py` asserts the two stay equal structurally.
+_CADENCE_OPTIONS = "".join(f'<option value="{c}">{c}</option>' for c in CADENCES)
 
 
 # ── the page ──────────────────────────────────────────────────────────────
@@ -169,11 +179,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
     </div>
     <div class="rf">
       <input id="odue" placeholder="Due date YYYY-MM-DD" style="max-width:190px">
-      <select id="ocadence">
-        <option value="monthly">monthly</option><option value="weekly">weekly</option>
-        <option value="biweekly">biweekly</option><option value="quarterly">quarterly</option>
-        <option value="annual">annual</option><option value="once">once</option>
-      </select>
+      <select id="ocadence">__CADENCE_OPTIONS__</select>
       <label class="chk"><input type="checkbox" id="oreplace"> replace if the id exists</label>
       <button class="btn bg" onclick="storeObligation()">Add</button>
     </div>
@@ -195,6 +201,20 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
     </div>
     <div class="why">A label is the household's own short name for one real account — never a kind name, never the number itself. Kind L2 &middot; institution L3 &middot; number L5 (never shown again on any surface).</div>
     <div id="amsg"></div>
+  </div>
+
+  <h2>Mark an obligation paid</h2>
+  <div class="card">
+    <div class="rf">
+      <input id="poid" placeholder="Obligation id (rent)" style="max-width:220px">
+      <select id="paccount"></select>
+      <input id="pfp" placeholder="Transaction fingerprint" style="max-width:260px">
+      <input id="pon" placeholder="Paid on YYYY-MM-DD (default today)" style="max-width:220px">
+      <label class="chk"><input type="checkbox" id="preplace"> replace if already marked for that date</label>
+      <button class="btn bg" onclick="markPaid()">Mark paid</button>
+    </div>
+    <div class="why">Records a reference to the account and the transaction &mdash; never an amount &mdash; and rolls the due date forward by the obligation's cadence (a one-time obligation is marked resolved instead).</div>
+    <div id="pmsg"></div>
   </div>
 
   <h2>Add a transaction to the books</h2>
@@ -256,7 +276,7 @@ function show(name, btn) {
   document.querySelectorAll('.tb').forEach(function(el){el.classList.remove('on')});
   document.getElementById('t-'+name).classList.add('on');
   btn.classList.add('on');
-  if(name==='records'){loadObligations();loadTransactions();}
+  if(name==='records'){loadObligations();loadTransactions();loadAccountsForPaid();}
   if(name==='queue') loadQueue();
   if(name==='subscriptions') loadSubscriptions();
 }
@@ -294,6 +314,46 @@ function storeAccount() {
       ['alabel','anumber','ainstitution'].forEach(function(id){document.getElementById(id).value='';});
       document.getElementById('areplace').checked=false;
       loadAccounts();
+    } else {msg.innerHTML='<span class="sm s-err">'+esc(data.error||'Failed')+'</span>';}
+  }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
+}
+
+function loadAccountsForPaid() {
+  // The same source as the transaction form's select: `/api/status`, whose
+  // `accounts` is the household's own registered instances — never a list
+  // kept here (I-23: the registry, and now the instances it classifies, are
+  // the only enumeration, on this surface too). Bite G2b-account-instances
+  // turned these from the four account *kinds* into `{label, kind}` rows,
+  // so `mark_paid` is handed the same label a transaction is filed under
+  // and the two doors cannot disagree about what an account is.
+  var sel=document.getElementById('paccount');
+  fetch('/api/status').then(function(r){return r.json()}).then(function(data){
+    sel.innerHTML='';
+    (data.accounts||[]).forEach(function(a){
+      var opt=document.createElement('option');
+      opt.value=a.label; opt.textContent=a.label+' ('+a.kind+')';
+      sel.appendChild(opt);
+    });
+  }).catch(function(){});
+}
+
+function markPaid() {
+  var msg=document.getElementById('pmsg');
+  var body={id:document.getElementById('poid').value.trim(),
+    account:document.getElementById('paccount').value,
+    fingerprint:document.getElementById('pfp').value.trim(),
+    paid_on:document.getElementById('pon').value.trim(),
+    replace:document.getElementById('preplace').checked};
+  fetch('/api/obligation/paid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  .then(function(r){return r.json()}).then(function(data){
+    if(data.ok){
+      var said = data.rolled===false
+        ? 'Recorded &mdash; a later payment is already on file, so the due date stands at '+esc(data.old_due)
+        : (data.new_due?('Due date rolled to '+esc(data.new_due)):'Resolved &mdash; a one-time obligation');
+      msg.innerHTML='<span class="sm s-ok">'+said+'</span>';
+      ['poid','pfp','pon'].forEach(function(id){document.getElementById(id).value='';});
+      document.getElementById('preplace').checked=false;
+      loadObligations();
     } else {msg.innerHTML='<span class="sm s-err">'+esc(data.error||'Failed')+'</span>';}
   }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
 }
@@ -348,7 +408,7 @@ function loadAccounts() {
     loadTransactions();
   }).catch(function(){
     document.getElementById('tlist').innerHTML=
-      '<p class="sm s-err">Failed to load the account kinds</p>';
+      '<p class="sm s-err">Failed to load the account instances</p>';
   });
 }
 
@@ -359,12 +419,23 @@ function loadObligations() {
     if(!data.rows||!data.rows.length){div.innerHTML='<p class="empty">No obligations on file yet.</p>';return;}
     var html='';
     data.rows.forEach(function(o){
+      // `o.paid_on` and `o.resolved` are references (a date, a flag) — never
+      // the account or fingerprint a paid-by record also carries (I-15).
+      // The tick is gated on `paid_current`, which the server computes:
+      // "there is a payment on file" and "this period is paid" are different
+      // claims, and a row that ticks July's payment beside an August due
+      // date makes the wrong one.
+      var paid='';
+      if(o.paid_current){paid+='<span class="sm s-ok">paid &#10003; '+esc(o.paid_on)+'</span>';}
+      else if(o.paid_on){paid+='<span class="sm">last paid '+esc(o.paid_on)+'</span>';}
+      if(o.resolved){paid+='<span class="sm s-ok">resolved</span>';}
       html+='<div class="qi rw" data-oid="'+attr(o.id)+'">'
         +'<span class="rb r-'+attr(o.rung)+'">'+esc(o.rung)+'</span>'
         +'<span class="rk">'+esc(o.id)+'</span>'
         +'<span class="qs">'+esc(o.name)+'</span>'
         +'<span class="qn">due '+esc(o.due_date)+' &middot; '+esc(o.cadence)+' &middot; '+esc(o.amount)+'</span>'
         +(o.gap?'<span class="qu u-over">incomplete</span>':'')
+        +paid
         +'</div>';
     });
     div.innerHTML=html;
@@ -541,11 +612,15 @@ function loadSubscriptions() {
     div.innerHTML=html;
   }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load subscriptions</p>';});
 }
-loadAccounts();loadObligations();
+loadAccounts();loadObligations();loadAccountsForPaid();
 </script>
 </body>
 </html>
 """
+
+#: Substituted once, at import: the `<select>`'s options come from
+#: `cadence.CADENCES`, never a copy of it inline in the markup above.
+_PAGE = _PAGE.replace("__CADENCE_OPTIONS__", _CADENCE_OPTIONS)
 
 
 # ── server ────────────────────────────────────────────────────────────────
@@ -569,6 +644,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
 
     from homestead_ledger import accounts, balance, books, money, nestor_seam, obligations, registry
     from homestead_ledger.app.window import Window
+    from homestead_ledger.cadence import UnknownCadence
     from homestead_ledger.intake import extract
     from homestead_ledger.nestor_store import get_store
     from homestead_ledger.recurring import detect_recurring
@@ -721,8 +797,9 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             self._json({"rows": [
                 {"id": r.item_id, "name": r.name, "due_date": r.due_date,
                  "cadence": r.cadence, "amount": r.amount, "rung": r.rung.value,
-                 "gap": r.gap}
-                for r in obligations.rows(sidecar)
+                 "gap": r.gap, "paid_on": r.paid_on, "resolved": r.resolved,
+                 "paid_current": r.paid_current}
+                for r in obligations.rows(sidecar, today=dt.date.today().isoformat())
             ]})
 
         def _get_obligation(self, qs):
@@ -809,6 +886,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._post_obligation(body)
             if p == "/api/account":
                 return self._post_account(body)
+            if p == "/api/obligation/paid":
+                return self._post_obligation_paid(body)
             if p == "/api/transaction":
                 return self._post_transaction(body)
             self.send_error(404)
@@ -846,12 +925,14 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # and silently overwritten an obligation (I-9). An explicit act
             # needs an explicitly true value.
             replace = body.get("replace") is True
-            # Cadence is stored as the household's own word for it. It is not
-            # held against `recurring.py`'s buckets (which know weekly /
-            # monthly / quarterly / annual and no `biweekly` or `once`),
-            # because nothing yet rolls an obligation forward by its cadence —
-            # when that lands, the accepted set becomes one enumeration and
-            # this door validates against it.
+            # ~~Cadence is stored as the household's own word for it. It is
+            # not held against `recurring.py`'s buckets ... because nothing
+            # yet rolls an obligation forward by its cadence — when that
+            # lands, the accepted set becomes one enumeration and this door
+            # validates against it.~~ It lands here: `add_obligation` itself
+            # now refuses a cadence outside `cadence.CADENCES` (I-23's
+            # reasoning applied to this word), so this door validates by
+            # calling it, the same as every other refusal below.
             try:
                 ref, replaced = obligations.add_obligation(
                     sidecar,
@@ -902,6 +983,29 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # The number posts once and is never echoed back — this response
             # names the label, never the number just stored (I-13).
             self._json({"ok": True, "label": ref[2], "replaced": replaced is not None})
+
+        def _post_obligation_paid(self, body):
+            # JSON `true` and nothing else — the same I-9 reasoning
+            # `_post_obligation`'s `replace` already carries: a checkbox
+            # posted as the string `"false"` must not read as `True`.
+            replace = body.get("replace") is True
+            item_id = self._field(body, "id")
+            account = self._field(body, "account")
+            fingerprint = self._field(body, "fingerprint")
+            paid_on = self._field(body, "paid_on").strip() or dt.date.today().isoformat()
+            try:
+                _ref, rolled = obligations.mark_paid(
+                    sidecar, item_id, account=account, fingerprint=fingerprint,
+                    paid_on=paid_on, replace=replace,
+                )
+            except (ValueError, UnparseableDate, InvalidKey, RecordExists,
+                    UnknownCadence, KeyError) as exc:
+                # I-15: none of these refusals echo the fingerprint or an
+                # amount — `mark_paid` itself never names either in a
+                # message, so there is nothing here to accidentally repeat.
+                return self._json({"ok": False, "error": str(exc)}, 400)
+            self._json({"ok": True, "new_due": rolled.new_due,
+                        "old_due": rolled.old_due, "rolled": rolled.rolled})
 
         def _post_transaction(self, body):
             # Bite 2b: `account` is a registered instance's label, this

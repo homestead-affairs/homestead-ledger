@@ -3,7 +3,7 @@
 The household's own commands need only the engine:
 
   account      — add / list / show a real account instance (bite 2b)
-  obligation   — add / list / show a recurring obligation (rent, insurance…)
+  obligation   — add / list / show / paid a recurring obligation (rent, insurance…)
   transaction  — add one transaction to the books, or list the account
   queue        — what's due (obligation due dates)
   ui           — the browser UI: entry forms, intake, queue, subscriptions
@@ -27,6 +27,7 @@ import sys
 from homestead.keep import paths
 
 from homestead_ledger import nestor_seam
+from homestead_ledger.cadence import CADENCES
 from homestead_ledger.nestor_store import get_store
 
 __all__ = ["run_cli", "COMMANDS"]
@@ -111,20 +112,26 @@ def _cmd_reconcile(argv: list[str]) -> int:
     return 0
 
 
-_OBLIGATION_USAGE = """\
+_OBLIGATION_USAGE = f"""\
 usage: homestead-ledger obligation add <id> <payee> <amount> <due-date> <cadence> [--replace]
        homestead-ledger obligation list
        homestead-ledger obligation show <id>
+       homestead-ledger obligation paid <id> --account <label> --fingerprint <fp> [--on YYYY-MM-DD] [--replace]
   e.g.: homestead-ledger obligation add rent "Sunrise Properties LLC" 1450.00 2026-10-01 monthly
+        homestead-ledger obligation paid rent --account checking --fingerprint a1b2c3
+  cadence: one of {", ".join(CADENCES)}
 """
 
 
 def _cmd_obligation(argv: list[str]) -> int:
-    """obligation <add|list|show> — the household's recurring obligations."""
+    """obligation <add|list|show|paid> — the household's recurring obligations."""
+    import datetime as dt
+
     from homestead.keep.dates import UnparseableDate
     from homestead.keep.store import InvalidKey, RecordExists
 
     from homestead_ledger import obligations
+    from homestead_ledger.cadence import UnknownCadence
     from homestead_ledger.store import Sidecar
 
     args = argv[1:]
@@ -164,14 +171,68 @@ def _cmd_obligation(argv: list[str]) -> int:
         return 0
 
     if sub == "list":
-        found = obligations.rows(sidecar)
+        found = obligations.rows(sidecar, today=dt.date.today().isoformat())
         if not found:
             print("  no obligations on file — `homestead-ledger obligation add <id> <payee> <amount> <due-date> <cadence>`")
             return 0
         print(f"  {len(found)} obligation(s):")
         for row in found:
             mark = "  [incomplete — a field is not on file]" if row.gap else ""
-            print(f"  [{row.rung.value}]  {row.item_id}: {row.name}  ·  due {row.due_date}  ·  {row.cadence}  ·  {row.amount}{mark}")
+            # `row.paid_on` is a reference — the date the paid-by record is
+            # keyed under — never the account or fingerprint it also carries
+            # (I-15). The ✓ is gated on `paid_current`, not on there being a
+            # payment at all: a monthly bill paid in July and due again in
+            # August has a payment on file and an *open* period, and a row
+            # that ticks it says the household has paid when it has not.
+            # Out of period, the date still reads — as "last paid", a fact —
+            # but without the mark. `resolved` (a `once` obligation already
+            # paid) is its own flag rather than folded into `paid`, since a
+            # resolved obligation still lists here.
+            if row.paid_current:
+                paid = f"  paid ✓ {row.paid_on}"
+            elif row.paid_on:
+                paid = f"  last paid {row.paid_on}"
+            else:
+                paid = ""
+            if row.resolved:
+                paid += "  [resolved]"
+            print(f"  [{row.rung.value}]  {row.item_id}: {row.name}  ·  due {row.due_date}  ·  {row.cadence}  ·  {row.amount}{mark}{paid}")
+        return 0
+
+    if sub == "paid":
+        if not rest:
+            print(_OBLIGATION_USAGE, end="", file=sys.stderr)
+            return 2
+        item_id, rest = rest[0], rest[1:]
+        replace = "--replace" in rest
+        rest = [a for a in rest if a != "--replace"]
+        rest, account = _flag(rest, "--account")
+        rest, fingerprint = _flag(rest, "--fingerprint")
+        rest, on = _flag(rest, "--on")
+        if not account or not fingerprint:
+            print(_OBLIGATION_USAGE, end="", file=sys.stderr)
+            return 2
+        paid_on = on or dt.date.today().isoformat()
+        try:
+            paid_ref, rolled = obligations.mark_paid(
+                sidecar, item_id, account=account, fingerprint=fingerprint,
+                paid_on=paid_on, replace=replace,
+            )
+        except (ValueError, UnparseableDate, InvalidKey, RecordExists,
+                UnknownCadence, KeyError) as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        print(f"  stored: {obligations.KIND}/{paid_ref[2]}")
+        if not rolled.rolled:
+            print(
+                f"  recorded, schedule unchanged (still due {rolled.old_due}) — "
+                "a later payment is already on file, so this one closes a "
+                "period that is already closed"
+            )
+        elif rolled.new_due is not None:
+            print(f"  due date rolled forward: {rolled.old_due} -> {rolled.new_due}")
+        else:
+            print(f"  resolved — {item_id} was a one-time obligation, now paid ({rolled.old_due})")
         return 0
 
     if sub == "show":
@@ -190,7 +251,7 @@ def _cmd_obligation(argv: list[str]) -> int:
                 print(f"  [{rung}]  {field.replace('_', ' ')}: {shown}")
         return 0
 
-    print(f"unknown subcommand {sub!r} — one of: add, list, show", file=sys.stderr)
+    print(f"unknown subcommand {sub!r} — one of: add, list, show, paid", file=sys.stderr)
     return 2
 
 
@@ -483,7 +544,7 @@ def _cmd_ui(argv: list[str]) -> int:
 
 COMMANDS: dict[str, tuple] = {
     "account":     (_cmd_account,     "account <add|list|show> — real accounts"),
-    "obligation":  (_cmd_obligation,  "obligation <add|list|show> — recurring obligations"),
+    "obligation":  (_cmd_obligation,  "obligation <add|list|show|paid> — recurring obligations"),
     "transaction": (_cmd_transaction, "transaction <add|list> — the books"),
     "resolve":     (_cmd_resolve,     "resolve <surface> — merchant entity resolution"),
     "reconcile":   (_cmd_reconcile,   "reconcile <baseline> <observed> — compare amounts"),

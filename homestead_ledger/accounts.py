@@ -246,8 +246,22 @@ def kind_of(store: Sidecar, label: str) -> str:
 
 
 def label_exists(store: Sidecar, label: str) -> bool:
-    """Whether `label` has an account instance on file at all."""
-    return store.has(MATTER, "kind", label)
+    """Whether `label` has an account instance on file at all.
+
+    A direct `get`, not `has()`. Every caller uses this as a *precondition*
+    in front of a write whose own I-9 gate is the adapter's atomic insert
+    (`books.import_transaction`, `obligations.mark_paid`, both `/api` doors)
+    — and a precondition must not share its mechanism with the gate it
+    guards, so that a `has()` a racing writer (or a test poisoning the
+    lost-race answer) makes stale cannot also swallow the account lookup.
+    The same reasoning `obligations.mark_paid` states for reading its own
+    due date with `get`.
+    """
+    try:
+        store.get(MATTER, "kind", label)
+    except KeyError:
+        return False
+    return True
 
 
 @dataclass(frozen=True)

@@ -108,6 +108,56 @@ change wrote their own `account_number` record per transaction — those rows
 keep it; only the transactions imported from here on rely on the instance's
 one number instead.
 
+## Marking an obligation paid
+
+```bash
+homestead-ledger obligation paid rent --account chk-main --fingerprint a1b2c3      # today
+homestead-ledger obligation paid rent --account chk-main --fingerprint a1b2c3 --on 2026-08-07
+homestead-ledger obligation paid rent --account chk-main --fingerprint a1b2c3 --replace
+```
+
+`cadence` (`homestead_ledger/cadence.py`) is now a closed set —
+`weekly`/`biweekly`/`monthly`/`quarterly`/`yearly`/`once` — and `add_obligation`
+refuses anything outside it by name; the server's `<select>` and the CLI's own
+help text both list the set from `cadence.CADENCES`, never a copy typed a
+second time. ~~Earlier, nothing held `cadence` to anything, because nothing
+yet rolled a due date forward by it.~~
+
+`obligation paid <id> --account <label> --fingerprint <fp> [--on YYYY-MM-DD]
+[--replace]` (and the browser's *Mark an obligation paid* form) writes a
+reference — the labeled account and the transaction's fingerprint, never an
+amount — under `(obligations, "paid_by", "<id>.<paid-on>")`, then advances the
+obligation's `due_date` by its cadence (`cadence.roll_forward`, which walks
+forward from the *due* date, never from the day it was paid).
+
+**A month-end obligation keeps its day.** `add_obligation` records the first
+due date's day of month as the obligation's anchor (`(obligations,
+"due_day", "<id>")`) and every roll clamps against *that*, so rent due the
+31st paid on time each month goes 31 → Feb 28 → **Mar 31** → Apr 30 → **May
+31** instead of drifting to the 28th and staying there. The anchor is the
+day of month, not "the last day of the month": an obligation due the 30th
+stays on the 30th. An obligation written before the anchor existed has none;
+it falls back to whatever day its due date currently holds, and
+`obligation add --replace` is how to restore it.
+
+**A back-dated payment is recorded, and moves nothing.** `obligation paid
+--on <an older date>` than a payment already on file writes its `paid_by`
+record and leaves the schedule alone: a due date advances once per *period*,
+not once per receipt.
+
+A `once` obligation has no next date: it is marked `resolved` instead, and
+`queue`/`/api/queue` stop surfacing it (`obligation show` still reads it —
+nothing is deleted). A second `obligation paid` for the same id and date is
+refused (`--replace` to record it again) the same way a second `obligation
+add` under an occupied id is.
+
+`obligation list` and the Records tab mark a paid obligation `paid ✓ <date>`
+by reference — but only while that payment is an answer: once the next due
+date arrives, or if the payment on file predates the period now open, the
+row reads `last paid <date>` with no tick. A ledger may say "there is a
+payment on file" or "this period is paid"; it must never say the second
+when it means the first.
+
 An obligation is one record per field at the pack's rungs
 (`homestead_ledger/obligations.py`), under the household's own short id
 (lowercase letters, digits and hyphens — `rent`, `car-insurance`), which is

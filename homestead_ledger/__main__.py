@@ -67,6 +67,7 @@ commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
                account list · account show <label>
   obligation   obligation add <id> <payee> <amount> <due-date> <cadence> [--replace]
                obligation list · obligation show <id>
+               obligation paid <id> --account LABEL --fingerprint <fp> [--on YYYY-MM-DD] [--replace]
   transaction  transaction add <date> <amount> <description> --account LABEL
                transaction list --account LABEL [--gaps]
   queue        queue — what's due
@@ -109,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             accounts,
             balance,
             books,
+            cadence,
             cli,
             fingerprint,
             importer,
