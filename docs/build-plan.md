@@ -198,6 +198,44 @@ re-identification), I-26 (import-pure core), I-27/I-28 (cold install, bare pytes
 - **Family is never content** — the household graph is surfaced only as structure,
   never rendered as a person's record (the self-portrait's blind spot).
 
+**Promoted from provisional (ratified by the engine's E4-sync-core audit,
+2026-09-11; this module is a *tested consumer*, not the thing that ratified
+them):**
+- **I-37** — a sync is ledgered only on a confirmed act; a refused confirm
+  writes and ledgers nothing (`tests/test_sync.py`'s declined-confirm tests).
+- **I-38** — an envelope is delivered once; a repeat is refused rather than
+  re-sent (`tests/test_sync.py`'s `AlreadyDelivered` tests, both legs).
+- **I-40** — a `SyncScope` names each matter explicitly; there is no `"all"`,
+  and `homestead_ledger.sync.scope_from` holds a name against what this
+  household actually has on file before a scope is even built.
+- **I-43** — an account's bank-issued number lives in exactly one record and
+  never crosses a sync at any ceiling. This one is the ledger's own (G2b
+  wrote it; the engine's sync audit did not rule on it): what is promoted
+  here is the sync half, held by this module's structural belt, independent
+  of the engine's ceiling drop (`tests/test_sync.py`'s planted number and
+  the monkeypatched-rung-table regression).
+
+`homestead_ledger.sync` is no longer unbuilt — G5-sync (`homestead_ledger/
+sync.py`, `tests/test_sync.py`, the CLI's `sync` command, the server's Sync
+tab).
+
+**Known seam, recorded rather than papered over (G5-sync audit,
+2026-09-11).** A `transfers` `pair` record is `L2` and is served as a
+*mapping* (`counterpart`, `from`, `to`), while the fleet's `canonical`/
+`sidecar` tables give `value` a `TEXT` column — so
+`homestead.keep.fleet_cli._validate_rows` refuses such a row by name, and
+with it the whole envelope (I-11). An envelope whose scope names
+`transfers` therefore composes here, drops to a file, and is refused at
+`homestead-fleet ingest` before a row is written. That is the engine's own
+contract to settle (a text column versus a structured served value), not a
+consumer's to work around; it is pinned by
+`tests/test_sync.py::test_the_fleet_refuses_a_structured_pair_value_by_name`
+so the day it changes, this notices.
+
+**Left out of this bite (G5-sync audit):** the Sync tab has no `--types`
+control — the API takes `types` and refuses an unknown one by name, and the
+browser simply never sends the field.
+
 ---
 
 ## Related

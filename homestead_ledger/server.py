@@ -40,6 +40,7 @@ operator's door and blocks until Ctrl+C.
 from __future__ import annotations
 
 from homestead_ledger.cadence import CADENCES
+from homestead_ledger.schedules import NOTICE as _SCHEDULES_NOTICE
 
 __all__ = ["build_server", "serve"]
 
@@ -167,6 +168,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
   <button class="tb" onclick="show('entities',this)">Entities</button>
   <button class="tb" onclick="show('subscriptions',this)">Subscriptions</button>
   <button class="tb" onclick="show('budget',this)">Budget</button>
+  <button class="tb" onclick="show('sync',this)">Sync</button>
 </nav>
 <main>
 
@@ -311,6 +313,23 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
   <div id="blist"></div>
 </section>
 
+<section id="t-sync" class="tab">
+  <h2>Sync a consented scope to the fleet</h2>
+  <div class="card">
+    <div class="why">Choose exactly what leaves, by matter — there is no "all". A number never crosses (I-13), and anything tagged do-not-use never crosses either. Preview first; the Send click is the confirm.</div>
+    <div class="why" id="syncnotice">__NOTICE__</div>
+    <div id="syncmatters" class="rf"></div>
+    <div class="rf">
+      <label class="chk"><input type="checkbox" id="synctable-sidecar" checked> sidecar</label>
+      <label class="chk"><input type="checkbox" id="synctable-canonical" checked> canonical</label>
+      <select id="syncceiling"><option>L1</option><option>L2</option><option>L3</option><option selected>L4</option></select>
+      <button class="btn bg" onclick="previewSync()">Preview</button>
+    </div>
+    <div id="syncpreview"></div>
+    <div id="syncmsg"></div>
+  </div>
+</section>
+
 </main>
 <script>
 function show(name, btn) {
@@ -322,6 +341,7 @@ function show(name, btn) {
   if(name==='queue') loadQueue();
   if(name==='subscriptions') loadSubscriptions();
   if(name==='budget') loadBudget();
+  if(name==='sync') loadSyncMatters();
 }
 
 // YYYY-MM for the current calendar month — the one default this page
@@ -771,6 +791,67 @@ function loadSubscriptions() {
     div.innerHTML=html;
   }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load subscriptions</p>';});
 }
+
+var _syncEnvelopeId=null;
+function loadSyncMatters() {
+  // Checkboxes are built with textContent, never innerHTML — a matter name
+  // is a household-typed account label or word, and this tab needs no
+  // escaping to render it safely.
+  var box=document.getElementById('syncmatters');
+  fetch('/api/sync/matters').then(function(r){return r.json()}).then(function(data){
+    box.innerHTML='';
+    (data.matters||[]).forEach(function(m){
+      var lab=document.createElement('label'); lab.className='chk';
+      var cb=document.createElement('input'); cb.type='checkbox'; cb.className='syncmatter'; cb.value=m;
+      var span=document.createElement('span'); span.textContent=' '+m;
+      lab.appendChild(cb); lab.appendChild(span);
+      box.appendChild(lab);
+    });
+  }).catch(function(){box.innerHTML='';});
+}
+function previewSync() {
+  var matters=Array.prototype.slice.call(document.querySelectorAll('.syncmatter:checked'))
+    .map(function(el){return el.value});
+  var tables=[];
+  if(document.getElementById('synctable-sidecar').checked) tables.push('sidecar');
+  if(document.getElementById('synctable-canonical').checked) tables.push('canonical');
+  var ceiling=document.getElementById('syncceiling').value;
+  var msg=document.getElementById('syncmsg');
+  var out=document.getElementById('syncpreview');
+  _syncEnvelopeId=null; out.innerHTML=''; msg.textContent='';
+  fetch('/api/sync/preview',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({matters:matters,tables:tables,ceiling:ceiling})})
+  .then(function(r){return r.json().then(function(data){return {ok:r.ok,data:data};});})
+  .then(function(res){
+    if(!res.ok||res.data.ok===false){msg.textContent='refused: '+(res.data.error||'preview failed');return;}
+    _syncEnvelopeId=res.data.envelope_id;
+    var box=document.createElement('div'); box.className='dt';
+    [
+      'envelope: '+res.data.envelope_id,
+      'sidecar rows: '+res.data.counts.sidecar+'  ·  canonical rows: '+res.data.counts.canonical,
+      'ceiling: '+res.data.ceiling,
+      'pre-sync head: '+res.data.head,
+      'destination: '+res.data.destination_preview,
+    ].forEach(function(t){var d=document.createElement('div'); d.textContent=t; box.appendChild(d);});
+    var btn=document.createElement('button'); btn.className='btn bg'; btn.textContent='Send';
+    btn.onclick=sendSync;
+    box.appendChild(btn);
+    out.appendChild(box);
+  }).catch(function(){msg.textContent='Error';});
+}
+function sendSync() {
+  var msg=document.getElementById('syncmsg');
+  if(!_syncEnvelopeId){msg.textContent='preview first';return;}
+  var id=_syncEnvelopeId; _syncEnvelopeId=null;
+  fetch('/api/sync/send',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({envelope_id:id})})
+  .then(function(r){return r.json().then(function(data){return {ok:r.ok,data:data};});})
+  .then(function(res){
+    if(!res.ok||res.data.ok===false){msg.textContent='refused: '+(res.data.error||'send failed');return;}
+    msg.textContent='sent — destination: '+res.data.destination;
+    document.getElementById('syncpreview').innerHTML='';
+  }).catch(function(){msg.textContent='Error';});
+}
 loadAccounts();loadObligations();loadAccountsForPaid();
 </script>
 </body>
@@ -780,30 +861,46 @@ loadAccounts();loadObligations();loadAccountsForPaid();
 #: Substituted once, at import: the `<select>`'s options come from
 #: `cadence.CADENCES`, never a copy of it inline in the markup above.
 _PAGE = _PAGE.replace("__CADENCE_OPTIONS__", _CADENCE_OPTIONS)
+# The Sync tab shows `schedules.NOTICE` **verbatim** — substituted rather than
+# retyped, so the sentence on the page and the one the CLI prints are one
+# string (`tests/test_server.py::test_the_sync_tab_carries_the_notice_verbatim`).
+# It also keeps the literal out of this file, which
+# `tests/test_i44_no_drafting.py`'s grep guard scans: the carve-out is anchored
+# to that exact value, wherever it is assigned, and a copy here would be a
+# second place it could drift from.
+_PAGE = _PAGE.replace("__NOTICE__", _SCHEDULES_NOTICE)
 
 
 # ── server ────────────────────────────────────────────────────────────────
 
-def build_server(*, host: str = "127.0.0.1", port: int = 8385):
+def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
     """Bind the UI's ``HTTPServer`` on ``host:port`` and return it, unserved.
 
     Everything the handlers need is bound here — the household root, the
     stores, the (optional) Nestor seam — so ``serve()`` and a test share one
     construction. ``port=0`` asks the OS for a free port; read it back from
     ``server.server_address``.
+
+    ``clock`` is the monotonic clock the Sync tab's in-memory preview hold
+    reads its expiry against — defaults to ``time.monotonic``; a test passes
+    its own so a 10-minute expiry can be proven without sleeping ten minutes.
     """
     import datetime as dt
     import http.server
     import json
+    import time
     import urllib.parse
 
     from homestead.keep import paths
     from homestead.keep.dates import UnparseableDate, parse_deadline
+    from homestead.keep.egress import EgressRefused
+    from homestead.keep.logs import IntegritySealError
+    from homestead.keep.rungs import Rung
     from homestead.keep.store import InvalidKey, RecordExists
 
     from homestead_ledger import (
         accounts, balance, books, budget, money, nestor_seam, obligations, overlay,
-        registry, schedules, transfers,
+        registry, schedules, sync, transfers,
     )
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
@@ -811,6 +908,20 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     from homestead_ledger.nestor_store import get_store
     from homestead_ledger.recurring import detect_recurring
     from homestead_ledger.store import Canonical, Sidecar
+
+    _now = clock if clock is not None else time.monotonic
+    #: Held previews, keyed by `envelope_id`: the frozen `Envelope`, when the
+    #: hold expires, and the destination resolved **at preview time**. Ten
+    #: minutes, single-use — `_post_sync_send` pops the entry before
+    #: delivering, so a second call for the same id always finds it already
+    #: gone — and at most `_SYNC_PREVIEW_MAX`, oldest evicted first, so a
+    #: page left clicking Preview cannot grow this without bound. Held in
+    #: this process only: a restart drops every outstanding preview, which
+    #: is the safe direction (an unspent preview is refused by name and the
+    #: operator previews again; nothing is delivered on a restart).
+    _SYNC_PREVIEW_TTL = 600.0
+    _SYNC_PREVIEW_MAX = 8
+    _sync_previews: dict[str, tuple] = {}
 
     root = paths.home()
     root.mkdir(parents=True, exist_ok=True)
@@ -834,6 +945,17 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     #: allocate whatever it names — and this process holds the household's
     #: books. 1 MiB is far above any honest paste and far below trouble.
     max_body = 1024 * 1024
+
+    def _string_list(body, name):
+        """`body[name]` as a list of strings, or `_BadRequest` naming the
+        field (I-15). `None` when the key is absent, so an optional field
+        (`types`) can tell "not given" from "given empty"."""
+        value = body.get(name)
+        if value is None:
+            return None
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise _BadRequest(f"{name} must be a list of strings")
+        return value
 
     class _BadRequest(Exception):
         """A request refused at the door, with the status to answer it with."""
@@ -949,6 +1071,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._get_budget(qs)
             if p.path == "/api/transaction/transfers/suggest":
                 return self._get_transfer_suggestions()
+            if p.path == "/api/sync/matters":
+                return self._get_sync_matters()
             self.send_error(404)
 
         def _get_queue(self):
@@ -1110,6 +1234,12 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 for fp_out, fp_in, ambiguous in found
             ]})
 
+        def _get_sync_matters(self):
+            # The Sync tab's checkbox source — every matter `sync.scope_from`
+            # will actually accept (I-40: there is no "all"), never a list
+            # kept here a second time.
+            self._json({"matters": list(sync.known_matters(sidecar))})
+
         # ── POST ──────────────────────────────────────────────────────
 
         def do_POST(self):
@@ -1147,6 +1277,10 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._post_budget_limit(body)
             if p == "/api/transaction/transfer":
                 return self._post_transfer(body)
+            if p == "/api/sync/preview":
+                return self._post_sync_preview(body)
+            if p == "/api/sync/send":
+                return self._post_sync_send(body)
             self.send_error(404)
 
         def _field(self, body, name):
@@ -1366,6 +1500,92 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._json({"ok": False, "error": str(exc)}, 400)
             self._json({"ok": True, "fp_out": ref[2], "fp_in": fp_in,
                         "replaced": replaced is not None})
+
+        def _post_sync_preview(self, body):
+            # Composes and holds an `Envelope` — never sends, never
+            # ledgers. The response carries no row values, no amounts, no
+            # account numbers (I-15): counts, a ceiling, a head and a
+            # destination *preview* only.
+            matters = _string_list(body, "matters") or []
+            types = _string_list(body, "types")
+            tables = _string_list(body, "tables") or []
+            ceiling_raw = self._field(body, "ceiling")
+            try:
+                ceiling = Rung(ceiling_raw)
+            except ValueError:
+                return self._json({"ok": False, "error": f"unknown ceiling {ceiling_raw!r}"}, 400)
+            try:
+                scope = sync.scope_from(
+                    tuple(matters), tuple(types) if types else None, ceiling, tuple(tables),
+                    sidecar=sidecar,
+                )
+                envelope = sync.preview(scope, sidecar=sidecar, canonical=canonical)
+            except ValueError as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
+
+            counts = {"sidecar": 0, "canonical": 0}
+            for row in envelope.rows:
+                counts[row["table"]] = counts.get(row["table"], 0) + 1
+            # Resolved once, here, and held with the envelope. Resolving
+            # again at send time would let a `fleet.url` written between the
+            # two clicks turn the file drop shown below into a network POST
+            # nobody was asked about.
+            dest_url, dest_dir = sync.resolve_destination()
+            while len(_sync_previews) >= _SYNC_PREVIEW_MAX:
+                _sync_previews.pop(next(iter(_sync_previews)))
+            _sync_previews[envelope.envelope_id] = (
+                envelope, _now() + _SYNC_PREVIEW_TTL, dest_url, dest_dir,
+            )
+            self._json({
+                "envelope_id": envelope.envelope_id, "counts": counts,
+                "ceiling": scope.ceiling.value, "matters": list(scope.matters),
+                "tables": list(scope.tables), "head": envelope.head,
+                "destination_preview": (
+                    dest_url if dest_url is not None else str(dest_dir)
+                ),
+            })
+
+        def _post_sync_send(self, body):
+            # The click is the confirm (the engine's own DECISION for a
+            # per-call act): reaching this door means the operator clicked
+            # Send on the exact preview named by `envelope_id`. `pop` makes
+            # it single-use — a double-click, or a retry after a failed
+            # delivery, always finds it already gone.
+            envelope_id = self._field(body, "envelope_id")
+            entry = _sync_previews.pop(envelope_id, None)
+            if entry is None:
+                return self._json(
+                    {"ok": False, "error": "unknown or already-spent envelope_id — preview again"},
+                    404,
+                )
+            envelope, expires_at, dest_url, dest_dir = entry
+            if _now() > expires_at:
+                return self._json(
+                    {"ok": False, "error": "this preview expired — preview again"}, 404,
+                )
+            try:
+                # `lambda wire: True` would be a permission, not a confirm:
+                # it approves whatever `deliver()` happens to be carrying.
+                # The click stands for *this* envelope, so the callback holds
+                # the Wire it is shown against the envelope the operator
+                # previewed and declines anything else (I-37).
+                receipt = sync.send(
+                    envelope, url=dest_url, drop_dir=dest_dir,
+                    confirm=lambda wire: sync.wire_matches(envelope, wire),
+                )
+            except (EgressRefused, sync.AlreadyDelivered) as exc:
+                return self._json({"ok": False, "error": str(exc)}, 409)
+            except IntegritySealError as exc:
+                # A sealed ledger with no key (or without the `sealed`
+                # extra) cannot be read to say whether this envelope already
+                # went — refused by name (I-11), never a traceback, and
+                # nothing was delivered.
+                return self._json({"ok": False, "error": str(exc)}, 503)
+            self._json({
+                "ok": True, "envelope_id": receipt.envelope_id,
+                "destination": receipt.destination, "rows": receipt.rows,
+                "head": receipt.head,
+            })
 
     return http.server.HTTPServer((host, port), _H)
 
