@@ -493,13 +493,29 @@ def cover(store: Sidecar) -> dict[str, int]:
     never adds to what the cover shows, the same posture every other
     aggregate takes by default."""
     labels = household_labels(store)
-    # G5 hand-off: the engine grows `cover_counts(..., by_matter=...)` in
-    # 0.7.0 (E4-cover-distribution), where a count must also be spread over
-    # at least two matters each contributing at least one. This module does
-    # not pass it: this package's floor is `homestead-affairs>=0.3.0`
-    # (`pyproject.toml`), which has no such parameter, and a keyword the
-    # installed engine does not take is a `TypeError` at the resting cover.
-    # When the floor rises, the distribution to pass here is the per-label
-    # transaction counts — `{label: len(canonical.records(label))}` — so a
-    # single busy account cannot carry an "instances" count on its own.
+    # X7-drift correction, twice over. This comment first said the engine's
+    # `cover_counts(..., by_matter=...)` (0.7.0, E4-cover-distribution) could
+    # not be passed here because this package's floor was still 0.3.0 — true
+    # when the function was written, stale the moment G5-sync raised the
+    # floor (it is `homestead-affairs>=0.13.0` today, `pyproject.toml`,
+    # which `tests/test_docs_drift.py` holds this sentence to). The sweep's
+    # own first correction then called the wiring an open item — also wrong,
+    # and the more misleading of the two, because it implies this cover runs
+    # the roster-only gate the E4-cover audit called a leak.
+    #
+    # It does not, and cannot. That leak is a roster whose *shape* satisfies
+    # Gate 2 while the household's actual spread is `(2, 0)` — two matters
+    # on the roster, one contributing the whole count. Here the roster and
+    # the counted population are the same set: `instances` *is* `len(labels)`
+    # and every label contributes exactly one instance, so the only
+    # distribution that exists is `{label: {"instances": 1}}`, every
+    # contributor is `>= 1`, and Gate 2's contributor test is Gate 1
+    # restated. Passing `by_matter` would change no result for any household
+    # while adding a refusal surface (the engine raises on any total that
+    # disagrees) for nothing. `tests/test_cover.py` pins that equivalence
+    # rather than leaving it as a comment nobody re-derives.
+    #
+    # The seat where the `(2, 0)` shape *can* occur is `queue.cover`, whose
+    # roster is the registered obligation kinds and whose counts are spread
+    # across them; that one is wired to pass its distribution.
     return cover_counts(labels, instances=len(labels))

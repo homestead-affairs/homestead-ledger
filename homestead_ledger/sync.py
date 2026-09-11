@@ -50,17 +50,29 @@ a fact about the other account, and fail-closed is the rule when the two
 readings disagree (I-11). The counterpart's *own* rows are untouched: only
 the pair record goes.
 
-**A `pair`'s value is structured, and the fleet's `value` column is text.**
-`homestead.keep.fleet_cli._validate_rows` refuses — by name, and the *whole*
-envelope with it (I-11) — any row whose `value` is not a string, and a
-`transfers` `pair` is served as a `dict` (it is `L2`, so `Served.value` is
+~~**A `pair`'s value is structured, and the fleet's `value` column is
+text.** `homestead.keep.fleet_cli._validate_rows` refuses — by name, and the
+*whole* envelope with it (I-11) — any row whose `value` is not a string, and
+a `transfers` `pair` is served as a `dict` (it is `L2`, so `Served.value` is
 the mapping). So an envelope whose scope names `transfers` composes and
 drops to a file here and is then refused at `homestead-fleet ingest`. That
 is the engine's own contract to settle (a `TEXT` column versus a structured
 served value) and not a module's to paper over, so it is pinned by
 `tests/test_sync.py::test_the_fleet_refuses_a_structured_pair_value_by_name`
 rather than worked around: the refusal is loud, at the fleet end, before a
-single row is written, and it is the honest state of the seam today.
+single row is written, and it is the honest state of the seam today.~~
+(X7-drift correction, 2026-09-11: settled. The E7b audit kept the fleet's
+`value` column `TEXT` rather than moving to `JSONB` — a mapping now crosses
+as canonical JSON text, distinguished from a legacy plain-text row by a new
+`value_format` column (`raw` before this change, `json` after), shipped in
+engine 0.13.0. This package's own follow-up, `G7b-floor-0.13`, has landed
+with it: `pyproject.toml`'s floor is `homestead-affairs>=0.13.0`, and the
+pin above is now
+`tests/test_sync.py::test_the_fleet_accepts_a_structured_pair_value`, with
+`test_a_transfer_pair_crosses_end_to_end_as_a_structured_value` carrying a
+pair the whole way. `tests/test_docs_drift.py` holds this paragraph's floor
+to the one `pyproject.toml` declares, so a later raise cannot leave this
+sentence behind.)
 
 No `.payload` reach anywhere (I-16): every row here came out of
 `compose()`, itself built from `serve()`'s `Served.value` alone, and the

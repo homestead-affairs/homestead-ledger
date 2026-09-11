@@ -33,8 +33,32 @@ survives **both** of these, and is otherwise absent:
   the resting cover shows nothing over the real registry until a second kind
   exists — the same posture homestead-law's demo has with `custody` alone.
 
+* **k ≥ 2 *contributing* obligation kinds**, when the caller can state its
+  own spread (`by_kind`). The gate above reads the roster's *shape*; this
+  one reads the household's actual distribution, and they are not the same
+  question. Two registered kinds with a `(2, 0)` spread — both overdue bills
+  under one kind — clears the roster gate and still resolves to that one
+  kind the instant it is read. `(1, 1)` is the spread that genuinely has no
+  answer to "which one?". This is the leak homestead-law's L2c audit found
+  and E4-cover-distribution closed in the engine.
+
 **Absence, not zero.** A dropped count leaves *no key* — never a `0` in its
 place.
+
+## Why this file is now an adapter and not an implementation
+
+**X7-drift correction, 2026-09-11.** This file used to carry its own copy of
+the arithmetic, ported from homestead-law before either hardening existed.
+The engine has since fixed the copy it was ported from **twice** — the
+roster is read as a *set* (two spellings of one kind are still one kind, so
+`["obligations", "obligations"]` no longer satisfies the roster gate), and
+`by_matter` closes the `(2, 0)` leak above — and this copy inherited
+neither: a duplicated gate that drifts is worse than no duplication, which
+is the same finding this sweep recorded about the protected-category word
+list. So the arithmetic is the engine's one copy (`homestead.app.cover`,
+floored at `homestead-affairs>=0.13.0`, far past the 0.7.0 that shipped
+`by_matter`), and what stays here is the domain translation: "matter"
+becomes "obligation kind", which is the only thing this module ever added.
 
 ## I-29 — the surface calculates nothing beyond this arithmetic
 
@@ -46,16 +70,21 @@ computes no deadline (that is `homestead.keep.dates`, driven from
 """
 from __future__ import annotations
 
+#: `K` is the anonymity floor — the engine's own, re-exported rather than
+#: restated, so this module cannot come to disagree with the arithmetic it
+#: delegates to about what "at least two" means. Two is the smallest set in
+#: which "which one?" has no answer.
+from homestead.app.cover import K, cover_counts as _engine_cover_counts
+
 __all__ = ["cover_counts", "K"]
 
-#: The anonymity floor. A count survives only when at least `K` items *and*
-#: at least `K` obligation kinds stand behind it — below either, the number
-#: resolves to one obligation kind. Two is the smallest set in which "which
-#: one?" has no answer.
-K = 2
 
-
-def cover_counts(kinds: list[str], **counts: int) -> dict[str, int]:
+def cover_counts(
+    kinds: list[str],
+    *,
+    by_kind: dict[str, dict[str, int]] | None = None,
+    **counts: int,
+) -> dict[str, int]:
     """The counts the resting cover may show, and no more (I-31).
 
     `kinds` is the roster of registered obligation kinds — context for the
@@ -64,19 +93,23 @@ def cover_counts(kinds: list[str], **counts: int) -> dict[str, int]:
     that survive the re-identification check, each mapped to its real count.
     A category that does not survive is **absent** from the result.
 
-    Fails closed on a stranger, exactly as homestead-law's does: a count that
-    is not a positive integer at or above `K` is dropped rather than coerced.
-    """
-    n_kinds = len(kinds)
-    if n_kinds < K:
-        return {}
+    `by_kind` (obligation kind → category → count) is the distribution behind
+    those aggregates, for a caller that has one — `queue.cover` does. With it
+    supplied, a category survives only when at least `K` *distinct kinds*
+    each contribute at least one to it, so a `(2, 0)` spread is dropped where
+    the roster gate alone would have shown it. Omitting it (the default) is
+    byte-identical to every call this function answered before the parameter
+    existed.
 
-    shown: dict[str, int] = {}
-    for category, count in counts.items():
-        # bool is an int subclass; a boolean count is nonsense, and both True
-        # (1) and False (0) fall below K anyway.
-        if isinstance(count, bool) or not isinstance(count, int):
-            continue
-        if count >= K:
-            shown[category] = count
-    return shown
+    Fails closed on a stranger, exactly as the engine's does: a count that is
+    not a plain integer at or above `K` is dropped rather than coerced, and a
+    distribution that disagrees with its own totals is **refused** by name
+    rather than repaired (I-11) — a caller that cannot state its spread does
+    not get a softer gate than one that states none.
+
+    The arithmetic itself is `homestead.app.cover.cover_counts`; this is the
+    domain translation and nothing else (I-29). The engine's parameter is
+    called `by_matter` because its roster is matters; here the roster is
+    obligation kinds, and the name says so.
+    """
+    return _engine_cover_counts(list(kinds), by_matter=by_kind, **counts)

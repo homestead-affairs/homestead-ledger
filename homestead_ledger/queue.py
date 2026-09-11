@@ -131,21 +131,51 @@ def queue(store: Sidecar, *, today: str) -> list[QueueItem]:
     return items
 
 
-def counts(store: Sidecar, *, today: str, soon_days: int = 14) -> dict[str, int]:
-    """The raw aggregate — `overdue` and `due_soon` across all obligation
-    kinds — before re-identification. `due_soon` is a not-yet-overdue due
-    date falling within `soon_days`. Gaps count as neither; an unassessable
-    due date is surfaced in `queue()`, not folded into a number."""
-    overdue = 0
-    due_soon = 0
+#: The categories the cover counts. Named once so the aggregate and its own
+#: distribution cannot come to disagree about which keys exist — the engine
+#: refuses a distribution that names a category the aggregate does not.
+_CATEGORIES = ("overdue", "due_soon")
+
+
+def counts_by_kind(
+    store: Sidecar, *, today: str, soon_days: int = 14
+) -> dict[str, dict[str, int]]:
+    """The raw aggregate **spread over the obligation kind each item belongs
+    to** — `{kind: {"overdue": n, "due_soon": m}}`, one entry per registered
+    kind whether or not it contributes, so the roster and the distribution
+    are the same set of names.
+
+    This is the household's real distribution, and it is what makes the
+    cover's second gate mean something: `(2, 0)` across two registered kinds
+    is two bills under one kind, and a count that resolves to one kind is
+    that kind's news, not the household's (I-31)."""
+    spread = {kind: {c: 0 for c in _CATEGORIES} for kind in all_obligations()}
     for item in queue(store, today=today):
         if item.gap:
             continue
         if item.overdue:
-            overdue += 1
+            spread[item.kind]["overdue"] += 1
         elif item.days_until is not None and item.days_until <= soon_days:
-            due_soon += 1
-    return {"overdue": overdue, "due_soon": due_soon}
+            spread[item.kind]["due_soon"] += 1
+    return spread
+
+
+def counts(store: Sidecar, *, today: str, soon_days: int = 14) -> dict[str, int]:
+    """The raw aggregate — `overdue` and `due_soon` across all obligation
+    kinds — before re-identification. `due_soon` is a not-yet-overdue due
+    date falling within `soon_days`. Gaps count as neither; an unassessable
+    due date is surfaced in `queue()`, not folded into a number.
+
+    Summed from `counts_by_kind` rather than counted again alongside it: two
+    passes over the same queue is two chances to disagree, and a total that
+    disagrees with its own distribution is refused outright at the cover
+    (I-11), which would take the resting screen down over an arithmetic slip
+    nobody would otherwise see."""
+    spread = counts_by_kind(store, today=today, soon_days=soon_days)
+    return {
+        category: sum(per[category] for per in spread.values())
+        for category in _CATEGORIES
+    }
 
 
 def cover(store: Sidecar, *, today: str, soon_days: int = 14) -> dict[str, int]:
@@ -153,7 +183,20 @@ def cover(store: Sidecar, *, today: str, soon_days: int = 14) -> dict[str, int]:
     the re-identification check (I-31), so a number appears only where it
     reveals nothing about which obligation it came from. Over the single
     obligation kind bite 2 registers, this is empty, and the cover rests on
-    'Nothing is open'."""
-    return cover_counts(
-        list(all_obligations()), **counts(store, today=today, soon_days=soon_days)
-    )
+    'Nothing is open'.
+
+    **X7-drift fix.** The distribution goes with the aggregate. Without it
+    the check reads only the roster's *shape* — how many obligation kinds are
+    registered — and a second registered kind that contributes nothing was
+    enough to show a count that came entirely from the first. That is the
+    leak homestead-law's L2c audit found and the engine closed in 0.7.0
+    (`by_matter`); this module carried the pre-fix port until now. It shows
+    nothing over today's single-kind registry either way — the fix is for the
+    day a second kind is registered, which is what `all_obligations()` exists
+    to make a non-event."""
+    spread = counts_by_kind(store, today=today, soon_days=soon_days)
+    totals = {
+        category: sum(per[category] for per in spread.values())
+        for category in _CATEGORIES
+    }
+    return cover_counts(list(all_obligations()), by_kind=spread, **totals)

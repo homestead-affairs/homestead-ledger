@@ -4,6 +4,8 @@ worked cases, "matter" read as "obligation kind".
 """
 from __future__ import annotations
 
+import pytest
+
 from homestead_ledger.app.cover import K, cover_counts
 
 
@@ -73,3 +75,85 @@ def test_a_non_integer_count_fails_closed():
 
 def test_the_anonymity_floor_is_two():
     assert K == 2
+
+
+# ── the distribution gate: `(2, 0)` is one kind's news wearing a number ─────
+#
+# X7-drift audit, 2026-09-11. This module's `cover_counts` was a copy of
+# homestead-law's, taken before the L2c audit found that the second gate read
+# the roster's *shape* rather than the household's spread. The engine closed
+# it in 0.7.0 (`by_matter`); the copy here never did, and the copy is what the
+# ledger's two covers call. It is now an adapter over the engine's one copy,
+# and these are the cases that say so.
+
+
+def test_a_two_zero_spread_across_two_kinds_is_dropped():
+    """Two overdue bills, both under one of two registered kinds. The roster
+    gate passes (two kinds exist) and the count gate passes (two items), and
+    the number still resolves to `obligations` the instant it is read."""
+    counts = cover_counts(
+        kinds=["obligations", "subscriptions"],
+        by_kind={"obligations": {"overdue": 2}, "subscriptions": {"overdue": 0}},
+        overdue=2,
+    )
+    assert counts == {}
+
+
+def test_a_one_one_spread_across_two_kinds_survives():
+    """The same aggregate, genuinely spread: one bill under each kind. Now
+    "2 overdue" has no answer to "which one?", which is the whole test."""
+    counts = cover_counts(
+        kinds=["obligations", "subscriptions"],
+        by_kind={"obligations": {"overdue": 1}, "subscriptions": {"overdue": 1}},
+        overdue=2,
+    )
+    assert counts == {"overdue": 2}
+
+
+def test_the_distribution_gates_each_category_on_its_own():
+    """One category concentrated, one spread, in a single call — the
+    concentrated one is dropped and the spread one survives, so a passing
+    category cannot carry a failing one through beside it."""
+    counts = cover_counts(
+        kinds=["obligations", "subscriptions"],
+        by_kind={
+            "obligations": {"overdue": 3, "due_soon": 2},
+            "subscriptions": {"overdue": 0, "due_soon": 2},
+        },
+        overdue=3,
+        due_soon=4,
+    )
+    assert counts == {"due_soon": 4}
+
+
+def test_omitting_the_distribution_is_the_old_answer_exactly():
+    """`by_kind=None` is byte-identical to every call made before the
+    parameter existed — the tightening is opt-in, so no existing caller's
+    cover changed under it."""
+    for kinds, counts in (
+        (["obligations", "subscriptions"], {"overdue": 2}),
+        (["obligations"], {"overdue": 5, "due_soon": 9}),
+        (["a", "b", "c"], {"due_soon": 4, "overdue": 1}),
+    ):
+        assert cover_counts(kinds=kinds, **counts) == cover_counts(
+            kinds=kinds, by_kind=None, **counts
+        )
+
+
+def test_a_distribution_that_disagrees_with_its_total_is_refused_by_name():
+    """I-11: a caller that cannot state its own spread is refused, never
+    given the softer gate. The refusal names the category and no count."""
+    with pytest.raises(ValueError) as raised:
+        cover_counts(
+            kinds=["obligations", "subscriptions"],
+            by_kind={"obligations": {"overdue": 1}, "subscriptions": {"overdue": 1}},
+            overdue=7,
+        )
+    assert "overdue" in str(raised.value)
+
+
+def test_the_roster_is_read_as_a_set_not_a_list():
+    """The engine's other hardening this copy had drifted past: two spellings
+    of one kind are still one kind, so a duplicated roster entry must not
+    satisfy the roster gate."""
+    assert cover_counts(kinds=["obligations", "obligations"], overdue=5) == {}

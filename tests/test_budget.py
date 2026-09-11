@@ -594,6 +594,34 @@ def test_whitespace_around_a_category_month_and_amount_is_stripped(store):
 
 # ── one category validator, not two ───────────────────────────────────────
 
+#: The character class `overlay._CATEGORY_RE` is spelled with. A second copy
+#: of it anywhere else is a rule that can drift from the one that is enforced,
+#: which is the same finding this sweep recorded about the protected-category
+#: word list — one copy, re-exported, never restated.
+_CATEGORY_SHAPE = "a-z0-9-"
+
+
+def _holds_a_second_category_shape(module: Path) -> bool:
+    """True if `module`'s source spells the category character class itself
+    rather than calling `overlay._category`."""
+    return _CATEGORY_SHAPE in module.read_text("utf-8")
+
+
+def test_the_second_copy_guard_fires_on_a_planted_regex(tmp_path):
+    """A scan that has never fired has not been shown to check anything. The
+    guard above reads `budget.py` and finds nothing, which is what a guard
+    reading the wrong path would also find. Planted: a module that does spell
+    the class out, in the shape a hand-rolled copy would take."""
+    planted = tmp_path / "budget.py"
+    planted.write_text(
+        (PKG / "budget.py").read_text("utf-8")
+        + '\n\n_PLANTED_CATEGORY_RE = re.compile(r"^[a-z0-9-]{1,40}$")\n',
+        encoding="utf-8",
+    )
+    assert _holds_a_second_category_shape(planted), "the plant did not apply"
+    assert not _holds_a_second_category_shape(PKG / "budget.py")
+
+
 @pytest.mark.parametrize("candidate", [
     "groceries", "medical-copay", "a", "a" * 40, "a" * 41, "Groceries", "9lives",
     "with space", "", "  ", "dash-", "-dash", "under_score", "a.b",
@@ -609,8 +637,9 @@ def test_the_category_rule_is_overlays_own_not_a_second_copy(candidate):
             return "refused"
 
     assert result(budget._category) == result(overlay._category)
-    source = (PKG / "budget.py").read_text("utf-8")
-    assert "a-z0-9-" not in source, "budget.py carries a second copy of the category shape"
+    assert not _holds_a_second_category_shape(PKG / "budget.py"), (
+        "budget.py carries a second copy of the category shape"
+    )
 
 
 # ── I-23: the discovery attribute is what keeps this pack out (planted) ────
