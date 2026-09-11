@@ -46,13 +46,28 @@ from homestead_ledger.packs import accounts as pack
 from homestead_ledger.store import InvalidKey, RecordExists, Ref, Replaced, Sidecar, key
 
 __all__ = [
-    "MATTER", "FIELDS", "MISSING", "SEALED", "AccountRow",
+    "MATTER", "FIELDS", "MISSING", "SEALED", "OWNERS", "AccountRow",
     "add_account", "instances", "kind_of", "label_exists", "unknown_label",
     "rows", "detail", "cover",
+    "set_owner", "set_restricted", "owner_of", "is_restricted",
+    "household_labels", "business_labels",
 ]
 
 MATTER = pack.MATTER
 FIELDS = pack.FIELDS
+
+#: The closed set `owner` is held to (G8-business-books) — a household that
+#: also runs a business holds some accounts on its behalf. Not a registry
+#: entry (I-23 governs account *kinds*, a different enumeration): this is
+#: two fixed words, the same closed-set posture `cadence.CADENCES` and
+#: `packs/overlay.py`'s `PROTECTED_CATEGORY_WORDS` already take for a
+#: hand-reviewed vocabulary that is not itself discovered from a pack.
+OWNERS = ("household", "business")
+
+#: The pin: an instance with no `owner` record on file is the household's
+#: own. Never a guess about a business — an absence here is a decision this
+#: bite states once, not defaulted silently at every read site.
+_DEFAULT_OWNER = "household"
 
 #: The stand-in text for the L3/L4 fields — the same convention
 #: `obligations.py`'s `DERIVED` uses. Every string here names that a fact is
@@ -79,7 +94,7 @@ SEALED = "(sealed)"
 #: `obligations.py` gives `due_date` and `books.py` gives `date`.
 _ORDER = (
     "kind", "number", "institution", "opened", "balance_as_of", "rate",
-    "limit", "payment_due_day", "min_payment",
+    "limit", "payment_due_day", "min_payment", "owner", "restricted",
 )
 
 #: The closed id shape every matter instance in this build uses (the plan's
@@ -148,6 +163,13 @@ def _payment_due_day(value: object) -> str:
     return str(int(text))
 
 
+def _owner(value: object) -> str:
+    text = str(value).strip().lower()
+    if text not in OWNERS:
+        raise ValueError(f"owner is one of {OWNERS} — {text!r} is neither")
+    return text
+
+
 def add_account(
     store: Sidecar,
     label: str,
@@ -161,6 +183,8 @@ def add_account(
     limit: object | None = None,
     payment_due_day: object | None = None,
     min_payment: object | None = None,
+    owner: str | None = None,
+    restricted: bool | None = None,
     replace: bool = False,
 ) -> tuple[Ref, Replaced | None]:
     """Register one real account under `label`. Returns its `kind` field's
@@ -172,6 +196,13 @@ def add_account(
     writing anything — a bad or kind-colliding label, an unregistered kind,
     a missing number, an unparseable `opened` date, a non-finite money field,
     or a `payment_due_day` outside 1-31.
+
+    **G8-business-books.** `owner` is one of `OWNERS` (`household`,
+    `business`) — left out, an instance is the household's own (`owner_of`'s
+    default). `restricted` marks a grant account whose spend must map to a
+    closed list of allowable uses (`overlay.set_allowable_uses`); like
+    `do_not_use`, it is written only when true — there is no un-set path
+    here, so a caller that means "not restricted" leaves it out.
 
     **The occupied-label refusal is the store's, not a check's (I-9)**,
     exactly as `obligations.add_obligation` documents for its own id: `kind`
@@ -216,6 +247,10 @@ def add_account(
         values["payment_due_day"] = _payment_due_day(payment_due_day)
     if min_payment is not None:
         values["min_payment"] = money.amount_text(min_payment, field="min_payment")
+    if owner is not None:
+        values["owner"] = _owner(owner)
+    if restricted:
+        values["restricted"] = "true"
 
     ref = key(MATTER, "kind", ident)
     order = [field for field in _ORDER if field in values]
@@ -288,6 +323,106 @@ def label_exists(store: Sidecar, label: str) -> bool:
     return True
 
 
+def set_owner(
+    store: Sidecar, label: str, owner: str, *, replace: bool = False,
+) -> tuple[Ref, Replaced | None]:
+    """Declare `label`'s owner — `household` or `business` — after the fact
+    (`add_account` already takes `owner` at creation). Refuses a label with
+    no instance on file (`unknown_label`) and an owner outside `OWNERS`,
+    before writing anything. The occupied-key refusal is the store's, not a
+    check's (I-9), the same posture every field here already takes."""
+    if not label_exists(store, label):
+        raise ValueError(unknown_label(label))
+    value = _owner(owner)
+    record = Classified(FIELDS["owner"], value)
+    ref = key(MATTER, "owner", label)
+    if replace:
+        replaced = store.put(MATTER, "owner", label, record, overwrite=True)
+    else:
+        try:
+            replaced = store.put(MATTER, "owner", label, record, overwrite=False)
+        except RecordExists:
+            raise RecordExists(
+                f"{MATTER}/owner/{label} already exists. A write never "
+                "silently overwrites (I-9): pass --replace (the CLI) or "
+                '"replace": true (the UI) to replace it.'
+            ) from None
+    return ref, replaced
+
+
+def set_restricted(
+    store: Sidecar, label: str, flag: bool = True, *, replace: bool = False,
+) -> tuple[Ref, Replaced | None]:
+    """Mark `label` a restricted (grant) account. Like `overlay.tag`'s
+    `do_not_use`, this is set here, never cleared — `flag=False` is refused
+    rather than silently writing nothing, the same posture `overlay.tag`
+    documents for its own flag."""
+    if not label_exists(store, label):
+        raise ValueError(unknown_label(label))
+    if not flag:
+        raise ValueError(
+            "restricted is set here, never cleared: there is no un-restrict "
+            "path yet, so passing it as false would silently do nothing. "
+            "Leave it out instead."
+        )
+    record = Classified(FIELDS["restricted"], "true")
+    ref = key(MATTER, "restricted", label)
+    if replace:
+        replaced = store.put(MATTER, "restricted", label, record, overwrite=True)
+    else:
+        try:
+            replaced = store.put(MATTER, "restricted", label, record, overwrite=False)
+        except RecordExists:
+            raise RecordExists(
+                f"{MATTER}/restricted/{label} already exists. A write never "
+                "silently overwrites (I-9): pass --replace (the CLI) or "
+                '"replace": true (the UI) to replace it.'
+            ) from None
+    return ref, replaced
+
+
+def owner_of(store: Sidecar, label: str) -> str:
+    """`label`'s owner — `household` or `business` — served through the
+    gate. Absence is not a gap here: the pin is that an instance with no
+    record is the household's own (`_DEFAULT_OWNER`), decided once rather
+    than guessed at every call site that would otherwise need to remember
+    the default. `owner` is `L2`, so this never denies on `S1_LIST`."""
+    try:
+        record = store.get(MATTER, "owner", label)
+    except KeyError:
+        return _DEFAULT_OWNER
+    served = serve(record, Surface.S1_LIST)
+    if served.disposition is Disposition.DENY:
+        return _DEFAULT_OWNER  # defensive only; owner never denies as declared
+    return str(served.value)
+
+
+def is_restricted(store: Sidecar, label: str) -> bool:
+    """Whether `label` is a restricted (grant) account. Absence is `False`
+    — an account nobody has ever marked restricted is not one, the same
+    "absence is a decision, not a gap" posture `owner_of` takes."""
+    try:
+        record = store.get(MATTER, "restricted", label)
+    except KeyError:
+        return False
+    served = serve(record, Surface.S1_LIST)
+    return served.disposition is not Disposition.DENY and served.value == "true"
+
+
+def household_labels(store: Sidecar) -> list[str]:
+    """Every account instance owned by the household — the default scope
+    every aggregate (`budget.envelopes`, `schedules.debts`, the resting
+    cover, the recurring pass) reads unless `--include-business` widens
+    it."""
+    return [label for label in instances(store) if owner_of(store, label) == "household"]
+
+
+def business_labels(store: Sidecar) -> list[str]:
+    """Every account instance owned by the business — the labels
+    `--include-business` adds back into an aggregate's scope."""
+    return [label for label in instances(store) if owner_of(store, label) == "business"]
+
+
 @dataclass(frozen=True)
 class AccountRow:
     """One account instance as the list pane shows it: its label, the kind
@@ -350,8 +485,14 @@ def cover(store: Sidecar) -> dict[str, int]:
     """The counts the resting cover may show about the household's account
     instances (I-31): with fewer than two instances on file, absence, not
     zero — a count over a single account resolves to that one account the
-    instant it is read."""
-    labels = instances(store)
+    instant it is read.
+
+    **G8-business-books: household instances only, always.** The resting
+    cover takes no `--include-business` flag — there is nobody to ask it
+    of, on a screen with nobody's hand on it (I-21) — so a business account
+    never adds to what the cover shows, the same posture every other
+    aggregate takes by default."""
+    labels = household_labels(store)
     # G5 hand-off: the engine grows `cover_counts(..., by_matter=...)` in
     # 0.7.0 (E4-cover-distribution), where a count must also be spread over
     # at least two matters each contributing at least one. This module does

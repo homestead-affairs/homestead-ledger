@@ -226,10 +226,22 @@ class Gaps:
     outflows are still waiting on a category, `undated` how many rows carry
     a date no calendar can read (`transaction list --gaps` is where a
     household goes to find them). A count is the one thing a surface may
-    show about a row it cannot otherwise name."""
+    show about a row it cannot otherwise name.
+
+    **G8-business-books.** `needs_use` is how many outflows on a
+    *restricted* account this month have no allowable-use tag on file yet —
+    grant money arrives before the operator has typed the award terms in,
+    so this is a gap, never a refusal (the same posture `uncategorised`
+    already takes for an ordinary category). `commingling` is the count of
+    live transfer pairs on file that cross the household/business line, at
+    any time — not scoped to `month`, since a pairing carries no month of
+    its own to filter by; it rides alongside the month's envelopes rather
+    than joining them."""
 
     uncategorised: int = 0
     undated: int = 0
+    needs_use: int = 0
+    commingling: int = 0
 
 
 def state_text(envelope: Envelope) -> str:
@@ -244,7 +256,7 @@ def state_text(envelope: Envelope) -> str:
 
 
 def envelopes(
-    canonical: Canonical, store: Sidecar, month: str,
+    canonical: Canonical, store: Sidecar, month: str, *, include_business: bool = False,
 ) -> tuple[list[Envelope], Gaps]:
     """Every category's spend-versus-limit state for `month`, and the
     `Gaps` the month could not place — by count only, never folded into a
@@ -275,6 +287,15 @@ def envelopes(
     (`Served.value`, never `.payload`), purely to decide `over` — the
     number itself never leaves this function. Nothing here writes to
     `store`.
+
+    **G8-business-books.** `include_business=False` (the default) scopes
+    every account this reads to `accounts.household_labels` — a business
+    account's spend never joins a household envelope unless the caller
+    passes `include_business=True`. Independently of that scope, a
+    *restricted* account's outflow with no `use` tag on file counts toward
+    `Gaps.needs_use` rather than joining any envelope — spend on a grant
+    account is not "uncategorised" in the ordinary sense; it is waiting on
+    the award terms, not on the household's own choice of category.
     """
     mon = _month(month)
     # G4-transfers landed a sibling exclusion for the same reason
@@ -288,7 +309,10 @@ def envelopes(
     spending_categories: set[str] = set()
     uncategorised = 0
     undated = 0
-    for label in accounts.instances(store):
+    needs_use = 0
+    labels = accounts.instances(store) if include_business else accounts.household_labels(store)
+    for label in labels:
+        restricted = accounts.is_restricted(store, label)
         for item_id, txn_date, amount, _description in dated_transactions(canonical, label):
             if item_id in excluded:
                 continue
@@ -298,7 +322,12 @@ def envelopes(
                 continue
             if text[:7] != mon:
                 continue
-            category = overlay.tags_of(store, item_id, surface=Surface.S1_DETAIL).get("category")
+            tags = overlay.tags_of(store, item_id, surface=Surface.S1_DETAIL)
+            if restricted and amount < 0 and tags.get("use") is None:
+                # Grant money arrives before the operator has typed the
+                # award terms — a gap, never a refusal (G8-business-books).
+                needs_use += 1
+            category = tags.get("category")
             if category is None:
                 if amount < 0:
                     uncategorised += 1   # an untagged inflow is not a gap in spending
@@ -329,4 +358,8 @@ def envelopes(
             limit_state=LIMIT_SET if limit is not None else NO_LIMIT,
             over=spent is not None and limit is not None and spent > limit,
         ))
-    return out, Gaps(uncategorised=uncategorised, undated=undated)
+    commingling = transfers.commingling_count(store)
+    return out, Gaps(
+        uncategorised=uncategorised, undated=undated,
+        needs_use=needs_use, commingling=commingling,
+    )

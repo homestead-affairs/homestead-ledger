@@ -18,7 +18,17 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from homestead_ledger.schedules import NOTICE
+from homestead_ledger.grant_report import GRANT_REPORT_NOTICE
+from homestead_ledger.schedules import BUSINESS_NOTICE, NOTICE
+
+#: The carve-out's whole exemption: every constant this package legitimately
+#: assigns to a variable named `NOTICE` and quotes in the README. Extended
+#: twice since the guard was written (G8-business-books) — `BUSINESS_NOTICE`
+#: (`schedules.py`, a second `NOTICE`-shaped sentence) and
+#: `GRANT_REPORT_NOTICE` (`grant_report.py`, `schedules.NOTICE` plus one more
+#: sentence) — anchored to these exact values, never to the name `NOTICE`
+#: itself (see `_without_the_notice`).
+PERMITTED_NOTICES = (NOTICE, BUSINESS_NOTICE, GRANT_REPORT_NOTICE)
 
 PKG = Path(__file__).resolve().parent.parent / "homestead_ledger"
 README = PKG.parent / "README.md"
@@ -124,25 +134,27 @@ FORBIDDEN_PHRASES = (
 
 
 def _without_the_notice(text: str) -> str:
-    """`text` with `schedules.NOTICE`'s one permitted "official form"
-    removed — the single named exception, the same shape
-    `test_invariants_chokepoint.py`'s `ALLOWED_PAYLOAD` takes for the
-    payload boundary.
+    """`text` with every `PERMITTED_NOTICES` sentence's one permitted
+    "official form" removed — three named exceptions now (G8-business-books
+    added two), the same shape `test_invariants_chokepoint.py`'s
+    `ALLOWED_PAYLOAD` takes for the payload boundary.
 
-    Two removal passes: the README quotes the notice verbatim, one
-    contiguous run a plain `.replace(NOTICE, "")` finds directly; in
+    Two removal passes per sentence: the README quotes a notice verbatim,
+    one contiguous run a plain `.replace(notice, "")` finds directly; in
     `schedules.py` the string literal is written as several concatenated
-    pieces across several lines, so it never appears as one contiguous
-    run in the *source* text — for that shape this blanks the source
-    lines of the `NOTICE = (...)` assignment instead, by line number,
-    before the plain replace runs.
+    pieces across several lines, so it never appears as one contiguous run
+    in the *source* text — for that shape this blanks the source lines of
+    a `NOTICE = (...)` assignment instead, by line number, before the plain
+    replace runs. `GRANT_REPORT_NOTICE` composes `schedules.NOTICE` by
+    reference (`f"{NOTICE} ..."`) rather than repeating its text, so its
+    *source* never contains the literal phrase at all — nothing for either
+    pass to find there, and nothing that needs finding.
 
     **The carve-out is anchored to the sentence, not to the name.** An
-    assignment is blanked only when its literal value is *exactly*
-    `schedules.NOTICE`. Blanking every constant called `NOTICE` would hand
-    any future module — G8's business-books export is already planned to
-    carry a notice of its own — a name that turns the scan off for whatever
-    it says.
+    assignment named `NOTICE` is blanked only when its literal value is
+    *exactly* one of `PERMITTED_NOTICES`. Blanking every constant called
+    `NOTICE` would hand any future module a name that turns the scan off
+    for whatever it says.
     """
     out = text
     try:
@@ -160,12 +172,14 @@ def _without_the_notice(text: str) -> str:
                 value = ast.literal_eval(node.value)
             except (ValueError, SyntaxError, TypeError):
                 continue
-            if value != NOTICE:
+            if value not in PERMITTED_NOTICES:
                 continue
             for i in range(node.lineno - 1, node.end_lineno):
                 lines[i] = "\n"
         out = "".join(lines)
-    return out.replace(NOTICE, "")
+    for notice in PERMITTED_NOTICES:
+        out = out.replace(notice, "")
+    return out
 
 
 def _phrase_hits(text: str) -> list[str]:
@@ -212,15 +226,37 @@ def test_i44_grep_guard_fires_on_each_planted_phrase(tmp_path):
         assert _phrase_hits(planted.read_text()), f"the guard missed {phrase!r}"
 
 
-def test_i44_grep_guard_fires_on_a_forbidden_phrase_hidden_in_a_notice(tmp_path):
-    """The carve-out quotes one sentence; it does not exempt a *name*.
+def test_i44_notice_carve_out_now_spans_three_named_constants():
+    """G8-business-books extended the exemption twice — pinned so a future
+    trim back to one constant is a visible, deliberate change, not a quiet
+    narrowing nobody meant."""
+    assert len(PERMITTED_NOTICES) == 3
+    assert len(set(PERMITTED_NOTICES)) == 3  # each sentence is distinct
+
+
+def test_i44_business_notice_and_grant_report_notice_strip_cleanly():
+    """The two G8 additions are exempted the same way `schedules.NOTICE`
+    already is: present in the raw text, absent once stripped."""
+    for notice in (BUSINESS_NOTICE, GRANT_REPORT_NOTICE):
+        assert notice in f"see: {notice}"
+        assert notice not in _without_the_notice(f"see: {notice}")
+    # GRANT_REPORT_NOTICE embeds schedules.NOTICE's own "official form"
+    # phrase by value (even though grant_report.py's *source* never repeats
+    # it — see `_without_the_notice`'s docstring) — quoted verbatim
+    # anywhere (a README, say), it must still strip cleanly.
+    assert "official form" in GRANT_REPORT_NOTICE
+    assert "official form" not in _without_the_notice(GRANT_REPORT_NOTICE)
+
+
+def test_i44_grep_guard_fires_on_a_third_notice_constant_not_in_the_tuple(tmp_path):
+    """The carve-out quotes three sentences; it does not exempt a *name*.
 
     Before this was anchored, any `NOTICE = …` assignment in the package had
     its whole source span blanked before the scan ran, so a module could
     carry court-filing language inside a constant with that name and the
-    guard would never see it — and a second module with a notice of its own
-    is already planned (G8's business-books export). Planted here so the
-    anchoring is shown to hold rather than asserted."""
+    guard would never see it. A fourth `NOTICE`-named constant — one this
+    bite did not add to `PERMITTED_NOTICES` — must still fire, or the
+    carve-out has quietly become "any constant named NOTICE" again."""
     planted = tmp_path / "leak_notice.py"
     planted.write_text(
         'NOTICE = (\n'

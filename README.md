@@ -330,6 +330,22 @@ tracks what a household owes and nothing about a bankruptcy case, a
 claim, or a filing (provisional I-44: no drafting, no filing, no official
 form language anywhere in this package — `tests/test_i44_no_drafting.py`).
 
+## Business books
+
+A household that also runs a business can mark an account instance
+`business`-owned or `restricted`; every aggregate — budget envelopes, the
+recurring pass, the liability schedule, the resting cover — counts the
+household's own accounts only, unless `--include-business` widens the
+scope. A restricted (grant) account's spend is tagged against a closed list
+of allowable uses entered from the award letter, and `grant report <label>
+--period YYYY-MM..YYYY-MM` totals spend by that use, with any outflow still
+missing one counted as a gap rather than turned away. A transfer whose two
+legs cross the household/business line is marked `commingling` and listed
+by reference, never refused, so a founder covering a business cost
+personally still shows up on the books. This package tracks none of
+payroll, tax, 409A elections, or cap-table math — each is refused by name,
+pointing at the accountant.
+
 ## Sync
 
 `homestead-ledger sync --matters chk-main,obligations --ceiling L3` (and the

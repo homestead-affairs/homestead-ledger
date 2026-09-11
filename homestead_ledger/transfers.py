@@ -51,7 +51,7 @@ from homestead_ledger.store import Canonical, RecordExists, Ref, Replaced, Sidec
 __all__ = [
     "MATTER", "FIELDS", "WINDOW_DAYS", "Suggestion",
     "pair", "suggest", "paired_fingerprints", "counterpart_of", "other_label",
-    "exclude_from",
+    "exclude_from", "is_commingled", "commingling_count",
 ]
 
 MATTER = pack.MATTER
@@ -204,7 +204,15 @@ def pair(
                 'or "replace": true (the UI) to replace it.'
             )
 
-    record = Classified(Rung.L2, {"counterpart": in_fp, "from": label_out, "to": label_in})
+    # G8-business-books: a transfer whose two legs sit on accounts with
+    # different owners crosses the household/business line — visible by
+    # reference (I-15: never an amount), never refused, so a founder who
+    # does pay a business expense personally still shows up on the books.
+    commingling = accounts.owner_of(store, label_out) != accounts.owner_of(store, label_in)
+    record = Classified(
+        Rung.L2,
+        {"counterpart": in_fp, "from": label_out, "to": label_in, "commingling": commingling},
+    )
     ref = key(MATTER, _PAIR, out_fp)
     replaced: Replaced | None = None
     if replace:
@@ -320,6 +328,28 @@ def other_label(store: Sidecar, fp: str) -> str | None:
             from_label = value.get("from")
             return from_label if isinstance(from_label, str) else None
     return None
+
+
+def is_commingled(store: Sidecar, fp: str) -> bool:
+    """Whether `fp`'s pair — from either side — crosses the household/
+    business line (G8-business-books). `False` for an unpaired fingerprint,
+    the same "absence is a decision, not a gap" posture `counterpart_of`
+    already takes."""
+    pairs = _pairs(store)
+    value = pairs.get(fp)
+    if value is not None:
+        return bool(value.get("commingling"))
+    for value in pairs.values():
+        if value.get("counterpart") == fp:
+            return bool(value.get("commingling"))
+    return False
+
+
+def commingling_count(store: Sidecar) -> int:
+    """How many live pairs cross the household/business line — a count only
+    (I-15/I-8: never which pair, never an amount), what `budget show`/
+    `/api/budget` carry as `commingling: N`."""
+    return sum(1 for value in _pairs(store).values() if value.get("commingling"))
 
 
 def suggest(store: Sidecar, *, window_days: int = WINDOW_DAYS) -> list[Suggestion]:

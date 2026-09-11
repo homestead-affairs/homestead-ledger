@@ -289,22 +289,34 @@ usage: homestead-ledger account add <label> --kind KIND --number NUMBER
                                      [--institution NAME] [--opened DATE]
                                      [--balance-as-of AMOUNT] [--rate PCT]
                                      [--limit AMOUNT] [--payment-due-day DAY]
-                                     [--min-payment AMOUNT] [--replace]
+                                     [--min-payment AMOUNT]
+                                     [--owner household|business] [--restricted]
+                                     [--replace]
        homestead-ledger account list
        homestead-ledger account show <label>
+       homestead-ledger account set-owner <label> household|business
+       homestead-ledger account allowable-uses <label> --set a,b,c [--replace]
   e.g.: homestead-ledger account add chk-main --kind checking --number 9821
+        homestead-ledger account add grant-main --kind checking --number 5551 --restricted
   <label> is the household's own short name for one real account — never a
   registered kind name (checking, savings, credit_card, loan) and never the
   bank-issued number itself.
+  --owner defaults to household; an instance with no owner on file is the
+  household's own. --restricted marks a grant account whose spend must map
+  to a closed list of allowable uses — set once here, never cleared.
+  allowable-uses enters that closed list from the award letter's own terms;
+  `transaction tag --use <name>` then validates against it.
 """
 
 
 def _cmd_account(argv: list[str]) -> int:
-    """account <add|list|show> — the household's real accounts (bite 2b)."""
+    """account <add|list|show|set-owner|allowable-uses> — the household's
+    real accounts (bite 2b), plus who owns each and what it may spend on
+    (G8-business-books)."""
     from homestead.keep.dates import UnparseableDate
     from homestead.keep.store import InvalidKey, RecordExists
 
-    from homestead_ledger import accounts
+    from homestead_ledger import accounts, overlay
     from homestead_ledger.store import Sidecar
 
     args = argv[1:]
@@ -317,7 +329,8 @@ def _cmd_account(argv: list[str]) -> int:
 
     if sub == "add":
         replace = "--replace" in rest
-        rest = [a for a in rest if a != "--replace"]
+        restricted = "--restricted" in rest
+        rest = [a for a in rest if a not in ("--replace", "--restricted")]
         rest, kind = _flag(rest, "--kind")
         rest, number = _flag(rest, "--number")
         rest, institution = _flag(rest, "--institution")
@@ -327,6 +340,7 @@ def _cmd_account(argv: list[str]) -> int:
         rest, limit = _flag(rest, "--limit")
         rest, payment_due_day = _flag(rest, "--payment-due-day")
         rest, min_payment = _flag(rest, "--min-payment")
+        rest, owner = _flag(rest, "--owner")
         if not rest or kind is None or number is None:
             print(_ACCOUNT_USAGE, end="", file=sys.stderr)
             return 2
@@ -334,7 +348,8 @@ def _cmd_account(argv: list[str]) -> int:
             ref, replaced = accounts.add_account(
                 sidecar, rest[0], kind=kind, number=number, institution=institution,
                 opened=opened, balance_as_of=balance_as_of, rate=rate, limit=limit,
-                payment_due_day=payment_due_day, min_payment=min_payment, replace=replace,
+                payment_due_day=payment_due_day, min_payment=min_payment,
+                owner=owner, restricted=restricted, replace=replace,
             )
         except (ValueError, UnparseableDate, InvalidKey, RecordExists) as exc:
             print(f"  refused: {exc}", file=sys.stderr)
@@ -342,7 +357,8 @@ def _cmd_account(argv: list[str]) -> int:
         print(f"  stored: {ref[0]}/{ref[2]}")
         print(
             "  kind L2 · institution L3 · number L5 (never shown) · opened L2 "
-            "· balance/rate/limit/min-payment L4 · payment due day L2"
+            "· balance/rate/limit/min-payment L4 · payment due day L2 · "
+            "owner/restricted L2"
         )
         if replaced is not None:
             print("  (replaced the previous account under this label)")
@@ -355,7 +371,50 @@ def _cmd_account(argv: list[str]) -> int:
             return 0
         print(f"  {len(found)} account(s):")
         for row in found:
-            print(f"  [{row.rung.value}]  {row.label}: {row.kind}  ·  {row.institution}")
+            marks = []
+            if accounts.owner_of(sidecar, row.label) == "business":
+                marks.append("business")
+            if accounts.is_restricted(sidecar, row.label):
+                marks.append("restricted")
+            mark = f"  ({', '.join(marks)})" if marks else ""
+            print(f"  [{row.rung.value}]  {row.label}: {row.kind}  ·  {row.institution}{mark}")
+        return 0
+
+    if sub == "set-owner":
+        if len(rest) < 2:
+            print(_ACCOUNT_USAGE, end="", file=sys.stderr)
+            return 2
+        label, owner = rest[0], rest[1]
+        try:
+            ref, replaced = accounts.set_owner(sidecar, label, owner)
+        except (ValueError, RecordExists) as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        print(f"  stored: {ref[0]}/{ref[2]}")
+        if replaced is not None:
+            print("  (replaced the previous owner for this label)")
+        return 0
+
+    if sub == "allowable-uses":
+        if not rest:
+            print(_ACCOUNT_USAGE, end="", file=sys.stderr)
+            return 2
+        label, rest = rest[0], rest[1:]
+        replace = "--replace" in rest
+        rest = [a for a in rest if a != "--replace"]
+        rest, set_raw = _flag(rest, "--set")
+        if rest or not set_raw:
+            print(_ACCOUNT_USAGE, end="", file=sys.stderr)
+            return 2
+        uses = [u.strip() for u in set_raw.split(",") if u.strip()]
+        try:
+            ref, replaced = overlay.set_allowable_uses(sidecar, label, uses, replace=replace)
+        except (ValueError, RecordExists) as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        print(f"  stored: {ref[0]}/{ref[2]}")
+        if replaced is not None:
+            print("  (replaced the previous allowable-uses list for this label)")
         return 0
 
     if sub == "show":
@@ -370,7 +429,7 @@ def _cmd_account(argv: list[str]) -> int:
         print(f"  {accounts.MATTER}/{label}")
         for field in (
             "kind", "institution", "opened", "balance_as_of", "rate", "limit",
-            "payment_due_day", "min_payment", "number",
+            "payment_due_day", "min_payment", "owner", "restricted", "number",
         ):
             if field in fields:
                 rung, value = fields[field]
@@ -378,7 +437,11 @@ def _cmd_account(argv: list[str]) -> int:
                 print(f"  [{rung}]  {field.replace('_', ' ')}: {shown}")
         return 0
 
-    print(f"unknown subcommand {sub!r} — one of: add, list, show", file=sys.stderr)
+    print(
+        f"unknown subcommand {sub!r} — one of: add, list, show, set-owner, "
+        "allowable-uses",
+        file=sys.stderr,
+    )
     return 2
 
 
@@ -386,7 +449,8 @@ _TRANSACTION_USAGE = """\
 usage: homestead-ledger transaction add <date> <amount> <description> --account <label>
        homestead-ledger transaction list --account <label> [--gaps]
        homestead-ledger transaction tag <fingerprint> [--category C] [--note N]
-                                        [--merchant M] [--do-not-use] [--replace]
+                                        [--merchant M] [--use U] [--do-not-use]
+                                        [--replace]
        homestead-ledger transaction transfer <fp_out> <fp_in> [--replace]
        homestead-ledger transaction transfer --suggest
   e.g.: homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account chk-main
@@ -404,6 +468,9 @@ usage: homestead-ledger transaction add <date> <amount> <description> --account 
   automatically wherever it names a protected matter (medical, legal, …);
   --do-not-use excludes the transaction from recurring detection, budget
   envelopes and every export, and is set here, never cleared.
+  --use names an allowable-use bucket already declared for the account
+  (`account allowable-uses <label> --set a,b,c`) — a word outside that set,
+  or an account with no set on file yet, is refused by name.
   transfer pairs an outgoing fingerprint with an incoming one — equal and
   opposite amounts, on two different accounts, within 5 days of each other —
   and excludes both from recurring detection and every household aggregate.
@@ -416,8 +483,8 @@ usage: homestead-ledger transaction add <date> <amount> <description> --account 
 
 def _cmd_transaction_tag(rest: list[str]) -> int:
     """transaction tag <fingerprint> [--category C] [--note N] [--merchant M]
-    [--do-not-use] [--replace] — the household's own layer over one
-    transaction, never a rewrite of the row itself."""
+    [--use U] [--do-not-use] [--replace] — the household's own layer over
+    one transaction, never a rewrite of the row itself."""
     from homestead.keep.store import RecordExists
 
     from homestead_ledger import overlay
@@ -429,6 +496,7 @@ def _cmd_transaction_tag(rest: list[str]) -> int:
     rest, category = _flag(rest, "--category")
     rest, note = _flag(rest, "--note")
     rest, merchant = _flag(rest, "--merchant")
+    rest, use = _flag(rest, "--use")
     stray = _stray_flags(rest)
     if stray or not rest:
         print(_TRANSACTION_USAGE, end="", file=sys.stderr)
@@ -440,14 +508,14 @@ def _cmd_transaction_tag(rest: list[str]) -> int:
         written = overlay.tag(
             sidecar, fingerprint, category=category, note=note,
             confirmed_merchant=merchant, do_not_use=do_not_use or None,
-            replace=replace,
+            use=use, replace=replace,
         )
     except (ValueError, RecordExists) as exc:
         print(f"  refused: {exc}", file=sys.stderr)
         return 1
     if not written:
         print(
-            "  nothing to tag — pass --category/--note/--merchant/--do-not-use",
+            "  nothing to tag — pass --category/--note/--merchant/--use/--do-not-use",
             file=sys.stderr,
         )
         return 2
@@ -649,6 +717,8 @@ def _cmd_transaction(argv: list[str]) -> int:
                 seen.append(item_id)
             other = transfers.other_label(sidecar, item_id)
             marker = f"  (transfer → {other})" if other else ""
+            if other and transfers.is_commingled(sidecar, item_id):
+                marker += " (commingling)"
             print(f"  [{row.rung.value}]  {item_id[:12]}  {field}: {row.text}{marker}")
         # Bite 4: the overlay, shown by reference — a category renders or
         # derives, a note (always L4) derives, `do_not_use` is a mark, never
@@ -670,13 +740,16 @@ def _cmd_transaction(argv: list[str]) -> int:
 
 _BUDGET_USAGE = """\
 usage: homestead-ledger budget set <category> <YYYY-MM> <amount> [--replace]
-       homestead-ledger budget show [--month YYYY-MM]
+       homestead-ledger budget show [--month YYYY-MM] [--include-business]
   e.g.: homestead-ledger budget set groceries 2026-09 400.00
         homestead-ledger budget show --month 2026-09
   <category> is the same closed-shape word `transaction tag --category`
   takes. A limit never renders on `show` — only whether spending in a
   category this month is within it, over it, unset, or absent altogether;
-  --month defaults to the current calendar month.
+  --month defaults to the current calendar month. `show` excludes
+  business-owned accounts unless --include-business is given, and counts a
+  restricted account's outflow with no allowable-use tag as "needs a use"
+  rather than "needs a category" (G8-business-books).
 """
 
 
@@ -719,14 +792,18 @@ def _cmd_budget(argv: list[str]) -> int:
         return 0
 
     if sub == "show":
+        include_business = "--include-business" in rest
+        rest = [a for a in rest if a != "--include-business"]
         rest, month = _flag(rest, "--month")
         month = month or dt.date.today().strftime("%Y-%m")
         try:
-            rows, gaps = budget.envelopes(Canonical(), sidecar, month)
+            rows, gaps = budget.envelopes(
+                Canonical(), sidecar, month, include_business=include_business,
+            )
         except ValueError as exc:
             print(f"  refused: {exc}", file=sys.stderr)
             return 1
-        if not rows and not gaps.uncategorised and not gaps.undated:
+        if not rows and not gaps.uncategorised and not gaps.undated and not gaps.needs_use:
             print(f"  {month}: nothing to show — no limits and no spending on file")
             return 0
         print(f"  {month}:")
@@ -736,6 +813,11 @@ def _cmd_budget(argv: list[str]) -> int:
         # A row whose date no calendar can read sits in no month at all —
         # `transaction list --gaps` is where the operator goes to fix one.
         print(f"  needs a date: {gaps.undated}")
+        # G8-business-books: a restricted account's outflow with no
+        # allowable-use tag, and how many transfer pairs on file cross the
+        # household/business line — never an amount, either one.
+        print(f"  needs a use: {gaps.needs_use}")
+        print(f"  commingling: {gaps.commingling}")
         return 0
 
     print(f"unknown subcommand {sub!r} — one of: set, show", file=sys.stderr)
@@ -777,8 +859,8 @@ def _cmd_queue(argv: list[str]) -> int:
 
 
 _SCHEDULES_USAGE = """\
-usage: homestead-ledger schedules show
-       homestead-ledger schedules export [--out DIR]
+usage: homestead-ledger schedules show [--include-business]
+       homestead-ledger schedules export [--out DIR] [--include-business]
   e.g.: homestead-ledger schedules export
   `show` lists every liability account instance (credit cards, loans) on
   file — the amount fields as "a balance is on file", never the number.
@@ -786,7 +868,9 @@ usage: homestead-ledger schedules show
   themselves, never the number — after showing exactly what will be
   written and asking for confirmation. --out DIR writes there instead of
   the default exports directory; DIR must be an absolute path under
-  the household root (copy the file out from there yourself).
+  the household root (copy the file out from there yourself). Both exclude
+  business-owned accounts unless --include-business is given, and the
+  exported NOTICE names which way the export ran (G8-business-books).
 """
 
 
@@ -806,7 +890,9 @@ def _cmd_schedules(argv: list[str]) -> int:
     sidecar = Sidecar()
 
     if sub == "show":
-        found = schedules.rows(sidecar)
+        include_business = "--include-business" in rest
+        rest = [a for a in rest if a != "--include-business"]
+        found = schedules.rows(sidecar, include_business=include_business)
         if not found:
             print(
                 "  no liability accounts on file — `homestead-ledger account "
@@ -827,6 +913,8 @@ def _cmd_schedules(argv: list[str]) -> int:
     if sub == "export":
         from pathlib import Path
 
+        include_business = "--include-business" in rest
+        rest = [a for a in rest if a != "--include-business"]
         rest, out = _flag(rest, "--out")
         if rest:
             # `export` takes no positional argument, so anything left after
@@ -852,7 +940,9 @@ def _cmd_schedules(argv: list[str]) -> int:
             return answer in ("y", "yes")
 
         try:
-            receipt = schedules.export(sidecar, confirm=confirm, out_dir=out_dir)
+            receipt = schedules.export(
+                sidecar, confirm=confirm, out_dir=out_dir, include_business=include_business,
+            )
         except ExportRefused as exc:
             print(f"  refused: {exc}", file=sys.stderr)
             return 1
@@ -863,6 +953,83 @@ def _cmd_schedules(argv: list[str]) -> int:
 
     print(f"unknown subcommand {sub!r} — one of: show, export", file=sys.stderr)
     return 2
+
+
+# ── G8-business-books: grant report, and the words this ledger refuses ──────
+
+_GRANT_USAGE = """\
+usage: homestead-ledger grant report <label> --period YYYY-MM..YYYY-MM [--out DIR]
+  e.g.: homestead-ledger grant report grant-main --period 2026-01..2026-06
+  Composes spend by allowable use for one account over a period — a row per
+  use with a count and a total, and how many outflows in the period still
+  have no use tag on file ("needs a use", never refused). Shows exactly
+  what will be written and asks for confirmation, the same as `schedules
+  export`; --out DIR takes an absolute path under the household root.
+  No payroll, no tax, no 409A, no cap-table math — this ledger tracks
+  references only; see `homestead-ledger payroll` (and friends) for why.
+"""
+
+
+def _cmd_grant(argv: list[str]) -> int:
+    """grant report <label> --period YYYY-MM..YYYY-MM [--out DIR]."""
+    from pathlib import Path
+
+    from homestead.keep.export import ExportRefused
+
+    from homestead_ledger import grant_report
+    from homestead_ledger.store import Canonical, Sidecar
+
+    args = argv[1:]
+    if len(args) < 2 or args[0] != "report":
+        print(_GRANT_USAGE, end="", file=sys.stderr)
+        return 2
+    label, rest = args[1], args[2:]
+    rest, period = _flag(rest, "--period")
+    rest, out = _flag(rest, "--out")
+    if rest or not period or ".." not in period:
+        print(_GRANT_USAGE, end="", file=sys.stderr)
+        return 2
+    start, _sep, end = period.partition("..")
+    out_dir = Path(out) if out else None
+    _boot()
+    sidecar = Sidecar()
+
+    def confirm(wire) -> bool:
+        print(f"  about to export the allowable-use report for {label!r}:")
+        print(f"  {wire.method} {wire.url}")
+        print("  " + "-" * 60)
+        print(wire.body)
+        print("  " + "-" * 60)
+        answer = input("  write this file? [y/N] ").strip().lower()
+        return answer in ("y", "yes")
+
+    try:
+        receipt = grant_report.export(
+            Canonical(), sidecar, label, start, end, confirm=confirm, out_dir=out_dir,
+        )
+    except ExportRefused as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return 1
+    print(f"  exported: {receipt.artifact}")
+    print(f"  {receipt.ref}  [{receipt.rung.value}]  {receipt.disposition.value}")
+    print(f"  ledger head: {receipt.head}")
+    return 0
+
+
+def _cmd_not_computed_here(argv: list[str]) -> int:
+    """`payroll`/`tax`/`409a`/`cap-table` — refused by name, every time.
+    This ledger tracks references; none of these is computed here. Each
+    entry in `COMMANDS` below routes here under exactly one of
+    `overlay.NOT_COMPUTED_HERE`'s own words, so `refuse_if_out_of_scope`
+    always raises — the one message both doors (this and `--category`/
+    `--use`) share, never retyped."""
+    from homestead_ledger.overlay import refuse_if_out_of_scope
+
+    try:
+        refuse_if_out_of_scope(argv[0])
+    except ValueError as exc:
+        print(f"  {exc}", file=sys.stderr)
+    return 1
 
 
 _SYNC_USAGE = """\
@@ -1034,10 +1201,26 @@ COMMANDS: dict[str, tuple] = {
     "queue":       (_cmd_queue,       "queue — show what's due"),
     "budget":      (_cmd_budget,      "budget <set|show> — per-category, per-month spending limits"),
     "schedules": (_cmd_schedules, "schedules <show|export> — the liability schedule"),
+    "grant":     (_cmd_grant,     "grant report <label> --period Y-M..Y-M — spend by allowable use"),
     "sync":      (_cmd_sync,      "sync --matters a,b --ceiling L3 — send a scope to the fleet"),
     "verify":    (_cmd_verify,    "verify — check ledger chain integrity"),
     "ui":        (_cmd_ui,        "ui [--port N] — intake UI in the browser"),
 }
+#: `payroll`/`tax`/`409a`/`cap-table` — each refuses by name, pointing at
+#: the accountant, rather than being absent from `COMMANDS` entirely (an
+#: absent command reads as "not built yet"; these are refused on purpose,
+#: the same "UNCERTAIN, named" posture every other out-of-scope refusal in
+#: this package takes). Looped over `overlay.NOT_COMPUTED_HERE` rather than
+#: four hand-typed entries, so a word added there is a command refused here
+#: with no second edit.
+from homestead_ledger.overlay import NOT_COMPUTED_HERE as _NOT_COMPUTED_HERE  # noqa: E402
+
+for _name in _NOT_COMPUTED_HERE:
+    COMMANDS[_name] = (
+        _cmd_not_computed_here,
+        f"{_name} — UNCERTAIN: not computed here — confirm with your accountant",
+    )
+del _name
 
 
 def run_cli(argv: list[str]) -> int:

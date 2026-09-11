@@ -93,7 +93,9 @@ commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
 
 _CLI_COMMANDS = {
     "account", "obligation", "transaction", "resolve", "reconcile", "put", "queue",
-    "budget", "schedules", "sync", "verify", "ui",
+    "budget", "schedules", "grant", "sync", "verify", "ui",
+    # G8-business-books: refused by name, every time (`cli.NOT_COMPUTED_HERE`).
+    "payroll", "tax", "409a", "cap-table",
 }
 
 
@@ -127,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
             cadence,
             cli,
             fingerprint,
+            grant_report,
             importer,
             intake,
             money,
@@ -179,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
             print(demo.compose_queue(Sidecar()))
             print()
             print(demo.compose_recurring())
+            print()
+            print(demo.compose_business_books(Sidecar()))
         return 0
 
     if argv and argv[0] in _CLI_COMMANDS:
