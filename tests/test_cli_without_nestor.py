@@ -165,6 +165,24 @@ def test_transaction_list_gaps_names_unparsed_rows_by_reference(capsys):
     assert "9/2/2026" in out and "2026-09-03" in out   # --gaps narrows; plain list does not
 
 
+def test_gaps_is_refused_on_a_sub_command_that_is_not_list(capsys):
+    """`--gaps` narrows `transaction list` and belongs to no other
+    sub-command. It used to be stripped from the argument list before the
+    sub-command was dispatched, so `transaction add … --gaps` wrote the row
+    and reported success — a flag that looks honoured and is not."""
+    from homestead_ledger.store import Canonical
+
+    assert run_cli(["transaction", "add", "2026-09-09", "-5.00", "Gaps Flag Row",
+                    "--account-number", "9821", "--gaps"]) == 2
+    assert "--gaps is only for `transaction list`" in capsys.readouterr().err
+
+    descriptions = {
+        record.payload for ref, record in Canonical().records("checking")
+        if ref[1] == "description"
+    }
+    assert "Gaps Flag Row" not in descriptions   # refused, not written anyway
+
+
 def test_an_obligation_id_is_one_closed_shape(capsys):
     """The id is a key segment and a string the browser renders back; one
     closed shape, refused at the door rather than escaped at every surface."""

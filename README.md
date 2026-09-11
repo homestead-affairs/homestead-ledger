@@ -60,12 +60,15 @@ homestead-ledger transaction list --gaps                        # rows whose sto
 python -m homestead_ledger                                       # the window, on these books (the demo only if empty)
 ```
 
-Every imported row's date is parsed to ISO before it is ever written: an
-unambiguous form (`2026-08-01`, `August 1, 2026`, …) parses on its own, and a
-slashed, ambiguous one (`08/01/2026`) needs `--bank <name>` naming which
-day/month order that statement uses (`wells-fargo`, `chase`,
-`bank-of-america`, `capital-one`, `usaa`, `discover`, `amex`) — a slashed date
-with no bank named is a per-row import error, never a guess. This is what
+Every imported row's date is parsed to ISO before it is ever written.
+`--bank <name>` declares which day/month order *that statement's* date column
+is written in (`wells-fargo`, `chase`, `bank-of-america`, `capital-one`,
+`usaa`, `discover`, `amex`) and is tried **first**, so the operator's own
+declaration is never overruled by a guess from somewhere else; a cell that
+does not fit it still parses if it is unambiguous on its own (`2026-08-01`,
+`August 1, 2026`, …). A slashed, ambiguous date (`08/01/2026`) with no bank
+named is a per-row import error, never a guess, and a refusal names the field
+rather than echoing the cell. This is what
 lets the same transaction imported once as `08/01/2026 --bank chase` and once
 as `2026-08-01` dedup as the same row. **There is no migration** for a
 transaction already on the books from before this fix with an unparsed,

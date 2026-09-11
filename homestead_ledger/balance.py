@@ -53,11 +53,32 @@ def _sort_key(raw: str, item_id: str) -> tuple:
     own raw text (the only ordering left available for it) — "falling back
     to lexical only for a row whose date will not parse", never for the rest.
     The leading `0`/`1` keeps the two groups from ever comparing a `date`
-    against a `str` (Python cannot order those against each other)."""
+    against a `str` (Python cannot order those against each other).
+
+    **This moves a pre-ISO row relative to where the old lexical sort put
+    it.** `"08/11/2026"` used to sort *before* every `"2026-…"` row (`'0'` <
+    `'2'`) and now sorts after all of them, so the running total each ISO row
+    carries changes by that row's amount. That is a deliberate consequence of
+    ordering by the calendar instead of by ASCII, and it is safe to make here
+    because no surface in this package draws a `BalancePoint`: the only
+    consumer of either sort is `recurring.detect_recurring`, through
+    `transaction_tuples`, where an unparseable date joined no honest cadence
+    under either ordering. `transaction list --gaps` is how the operator
+    finds the rows this applies to; there is no migration (v1 is
+    synthetic-only).
+
+    The fallback key is `str(raw)`, not `raw`: a corrupt record whose stored
+    payload is `null` hydrates to `None`, and two unparseable rows — one
+    `None`, one a string — would otherwise make `sorted` itself raise
+    `TypeError: '<' not supported between 'str' and 'NoneType'`, taking down
+    the whole running balance rather than sorting the bad row last (I-11 —
+    corruption is refused *by name*, never allowed to poison the read of
+    every other row). `str(None)` is `'None'`, which `is_iso_date` still
+    reports as a gap for `transaction list --gaps` to show."""
     try:
         return (0, date.fromisoformat(raw), item_id)
     except (TypeError, ValueError):
-        return (1, raw, item_id)
+        return (1, str(raw), item_id)
 
 
 @dataclass(frozen=True)

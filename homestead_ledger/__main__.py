@@ -37,11 +37,15 @@ usage: python -m homestead_ledger [--help] [--smoke | --demo]
   --import FILE --account-number N
                import a bank-statement CSV for one account (header
                auto-detected: single-amount or debit/credit split); every
-               row's date is parsed to ISO — unambiguous forms directly, a
-               slashed date only with --bank NAME naming its day/month order
-               (one of: wells-fargo, chase, bank-of-america, capital-one,
-               usaa, discover, amex); a slashed date with no --bank is a
-               per-row error, never a guess. Prints the imported/skipped/
+               row's date is parsed to ISO. --bank NAME declares the day/
+               month order this statement's date column is written in (one
+               of: wells-fargo, chase, bank-of-america, capital-one, usaa,
+               discover, amex) and is tried first, so the declaration is
+               never overruled; a row it does not fit still parses if it is
+               unambiguous on its own (2026-08-01, August 1 2026). A slashed
+               date with no --bank is a per-row error, never a guess. A
+               refusal names the field, never the cell.
+               Prints the imported/skipped/
                errors tally. --account defaults to "checking"; --dry-run
                parses and tallies without writing. Rows imported before this
                fix with a slashed, unparsed date will not dedup against a
@@ -141,6 +145,16 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in _CLI_COMMANDS:
         from homestead_ledger.cli import run_cli
         return run_cli(argv)
+
+    if "--bank" in argv and "--import" not in argv:
+        # `--bank` declares how *a statement's* date column is written; with
+        # no statement to import it is a declaration about nothing, and
+        # falling through to the window would run as if it had been honoured.
+        print(
+            "homestead-ledger: --bank only applies to --import FILE",
+            file=sys.stderr,
+        )
+        return 2
 
     if "--import" in argv:
         # Bite 4 — a bank-statement CSV import, headless, no tkinter touched.

@@ -3,13 +3,14 @@ at a time, into the books.
 
 **Every row's date is ISO by the time it reaches `books.Transaction` (fix:
 G2c-importer-dates).** `_row_date` is the one function every row's raw date
-cell passes through: first the engine's own strict parser
-(`homestead.keep.dates.parse_deadline`, which reads ISO calendar dates, ISO
-datetimes and written month names, and refuses every slashed numeric form as
-a family — `03/04/2026` is genuinely ambiguous between month-first and
-day-first); if that refuses and a `--bank` was named, the closed
-`BANK_DATE_FORMATS` table for that bank; if that fails too, or no bank was
-named for a slashed date, the row is counted as an error, never guessed. The
+cell passes through: first, when `--bank` was named, that bank's entry in the
+closed `BANK_DATE_FORMATS` table — the operator's own declaration of how
+*this* statement is written, which nothing else may overrule; then the
+engine's own strict parser (`homestead.keep.dates.parse_deadline`, which
+reads ISO calendar dates, ISO datetimes and written month names, and refuses
+every slashed numeric form as a family — `03/04/2026` is genuinely ambiguous
+between month-first and day-first). If neither fits, or no bank was named for
+a slashed date, the row is counted as an error, never guessed. The
 stored `Transaction.date` this module builds is always this ISO string, so
 `fingerprint` (which hashes the date string verbatim) is computed over ISO —
 the same transaction imported once as `08/11/2026 --bank chase` and once as
@@ -88,9 +89,11 @@ __all__ = [
 #: Every entry below is `%m/%d/%Y` because every bank listed is a US bank
 #: exporting month-first dates. A day-first bank (`%d/%m/%Y`) would need its
 #: own separate table entry, never a format squeezed to admit both orders —
-#: no `strptime` directive does that, and `test_no_bank_format_admits_both_
-#: day_orders` pins it: every entry here parses `"03/04/2026"` to exactly one
-#: date, and no bank name maps to more than one format.
+#: no `strptime` directive does that. The table's contract is pinned by
+#: `tests/test_importer.py::test_every_bank_format_reads_one_order_only` and
+#: `::test_a_planted_day_first_bank_is_honoured_not_overridden`, which plant a
+#: `%d/%m/%Y` and a `%Y-%d-%m` entry and assert `_row_date` still reads the
+#: *declared* order — so the guard tests the rule, not today's contents.
 BANK_DATE_FORMATS: dict[str, str] = {
     "wells-fargo": "%m/%d/%Y",
     "chase": "%m/%d/%Y",
@@ -112,41 +115,73 @@ def _row_date(raw: str, bank: str | None) -> str:
     """One row's raw date cell, as ISO — the only spelling this module ever
     hands to `books.Transaction`.
 
-    1. `parse_deadline(raw).iso` — the engine's strict parser. Unambiguous
-       forms (ISO calendar dates, ISO datetimes, written month names) succeed
-       here and never touch a bank format at all.
-    2. If that refuses and `bank` was given, `BANK_DATE_FORMATS[bank]` via
-       `datetime.strptime` — the operator's own declared order for this
-       statement. A value that does not fit that exact format is an error;
-       this never falls back to trying the *other* day/month order (that
-       would be exactly the guess I-25 forbids).
-    3. Anything else — a slashed date with no `--bank` named — is an error
-       naming that `--bank <name>` is needed. Every message here is built
-       from the date text and the bank name alone; the row's amount and
-       description never reach this function, so they cannot leak into a
-       refusal (I-15).
+    **The declared bank format is consulted first, always** (fix: audit of
+    G2c-importer-dates). The earlier order — engine parser first, bank format
+    only if that refused — was safe only by accident of today's table: every
+    entry in it happens to be a slashed form the engine refuses as a family.
+    A table entry the engine's parser *accepts* under a different field order
+    (`%Y-%d-%m` reads `2026-04-03` as March 4th; `parse_deadline` reads the
+    same string as April 3rd) would have been silently overruled, and the
+    operator's own declaration of how this statement is written is the last
+    thing that should lose. So:
 
-    Raises `ValueError` (or its `UnparseableDate` subclass) in every refusal
-    case; never returns `None` and never guesses.
+    1. If `bank` was given, `BANK_DATE_FORMATS[bank]` via `datetime.strptime`
+       — the operator's declared order for this statement, and the answer
+       whenever it fits.
+    2. Otherwise (no bank) — or when the declared format does not fit this
+       particular cell — `parse_deadline(raw).iso`, the engine's strict
+       parser: ISO calendar dates, ISO date-times and written month names,
+       every one of them unambiguous, and every slashed numeric form refused
+       as a family. Step 2 after a failed step 1 is not a second guess at the
+       day/month order; it is the only remaining *unambiguous* reading, and a
+       statement with one ISO row among its slashed ones still imports.
+    3. Anything left is an error — a slashed date with no `--bank` named says
+       so by name; anything else names the field and the accepted forms.
+
+    **No refusal here echoes the cell (I-15).** The row's amount and
+    description never reach this function at all, and the date text itself is
+    not repeated either: a mis-aligned CSV puts an L3 description in the date
+    column, and `money.decimal_amount`'s convention in this same package is
+    to name the field and never the value. The engine's own `UnparseableDate`
+    message *does* quote the text it refused, which is why it is caught and
+    restated here rather than propagated.
+
+    Raises `ValueError` in every refusal case; never returns `None` and never
+    guesses.
     """
+    text = raw.strip()
+    if bank is not None:
+        fmt = BANK_DATE_FORMATS[bank]
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            pass
+        try:
+            return parse_deadline(text).iso
+        except UnparseableDate as exc:
+            raise ValueError(
+                f"date does not fit the declared {bank!r} format ({fmt}) and "
+                "is not an unambiguous date either — refusing to re-try it as "
+                "the other day/month order (the cell is not repeated here: "
+                "I-15 lets an error name a field, never echo its value)"
+            ) from exc
+
     try:
-        return parse_deadline(raw).iso
+        return parse_deadline(text).iso
     except UnparseableDate as exc:
-        if bank is not None:
-            try:
-                return datetime.strptime(raw, BANK_DATE_FORMATS[bank]).date().isoformat()
-            except ValueError:
-                raise ValueError(
-                    f"date does not fit the {bank!r} format "
-                    f"({BANK_DATE_FORMATS[bank]}) — refusing to re-try it as "
-                    "the other day/month order"
-                ) from exc
-        if _SLASHED.match(raw.strip()):
+        if _SLASHED.match(text):
             raise ValueError(
                 "a slashed date needs --bank <name> to say which order this "
                 f"statement uses — one of: {', '.join(sorted(BANK_DATE_FORMATS))}"
             ) from exc
-        raise
+        raise ValueError(
+            "date is not a form this importer reads — accepted: 2026-08-10, "
+            "2026-08-10T09:00:00, August 10, 2026, Aug 10 2026, 10 August "
+            "2026, or a slashed date with --bank <name>. (The cell is not "
+            "repeated here: I-15 lets an error name a field, never echo its "
+            "value.)"
+        ) from exc
+
 
 #: header sets (lower-cased) that identify each supported shape. Checked in
 #: this order — debit/credit first — so a file that (unusually) carries all

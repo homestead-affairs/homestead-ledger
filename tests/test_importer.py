@@ -342,30 +342,136 @@ def test_an_unknown_bank_is_refused_by_name(tmp_path, monkeypatch):
     assert canonical.records("checking") == []
 
 
-def test_no_bank_format_admits_both_day_orders(tmp_path):
-    """Every entry in `BANK_DATE_FORMATS` parses the same ambiguous input to
-    exactly one date — no format string here reads as both month-first and
-    day-first depending on the value — and no bank name maps to more than
-    one format (a plain dict already guarantees the second half; asserted
-    directly all the same)."""
-    ambiguous = "03/04/2026"                      # March 4th, or April 3rd?
-    seen_formats: dict[str, str] = {}
-    for bank, fmt in importer.BANK_DATE_FORMATS.items():
-        assert bank not in seen_formats or seen_formats[bank] == fmt
-        seen_formats[bank] = fmt
+def test_every_bank_format_reads_one_order_only(tmp_path):
+    """Per *format*, not across the table: every entry in `BANK_DATE_FORMATS`
+    commits to exactly one day/month order and reads the same input the same
+    way every time.
 
-        parsed = datetime.strptime(ambiguous, fmt).date()
-        # this table is month-first throughout: March 4th, consistently.
-        assert parsed.isoformat() == "2026-03-04"
+    The original form of this test asserted that every entry parses
+    `"03/04/2026"` to March 4th — which is a statement about today's table
+    (all-US, all month-first), not about the rule. Plant a day-first bank and
+    that version fails, so it could never have been the guard for "no format
+    admits both orders". This one checks each format against *itself*: a
+    sample date formatted by that format parses back to that same date
+    (round-trip), and the transposed digit string parses to a different date
+    (the format commits to an order rather than accepting both). Both hold
+    for `%d/%m/%Y` and `%Y-%d-%m` just as they do for `%m/%d/%Y`, which is
+    what makes them the rule and not the contents."""
+    planted = dict(importer.BANK_DATE_FORMATS)
+    planted["_fake-day-first"] = "%d/%m/%Y"        # the plant: not month-first
+    planted["_fake-year-day-month"] = "%Y-%d-%m"   # and not even slashed
 
-        # the format string itself cannot be read the other way around —
-        # asking it to parse the *day-first* reading of the same digits
-        # back out under its own format recovers the identical date only
-        # when the two readings coincide, and diverges (rather than
-        # silently agreeing) whenever they do not.
-        transposed = datetime.strptime("04/03/2026", fmt).date()
-        assert transposed.isoformat() == "2026-04-03"
-        assert parsed != transposed
+    sample = datetime(2026, 3, 4).date()
+    for bank, fmt in planted.items():
+        assert isinstance(bank, str) and isinstance(fmt, str)
+
+        # round-trip: the format reads back exactly what it writes
+        assert datetime.strptime(sample.strftime(fmt), fmt).date() == sample
+
+        # deterministic: the same text, twice, is the same date — never one
+        # reading for an unambiguous value and another for an ambiguous one
+        text = sample.strftime(fmt)
+        assert datetime.strptime(text, fmt) == datetime.strptime(text, fmt)
+
+        # committed to one order: the *other* reading of the same digits is a
+        # different date under this format, so no entry can be satisfied by
+        # both readings at once.
+        transposed = datetime(2026, 4, 3).date().strftime(fmt)
+        assert datetime.strptime(transposed, fmt).date() != sample
+
+
+def test_a_planted_day_first_bank_is_honoured_not_overridden(tmp_path, monkeypatch):
+    """The audit's finding: `_row_date` used to try the engine's parser
+    *first* and the declared bank format only if that refused — safe only
+    because every entry in today's table happens to be a slashed form the
+    engine refuses as a family. Plant two entries the engine's parser has an
+    opinion about and the operator's own declaration must still win.
+
+    `2026-04-03` under `%Y-%d-%m` is March 4th; `parse_deadline` reads the
+    same string as April 3rd and would have silently overruled the statement
+    the operator said they were importing — a wrong date on the books, with
+    no refusal anywhere."""
+    monkeypatch.setitem(importer.BANK_DATE_FORMATS, "_fake-day-first", "%d/%m/%Y")
+    monkeypatch.setitem(importer.BANK_DATE_FORMATS, "_fake-year-day-month", "%Y-%d-%m")
+
+    # 01/02/2026 under a day-first bank is the 1st of February, never Jan 2nd
+    assert importer._row_date("01/02/2026", "_fake-day-first") == "2026-02-01"
+    # and the case the engine's own parser accepts under a different order
+    assert importer._row_date("2026-04-03", "_fake-year-day-month") == "2026-03-04"
+    # no bank named: the engine's reading of the same string, unchanged
+    assert importer._row_date("2026-04-03", None) == "2026-04-03"
+
+
+def test_an_unambiguous_row_inside_a_bank_statement_still_imports(tmp_path, monkeypatch):
+    """Consulting the bank format first must not make an ISO row in an
+    otherwise-slashed statement an error: the declared format does not fit
+    it, and the only remaining *unambiguous* reading is taken. That is not a
+    second guess at the day/month order — there is no order left to guess."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    path = _write(
+        tmp_path, "mixed.csv",
+        "Date,Description,Amount\n"
+        "08/11/2026,Whole Foods Market,-84.23\n"
+        "2026-08-12,Employer Payroll,1500.00\n"
+        '"August 13, 2026",Rent,-1450.00\n',
+    )
+
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER, bank="chase")
+    assert (result.imported, result.errors) == (3, 0)
+
+    canonical = Canonical()
+    dates = sorted(
+        record.payload for ref, record in canonical.records("checking") if ref[1] == "date"
+    )
+    assert dates == ["2026-08-11", "2026-08-12", "2026-08-13"]
+
+
+def test_a_relative_word_in_the_date_column_is_refused_not_resolved(tmp_path, monkeypatch):
+    """`Today` in a date column must never become the import date. The
+    engine's parser has no relative forms at all (that is BUG-4's ground),
+    and this pins the ledger's side of it: with or without `--bank`, a
+    relative word is a row error and nothing reaches the books."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    for word in ("Today", "today", "tomorrow", "next Tuesday", "Monday"):
+        for bank in (None, "chase"):
+            with pytest.raises(ValueError):
+                importer._row_date(word, bank)
+
+    path = _write(
+        tmp_path, "relative.csv",
+        "Date,Description,Amount\nToday,Whole Foods Market,-84.23\n",
+    )
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER)
+    assert (result.imported, result.errors) == (0, 1)
+    assert Canonical().records("checking") == []
+
+
+def test_a_date_cell_is_never_echoed_back_in_its_own_refusal(tmp_path, monkeypatch, capsys):
+    """I-15, the half the row-content test does not reach. A mis-aligned CSV
+    puts an L3 description (or worse) in the date column, and the engine's
+    own `UnparseableDate` quotes the text it refused — so propagating it
+    would print that cell on stderr and store it in the tally. This module
+    restates the refusal by field name instead, the same way
+    `money.decimal_amount` does for an amount."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    misplaced = "Confidential Merchant Name LLC"
+    path = _write(
+        tmp_path, "misaligned.csv",
+        f"Date,Description,Amount\n{misplaced},2026-08-01,-84.23\n",
+    )
+
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER)
+    assert result.errors == 1
+    joined = " ".join(result.error_messages)
+    assert misplaced not in joined
+    assert "date" in joined                      # the field is named
+    assert misplaced not in capsys.readouterr().err
+
+    # and the same cell with a --bank named, which takes the other branch
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER, bank="chase")
+    assert result.errors == 1
+    assert misplaced not in " ".join(result.error_messages)
+    assert misplaced not in capsys.readouterr().err
 
 
 def test_a_date_error_never_echoes_the_rows_content(tmp_path, monkeypatch, capsys):
@@ -389,3 +495,68 @@ def test_a_date_error_never_echoes_the_rows_content(tmp_path, monkeypatch, capsy
     err = capsys.readouterr().err
     assert secret_amount not in err
     assert secret_description not in err
+
+
+def test_the_same_iso_day_with_different_amounts_never_collides(tmp_path, monkeypatch):
+    """Dedup across spellings must not become dedup across *transactions*.
+    The fingerprint is over `(date, amount, description, account_number)`, so
+    two rows written in different date spellings that normalize to the same
+    ISO day are still two rows whenever anything else differs — the coffee
+    bought twice on the same morning is not one purchase."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    path = _write(
+        tmp_path, "same_day.csv",
+        "Date,Description,Amount\n"
+        "08/11/2026,Whole Foods Market,-84.23\n"
+        "2026-08-11,Whole Foods Market,-12.00\n"
+        '"August 11, 2026",Whole Foods Market,-84.24\n',
+    )
+
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER, bank="chase")
+    assert (result.imported, result.skipped, result.errors) == (3, 0, 0)
+
+    canonical = Canonical()
+    ids = {ref[2] for ref, _ in canonical.records("checking")}
+    assert len(ids) == 3
+    dates = {
+        record.payload for ref, record in canonical.records("checking") if ref[1] == "date"
+    }
+    assert dates == {"2026-08-11"}     # one day, three transactions
+
+
+def test_a_pre_fix_row_is_not_deduped_against_its_iso_reimport(tmp_path, monkeypatch):
+    """The README's and `--help`'s "no migration" note, pinned as behaviour
+    rather than prose. A row already on the books with an unparsed slashed
+    date (what the importer wrote before fix: G2c-importer-dates) has a
+    fingerprint over that raw text, so re-importing the same statement in the
+    new ISO form writes a *second* row rather than skipping — the same
+    transaction, twice, under two ids. That is the documented consequence of
+    shipping no migration for v1's synthetic-only books; `transaction list
+    --gaps` is the surface that makes the old one findable, and this test is
+    what stops the docs and the behaviour drifting apart silently."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    from homestead_ledger.books import Transaction, import_transaction
+
+    pre_fix_id = import_transaction(Transaction(
+        account="checking", date="08/11/2026", amount="-84.23",
+        description="Whole Foods Market", account_number=ACCOUNT_NUMBER,
+    ))
+
+    path = _write(
+        tmp_path, "reimport.csv",
+        "Date,Description,Amount\n08/11/2026,Whole Foods Market,-84.23\n",
+    )
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER, bank="chase")
+    assert (result.imported, result.skipped) == (1, 0)   # NOT deduped — no migration
+
+    canonical = Canonical()
+    ids = {ref[2] for ref, _ in canonical.records("checking")}
+    assert len(ids) == 2 and pre_fix_id in ids
+    dates = {
+        record.payload for ref, record in canonical.records("checking") if ref[1] == "date"
+    }
+    assert dates == {"08/11/2026", "2026-08-11"}
+
+    # …and the second import of the *same* statement now dedups normally.
+    again = importer.import_csv(path, account_number=ACCOUNT_NUMBER, bank="chase")
+    assert (again.imported, again.skipped) == (0, 1)

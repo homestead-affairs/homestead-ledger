@@ -116,3 +116,22 @@ def test_running_balance_orders_by_calendar_not_lexically(tmp_path, monkeypatch)
 
     from homestead_ledger.balance import is_iso_date
     assert [is_iso_date(p.date) for p in points] == [True, True, False]
+
+
+def test_the_sort_never_raises_on_a_corrupt_or_missing_date():
+    """A record whose stored payload is `null` hydrates to `None`. Two
+    unparseable rows — one `None`, one a string — made `sorted` itself raise
+    `TypeError: '<' not supported between 'str' and 'NoneType'`, which does
+    not misplace one row: it takes down the running balance of every other
+    row in the account. The fallback key is `str(raw)`, so a corrupt row
+    sorts last (and shows up as a gap) instead of poisoning the read (I-11).
+    """
+    from homestead_ledger.balance import _sort_key, is_iso_date
+
+    rows = [("a", None), ("b", "9/2/2026"), ("c", "2026-10-01"), ("d", ""), ("e", "2026-09-02")]
+    ordered = [i for i, _ in sorted(rows, key=lambda t: _sort_key(t[1], t[0]))]
+    # the two real calendar days first, in calendar order; everything
+    # unparseable after them, by its own text — never an exception.
+    assert ordered[:2] == ["e", "c"]
+    assert set(ordered[2:]) == {"a", "b", "d"}
+    assert [is_iso_date(v) for _, v in rows] == [False, False, True, False, True]

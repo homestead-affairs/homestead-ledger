@@ -223,6 +223,16 @@ def _cmd_transaction(argv: list[str]) -> int:
     account = account or checking.ACCOUNT
     gaps_only = "--gaps" in rest
     rest = [a for a in rest if a != "--gaps"]
+    # `--gaps` narrows `list` and belongs to no other sub-command. Swallowing
+    # it silently on `add` would let `transaction add … --gaps` write the row
+    # anyway and report success, which is a flag that looks honoured and is
+    # not — the shape a household reads as "it did what I asked".
+    if gaps_only and sub != "list":
+        print(
+            f"  --gaps is only for `transaction list`, not `transaction {sub}`",
+            file=sys.stderr,
+        )
+        return 2
     # I-23: the registry is the only enumeration. An unregistered `--account`
     # would otherwise grow a whole phantom account in the canonical books —
     # rows nothing that iterates `all_accounts()` (the queue, the subscription
