@@ -27,7 +27,7 @@ import sys
 
 USAGE = """\
 usage: python -m homestead_ledger [--help] [--smoke | --demo]
-       python -m homestead_ledger --import FILE --account-number N [--dry-run]
+       python -m homestead_ledger --import FILE --account-number N [--bank NAME] [--dry-run]
                                    [--account NAME] [--kind KIND]
                                    [--liability-columns CHARGE,PAYMENT]
        homestead-ledger <command> [args...]
@@ -38,15 +38,27 @@ usage: python -m homestead_ledger [--help] [--smoke | --demo]
                them, headless
   --import FILE --account-number N
                import a bank-statement CSV for one account (header
-               auto-detected: single-amount or debit/credit split); prints
-               the imported/skipped/errors tally. --account defaults to
-               "checking"; --dry-run parses and tallies without writing.
+               auto-detected: single-amount or debit/credit split); every
+               row's date is parsed to ISO. --bank NAME declares the day/
+               month order this statement's date column is written in (one
+               of: wells-fargo, chase, bank-of-america, capital-one, usaa,
+               discover, amex) and is tried first, so the declaration is
+               never overruled; a row it does not fit still parses if it is
+               unambiguous on its own (2026-08-01, August 1 2026). A slashed
+               date with no --bank is a per-row error, never a guess. A
+               refusal names the field, never the cell.
                --kind names the registered account kind rows classify
                against (defaults to --account's value); on a debit/credit
                statement for a liability kind (credit_card, loan),
                --liability-columns CHARGE,PAYMENT says which of "debit"/
                "credit" means a charge and which means a payment — required
                there, since a bank's own column names do not say
+               Prints the imported/skipped/
+               errors tally. --account defaults to "checking"; --dry-run
+               parses and tallies without writing. Rows imported before this
+               fix with a slashed, unparsed date will not dedup against a
+               re-import in the new ISO form — no migration (v1 is
+               synthetic-only); `transaction list --gaps` finds them.
   (default)    open the tkinter view on the cover — requires tkinter and a
                display; falls back to a guidance message if neither is present
 
@@ -54,7 +66,7 @@ commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
   obligation   obligation add <id> <payee> <amount> <due-date> <cadence> [--replace]
                obligation list · obligation show <id>
   transaction  transaction add <date> <amount> <description> --account-number N
-               transaction list [--account NAME]
+               transaction list [--account NAME] [--gaps]
   queue        queue — what's due
   ui           ui [--port N] — entry forms, intake, queue and subscriptions in the browser
 
@@ -145,13 +157,14 @@ def main(argv: list[str] | None = None) -> int:
         from homestead_ledger.cli import run_cli
         return run_cli(argv)
 
-    for statement_flag in ("--kind", "--liability-columns"):
+    for statement_flag in ("--bank", "--kind", "--liability-columns"):
         if statement_flag in argv and "--import" not in argv:
-            # Both flags describe *a statement being imported* — which pack
-            # its rows classify against, and which of its two amount columns
-            # means a charge. With no statement there is nothing for either
-            # to describe, and falling through to the window would run as
-            # though the declaration had been honoured. Refused by name.
+            # All three describe *a statement being imported* — how its date
+            # column is written, which pack its rows classify against, and
+            # which of its two amount columns means a charge. With no statement
+            # there is nothing for any of them to describe, and falling through
+            # to the window would run as though the declaration had been
+            # honoured. Refused by name.
             print(
                 f"homestead-ledger: {statement_flag} only applies to --import FILE",
                 file=sys.stderr,
@@ -189,6 +202,15 @@ def main(argv: list[str] | None = None) -> int:
                 account = argv[account_index + 1]
             except IndexError:
                 print("homestead-ledger: --account requires a value", file=sys.stderr)
+                return 2
+
+        bank = None
+        if "--bank" in argv:
+            try:
+                bank_index = argv.index("--bank")
+                bank = argv[bank_index + 1]
+            except IndexError:
+                print("homestead-ledger: --bank requires a value", file=sys.stderr)
                 return 2
 
         # I-23: the registry is the only enumeration. An unregistered account
@@ -250,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             result = importer.import_csv(
                 csv_path, account=account, account_number=account_number, kind=kind,
-                liability_columns=liability_columns, dry_run=dry_run,
+                liability_columns=liability_columns, bank=bank, dry_run=dry_run,
             )
         except (ValueError, FileNotFoundError) as exc:
             print(f"homestead-ledger: import failed — {exc}", file=sys.stderr)
