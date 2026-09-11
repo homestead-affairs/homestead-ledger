@@ -187,6 +187,22 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
     <div id="omsg"></div>
   </div>
 
+  <h2>Add an account</h2>
+  <div class="card">
+    <div class="rf">
+      <input id="alabel" placeholder="Label (chk-main, visa-chase)" style="max-width:220px">
+      <select id="akind" style="max-width:160px"></select>
+      <input id="anumber" placeholder="Account number (L5, never shown)" style="max-width:260px" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="rf">
+      <input id="ainstitution" placeholder="Institution (optional)" style="max-width:220px">
+      <label class="chk"><input type="checkbox" id="areplace"> replace if the label exists</label>
+      <button class="btn bg" onclick="storeAccount()">Add</button>
+    </div>
+    <div class="why">A label is the household's own short name for one real account — never a kind name, never the number itself. Kind L2 &middot; institution L3 &middot; number L5 (never shown again on any surface).</div>
+    <div id="amsg"></div>
+  </div>
+
   <h2>Mark an obligation paid</h2>
   <div class="card">
     <div class="rf">
@@ -209,11 +225,10 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
       <input id="tdesc" placeholder="Description / payee">
     </div>
     <div class="rf">
-      <input id="tacct" placeholder="Account number (L5, never shown)" style="max-width:260px">
-      <select id="taccount" style="max-width:160px"></select>
+      <select id="taccount" style="max-width:220px"></select>
       <button class="btn bg" onclick="storeTransaction()">Add</button>
     </div>
-    <div class="why">The books are the household's own record: a transaction is added once (a re-entry is refused) and never edited. A whole statement: <code>python -m homestead_ledger --import FILE.csv --account-number N</code>.</div>
+    <div class="why">The books are the household's own record: a transaction is added once (a re-entry is refused) and never edited, under an account already added above. A whole statement: <code>python -m homestead_ledger --import FILE.csv --account &lt;label&gt;</code>.</div>
     <div id="tmsg"></div>
   </div>
 
@@ -285,19 +300,38 @@ function storeObligation() {
   }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
 }
 
+function storeAccount() {
+  var msg=document.getElementById('amsg');
+  var body={label:document.getElementById('alabel').value.trim(),
+    kind:document.getElementById('akind').value,
+    number:document.getElementById('anumber').value.trim(),
+    institution:document.getElementById('ainstitution').value.trim(),
+    replace:document.getElementById('areplace').checked};
+  fetch('/api/account',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  .then(function(r){return r.json()}).then(function(data){
+    if(data.ok){
+      msg.innerHTML='<span class="sm s-ok">Stored '+esc(data.label)+(data.replaced?' (replaced)':'')+'</span>';
+      ['alabel','anumber','ainstitution'].forEach(function(id){document.getElementById(id).value='';});
+      document.getElementById('areplace').checked=false;
+      loadAccounts();
+    } else {msg.innerHTML='<span class="sm s-err">'+esc(data.error||'Failed')+'</span>';}
+  }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
+}
+
 function loadAccountsForPaid() {
   // The same source as the transaction form's select: `/api/status`, whose
-  // `accounts` is `registry.all_accounts()` — the registry is the only
-  // enumeration (I-23), on this surface too. Today those are the four
-  // account *kinds* (checking, savings, credit_card, loan); bite
-  // G2b-account-instances makes them the household's own account *labels*,
-  // at which point this select starts naming instances with no change here,
-  // because it never held a list of its own.
+  // `accounts` is the household's own registered instances — never a list
+  // kept here (I-23: the registry, and now the instances it classifies, are
+  // the only enumeration, on this surface too). Bite G2b-account-instances
+  // turned these from the four account *kinds* into `{label, kind}` rows,
+  // so `mark_paid` is handed the same label a transaction is filed under
+  // and the two doors cannot disagree about what an account is.
   var sel=document.getElementById('paccount');
   fetch('/api/status').then(function(r){return r.json()}).then(function(data){
     sel.innerHTML='';
     (data.accounts||[]).forEach(function(a){
-      var opt=document.createElement('option'); opt.value=a; opt.textContent=a;
+      var opt=document.createElement('option');
+      opt.value=a.label; opt.textContent=a.label+' ('+a.kind+')';
       sel.appendChild(opt);
     });
   }).catch(function(){});
@@ -329,9 +363,8 @@ function storeTransaction() {
   var body={date:document.getElementById('tdate').value.trim(),
     amount:document.getElementById('tamount').value.trim(),
     description:document.getElementById('tdesc').value.trim(),
-    account_number:document.getElementById('tacct').value.trim(),
     account:currentAccount()};
-  if(!body.account){msg.innerHTML='<span class="sm s-err">No account kinds loaded &#8212; reload the page</span>';return;}
+  if(!body.account){msg.innerHTML='<span class="sm s-err">No account on file &#8212; add one above first</span>';return;}
   fetch('/api/transaction',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
   .then(function(r){return r.json()}).then(function(data){
     if(data.ok){
@@ -343,32 +376,39 @@ function storeTransaction() {
 }
 
 // The one place this page reads which account it is working on. There is no
-// literal fallback: the account kinds come from the registry (/api/status)
-// and nowhere else, so a page that failed to load them says so rather than
-// posting to, or listing, whichever kind happened to be hardcoded here
-// (I-11 — absence is refused by name, never defaulted; I-23 — the registry
-// is the only enumeration, on this surface too).
+// literal fallback: the account instances come from /api/status and nowhere
+// else, so a page that failed to load them says so rather than posting to,
+// or listing, whichever label happened to be hardcoded here (I-11 — absence
+// is refused by name, never defaulted; I-23 — the registry is the only
+// enumeration, on this surface too).
 function currentAccount() {
   return document.getElementById('taccount').value.trim();
 }
 
 function loadAccounts() {
-  // The transaction form's account field is the registry, not a hand-kept
-  // list — a new account pack shows up here with no change but the pack
-  // itself. The list below is (re)drawn once the options exist and again
-  // whenever the operator picks a different kind, so the rows on screen are
-  // always the rows of the account the form names.
+  // The transaction form's account field is the household's own registered
+  // instances, not a hand-kept list — a newly added account shows up here
+  // with no change but the add itself. The list below is (re)drawn once the
+  // options exist and again whenever the operator picks a different
+  // account, so the rows on screen are always the rows of the account the
+  // form names. The "Add an account" form's kind select is the registry of
+  // *kinds* (`data.kinds`) — a separate, closed enumeration from the
+  // instances themselves.
   var sel=document.getElementById('taccount');
   sel.onchange=loadTransactions;
+  var kindSel=document.getElementById('akind');
   return fetch('/api/status').then(function(r){return r.json()}).then(function(data){
-    var accounts=data.accounts||[];
-    sel.innerHTML=accounts.map(function(a){
-      return '<option value="'+attr(a)+'">'+esc(a)+'</option>';
+    var accountsList=data.accounts||[];
+    sel.innerHTML=accountsList.map(function(a){
+      return '<option value="'+attr(a.label)+'">'+esc(a.label)+' ('+esc(a.kind)+')</option>';
+    }).join('');
+    kindSel.innerHTML=(data.kinds||[]).map(function(k){
+      return '<option value="'+attr(k)+'">'+esc(k)+'</option>';
     }).join('');
     loadTransactions();
   }).catch(function(){
     document.getElementById('tlist').innerHTML=
-      '<p class="sm s-err">Failed to load the account kinds</p>';
+      '<p class="sm s-err">Failed to load the account instances</p>';
   });
 }
 
@@ -480,7 +520,7 @@ function renderItems() {
     } else if(item.kind==='merchant'){
       opts='<option value="oname">Obligation payee</option><option value="tdesc">Transaction description</option>';
     } else if(item.kind==='account'){
-      opts='<option value="tacct">Account number</option>';
+      opts='<option value="anumber">Account number</option>';
     } else {
       opts='<option value="">&#8212;</option>';
     }
@@ -602,12 +642,11 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import InvalidKey, RecordExists
 
-    from homestead_ledger import balance, books, money, nestor_seam, obligations, registry
+    from homestead_ledger import accounts, balance, books, money, nestor_seam, obligations, registry
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
     from homestead_ledger.intake import extract
     from homestead_ledger.nestor_store import get_store
-    from homestead_ledger.packs import checking
     from homestead_ledger.recurring import detect_recurring
     from homestead_ledger.store import Canonical, Sidecar
 
@@ -718,7 +757,18 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             if p.path == "/":
                 return self._html(_PAGE)
             if p.path == "/api/status":
-                return self._json({"nestor": nestor_ok, "accounts": list(registry.all_accounts())})
+                # Bite 2b: `accounts` is the household's own registered
+                # *instances* — label + kind, never the number (I-13) — and
+                # `kinds` is the separate, closed registry the "Add an
+                # account" form's kind select draws from.
+                return self._json({
+                    "nestor": nestor_ok,
+                    "accounts": [
+                        {"label": label, "kind": accounts.kind_of(sidecar, label)}
+                        for label in accounts.instances(sidecar)
+                    ],
+                    "kinds": list(registry.all_accounts()),
+                })
             if p.path == "/api/obligations":
                 return self._get_obligations()
             if p.path == "/api/obligation":
@@ -762,10 +812,11 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             }})
 
         def _get_transactions(self, qs):
-            account = qs.get("account", checking.ACCOUNT)
-            if account not in registry.all_accounts():
-                # Named, not echoed, and the same answer either way: the
-                # registry is the only enumeration (I-23).
+            account = qs.get("account", "")
+            if not account or not accounts.label_exists(sidecar, account):
+                # Named, not echoed, and the same answer either way: an
+                # unregistered label is refused exactly as an unregistered
+                # kind used to be (I-23, one level down — bite 2b).
                 return self._json({"error": "unknown account"}, 400)
             # The list pane over the read-only books (I-6): date and payee
             # render, the amount derives, the account number is never a row.
@@ -794,10 +845,12 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # The recurring pass over the real books — the household's own
             # numbers, reflected. `transaction_tuples` is the payload-boundary
             # read; the detector is a pure function over what it is handed.
+            # Bite 2b: transactions are filed under instance labels, not bare
+            # kind names, so the scan is over `accounts.instances()`.
             today = dt.date.today()
             found = []
-            for account in registry.all_accounts():
-                txns = balance.transaction_tuples(canonical, account)
+            for label in accounts.instances(sidecar):
+                txns = balance.transaction_tuples(canonical, label)
                 found.extend(detect_recurring(txns, today=today))
             self._json({"subscriptions": [
                 {"merchant": c.merchant, "cadence": c.cadence, "amount": c.amount,
@@ -831,6 +884,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._post_extract(body)
             if p == "/api/obligation":
                 return self._post_obligation(body)
+            if p == "/api/account":
+                return self._post_account(body)
             if p == "/api/obligation/paid":
                 return self._post_obligation_paid(body)
             if p == "/api/transaction":
@@ -899,6 +954,36 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                     pass
             self._json({"ok": True, "id": ref[2], "replaced": replaced is not None})
 
+        def _post_account(self, body):
+            # JSON `true` and nothing else — see `_post_obligation`'s own
+            # comment on why (I-9).
+            replace = body.get("replace") is True
+
+            def optional(name: str) -> str | None:
+                value = self._field(body, name).strip()
+                return value or None
+
+            try:
+                ref, replaced = accounts.add_account(
+                    sidecar,
+                    self._field(body, "label"),
+                    kind=self._field(body, "kind"),
+                    number=self._field(body, "number"),
+                    institution=optional("institution"),
+                    opened=optional("opened"),
+                    balance_as_of=optional("balance_as_of"),
+                    rate=optional("rate"),
+                    limit=optional("limit"),
+                    payment_due_day=optional("payment_due_day"),
+                    min_payment=optional("min_payment"),
+                    replace=replace,
+                )
+            except (ValueError, UnparseableDate, InvalidKey, RecordExists) as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
+            # The number posts once and is never echoed back — this response
+            # names the label, never the number just stored (I-13).
+            self._json({"ok": True, "label": ref[2], "replaced": replaced is not None})
+
         def _post_obligation_paid(self, body):
             # JSON `true` and nothing else — the same I-9 reasoning
             # `_post_obligation`'s `replace` already carries: a checkbox
@@ -923,17 +1008,14 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                         "old_due": rolled.old_due, "rolled": rolled.rolled})
 
         def _post_transaction(self, body):
-            # I-23: the registry is the only enumeration, and this door is the
-            # one place a browser can name an account. An unregistered name
-            # would grow a phantom account in the canonical books that nothing
-            # iterating `all_accounts()` would ever read back.
-            account = self._field(body, "account") or checking.ACCOUNT
-            if account not in registry.all_accounts():
+            # Bite 2b: `account` is a registered instance's label, this
+            # door's one place a browser can name one. An unregistered label
+            # would grow a phantom matter in the canonical books that nothing
+            # iterating `accounts.instances()` would ever read back.
+            account = self._field(body, "account")
+            if not account or not accounts.label_exists(sidecar, account):
                 return self._json({"ok": False, "error": "unknown account"}, 400)
-            account_number = self._field(body, "account_number").strip()
             description = self._field(body, "description").strip()
-            if not account_number:
-                return self._json({"ok": False, "error": "an account number is required"}, 400)
             if not description:
                 return self._json({"ok": False, "error": "a description is required"}, 400)
             try:
@@ -949,9 +1031,10 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 amount = money.amount_text(self._field(body, "amount"))
             except ValueError as exc:
                 return self._json({"ok": False, "error": str(exc)}, 400)
+            kind = accounts.kind_of(sidecar, account)
             txn = books.Transaction(
-                account=account, kind=account, date=date, amount=amount,
-                description=description, account_number=account_number,
+                account=account, kind=kind, date=date, amount=amount,
+                description=description,
             )
             try:
                 item_id = books.import_transaction(txn)

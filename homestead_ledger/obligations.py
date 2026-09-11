@@ -44,7 +44,7 @@ from homestead.keep.dates import UnparseableDate, parse_deadline
 from homestead.keep.logs import Event, VisibleLog
 from homestead.keep.rungs import Classified, Disposition, Rung, Surface, compose, serve
 
-from homestead_ledger import money, registry
+from homestead_ledger import accounts, money
 from homestead_ledger.cadence import CADENCES, UnknownCadence, previous_due, roll_forward
 from homestead_ledger.packs import obligations as pack
 from homestead_ledger.store import InvalidKey, RecordExists, Ref, Replaced, Sidecar, key
@@ -202,10 +202,11 @@ def add_obligation(
     window in between. `replace=True` is the one path that overwrites, and it
     is an explicit act that reports what it displaced.
 
-    **The torn-write gap.** The four fields are four separate writes and the
+    **The torn-write gap.** The four fields — and the anchor day written
+    behind the gate, five writes in all — are separate writes and the
     adapter exposes no multi-key transaction, so a crash (or a kill) between
     them leaves a partial obligation on file — the same limitation `books.py`
-    documents for a transaction's four fields, for the same reason. Nothing
+    documents for a transaction's three fields, for the same reason. Nothing
     here guesses the rest afterwards: `rows()` shows each absent field as
     `MISSING` and flags the row as a gap, so a tear is something an operator
     sees rather than an obligation that reads whole and is not (I-8/I-11).
@@ -386,8 +387,10 @@ def mark_paid(
 
     Refuses, before writing anything:
     * `obligation_id` unknown (no `due_date`/`cadence` on file for it).
-    * `account` not one `registry.all_accounts()` knows (`ValueError`,
-      registry-validated the way `transaction add --account` already is).
+    * `account` not a registered account *instance*'s label
+      (`accounts.label_exists`, `ValueError`) — validated exactly the way
+      `books.import_transaction` validates a transaction's own account, so
+      the two doors cannot disagree about what an account is (bite 2b).
     * an empty `fingerprint`.
     * `paid_on` that is not a bare ISO date (`YYYY-MM-DD`) — this is a
       record key's own suffix, not a household-typed deadline, so it takes
@@ -408,11 +411,14 @@ def mark_paid(
     except KeyError:
         raise KeyError(f"{ident}: no such obligation on file") from None
 
-    if account not in registry.all_accounts():
-        raise ValueError(
-            f"unknown account {account!r} — one of: "
-            f"{', '.join(registry.all_accounts())}"
-        )
+    # Bite 2b: the label of a registered account *instance*, not a kind
+    # name. `mark_paid` and `books.import_transaction` are the two doors an
+    # account name comes through, and they must agree about what one is —
+    # otherwise the browser's paid form, whose select is built from the same
+    # `/api/status` instances the transaction form uses, would offer labels
+    # this function refuses.
+    if not account or not accounts.label_exists(store, account):
+        raise ValueError(accounts.unknown_label(account))
     fp = str(fingerprint).strip()
     if not fp:
         raise ValueError("a paid-by record names the transaction fingerprint")

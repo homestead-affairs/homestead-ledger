@@ -52,60 +52,64 @@ def no_egress(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", _boom("create_connection"))
 
 
-def test_import_csv_completes_with_no_network_egress(tmp_path, monkeypatch, no_egress):
+def test_import_csv_completes_with_no_network_egress(tmp_path, monkeypatch, no_egress, make_account):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    label = make_account("checking")
     path = tmp_path / "statement.csv"
     path.write_text(_CSV, encoding="utf-8")
 
-    result = importer.import_csv(path, account_number="9821")
+    result = importer.import_csv(path, account=label)
 
     assert result.imported == 2
     assert result.errors == 0
     # the import really landed — this is a real run, not a no-op the guard
     # would pass trivially.
     canonical = Canonical()
-    assert len(canonical.records("checking")) == 8  # 2 transactions * 4 fields
+    assert len(canonical.records(label)) == 6  # 2 transactions * 3 fields (I-43)
 
 
-def test_reimport_dedup_path_completes_with_no_network_egress(tmp_path, monkeypatch, no_egress):
+def test_reimport_dedup_path_completes_with_no_network_egress(tmp_path, monkeypatch, no_egress, make_account):
     """The `RecordExists`-catching dedup path is its own set of calls
     (insert, refuse, catch, tally) — proven separately rather than assumed
     to be as clean as the first import just because the happy path is."""
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    label = make_account("checking")
     path = tmp_path / "statement.csv"
     path.write_text(_CSV, encoding="utf-8")
-    importer.import_csv(path, account_number="9821")
+    importer.import_csv(path, account=label)
 
-    result = importer.import_csv(path, account_number="9821")
+    result = importer.import_csv(path, account=label)
 
     assert result.imported == 0
     assert result.skipped == 2
 
 
-def test_dry_run_completes_with_no_network_egress(tmp_path, monkeypatch, no_egress):
+def test_dry_run_completes_with_no_network_egress(tmp_path, monkeypatch, no_egress, make_account):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    label = make_account("checking")
     path = tmp_path / "statement.csv"
     path.write_text(_CSV, encoding="utf-8")
 
-    result = importer.import_csv(path, account_number="9821", dry_run=True)
+    result = importer.import_csv(path, account=label, dry_run=True)
 
     assert result.imported == 2
 
 
 def test_compose_store_over_a_real_import_completes_with_no_network_egress(
-    tmp_path, monkeypatch, no_egress
+    tmp_path, monkeypatch, no_egress, make_account
 ):
     """Bite 4's piece 1 — the real-store app-compose path — reading the
     imported rows back through `view.compose_store()`, also never dials out."""
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    label = make_account("checking")
     path = tmp_path / "statement.csv"
     path.write_text(_CSV, encoding="utf-8")
-    importer.import_csv(path, account_number="9821")
+    importer.import_csv(path, account=label)
 
     ledger = view.compose_store()
 
     assert ledger.demo is False
-    assert ledger.canonical.records("checking") != []
+    assert ledger.canonical.records(label) != []
 
 
 def test_compose_store_demo_fallback_completes_with_no_network_egress(

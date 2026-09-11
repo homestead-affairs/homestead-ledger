@@ -2,23 +2,25 @@
 
 **Synthetic data only** — this writes to a throwaway store (a fresh
 `HOMESTEAD_HOME`, set up by `__main__.py`), never a real household root. It
-imports a few invented transactions through the same path bite 4's CSV
-importer will use (`books.import_transaction`), then composes the list and
-two details through the gate — store → serve → surface, headless:
-`python -m homestead_ledger --demo`.
+registers one account instance and imports a few invented transactions
+through the same path bite 4's CSV importer will use
+(`books.import_transaction`), then composes the list and two details through
+the gate — store → serve → surface, headless: `python -m homestead_ledger
+--demo`.
 
 The values are invented; the rungs are the checking pack's real ones, so
 what renders where is the real crossing, not a mock. `date` and
 `description` (L2/L3) render as themselves; `amount` (L4) shows only its
 derived debit/credit form on the list and its real value once the detail
-pane is opened (opening it *is* the purpose declaration — I-13); the
-`account_number` (L5) never becomes a row at all, and its detail is denied
-outright, with no override anywhere.
+pane is opened (opening it *is* the purpose declaration — I-13); the account
+number (L5, on the instance since bite 2b) never becomes a row at all, and
+its detail is denied outright, with no override anywhere.
 """
 from __future__ import annotations
 
 from homestead.keep.rungs import Classified, Disposition
 
+from homestead_ledger import accounts
 from homestead_ledger import queue as queue_mod
 from homestead_ledger import recurring
 from homestead_ledger.app.window import Ref, Window
@@ -26,7 +28,12 @@ from homestead_ledger.books import Transaction, import_transaction
 from homestead_ledger.packs import obligations
 from homestead_ledger.store import Canonical, Sidecar
 
+#: The registered account *kind* the demo instance is filed under.
 ACCOUNT = "checking"
+
+#: The demo's one account *instance* — the label every demo transaction is
+#: filed under (bite 2b: `account` is a label, not a bare kind name).
+LABEL = "chk-demo"
 
 #: A fixed reference date, so the seeded obligations have stable urgency in
 #: the demo — the running app uses the real today (mirrors homestead-law's
@@ -40,45 +47,48 @@ TODAY = "2026-08-10"
 #: would — a subscription is just a checking transaction.
 _DEMO_TRANSACTIONS: list[Transaction] = [
     Transaction(
-        account=ACCOUNT, kind=ACCOUNT, date="2026-08-01", amount="-84.23",
-        description="Whole Foods Market", account_number="9821",
+        account=LABEL, kind=ACCOUNT, date="2026-08-01", amount="-84.23",
+        description="Whole Foods Market",
     ),
     Transaction(
-        account=ACCOUNT, kind=ACCOUNT, date="2026-08-03", amount="1500.00",
-        description="Employer Payroll", account_number="9821",
+        account=LABEL, kind=ACCOUNT, date="2026-08-03", amount="1500.00",
+        description="Employer Payroll",
     ),
     Transaction(
-        account=ACCOUNT, kind=ACCOUNT, date="2026-08-05", amount="-64.10",
-        description="Electric Co", account_number="9821",
+        account=LABEL, kind=ACCOUNT, date="2026-08-05", amount="-64.10",
+        description="Electric Co",
     ),
     # A monthly subscription, three months running — the recurring pattern.
     Transaction(
-        account=ACCOUNT, kind=ACCOUNT, date="2026-05-15", amount="-15.99",
-        description="Netflix", account_number="9821",
+        account=LABEL, kind=ACCOUNT, date="2026-05-15", amount="-15.99",
+        description="Netflix",
     ),
     Transaction(
-        account=ACCOUNT, kind=ACCOUNT, date="2026-06-15", amount="-15.99",
-        description="Netflix", account_number="9821",
+        account=LABEL, kind=ACCOUNT, date="2026-06-15", amount="-15.99",
+        description="Netflix",
     ),
     Transaction(
-        account=ACCOUNT, kind=ACCOUNT, date="2026-07-15", amount="-15.99",
-        description="Netflix", account_number="9821",
+        account=LABEL, kind=ACCOUNT, date="2026-07-15", amount="-15.99",
+        description="Netflix",
     ),
 ]
 
 
 def seed() -> list[str]:
-    """Import the demo transactions, returning their fingerprints in seed
-    order. Not idempotent against itself on purpose: a second `seed()` call
-    against the same store raises `RecordExists`, the same re-import refusal
-    every real import gets — the demo does not special-case its own data."""
+    """Register the demo account instance and import the demo transactions,
+    returning their fingerprints in seed order. Not idempotent against
+    itself on purpose: a second `seed()` call against the same store raises
+    `RecordExists` (on the instance, or — were it somehow already
+    registered — on the first transaction), the same re-import refusal every
+    real write gets — the demo does not special-case its own data."""
+    accounts.add_account(Sidecar(), LABEL, kind=ACCOUNT, number="9821")
     return [import_transaction(txn) for txn in _DEMO_TRANSACTIONS]
 
 
 def open_account(canonical: Canonical) -> Window:
     """Load the account from the books into a `Window`'s list pane."""
     window = Window()
-    window.open_list(canonical.records(ACCOUNT))
+    window.open_list(canonical.records(LABEL))
     return window
 
 
@@ -98,27 +108,30 @@ def compose_demo() -> str:
     item_ids = seed()
     canonical = Canonical()
 
-    lines = [f"{ACCOUNT} — cover (resting): Nothing is open (I-21)"]
+    lines = [f"{LABEL} — cover (resting): Nothing is open (I-21)"]
 
     window = open_account(canonical)
-    lines.append(f"{ACCOUNT} — list (S1_LIST):")
+    lines.append(f"{LABEL} — list (S1_LIST):")
     for row in window.rows:
         lines.append(f"  [{row.rung.value}] {row.text}")
 
     first_id = item_ids[0]
-    amount_ref: Ref = (ACCOUNT, "amount", first_id)
+    amount_ref: Ref = (LABEL, "amount", first_id)
     served = window.open_detail(amount_ref)
     shown = served.value if served.disposition is Disposition.RENDER else "(withheld)"
     lines.append(f"detail amount (S1_DETAIL): [{served.rung.value}] {shown}")
 
-    number_ref: Ref = (ACCOUNT, "account_number", first_id)
-    sealed = window.open_detail(number_ref)
+    # The account number is no longer a per-transaction field (I-43) — it
+    # lives once, on the account instance, and it is demonstrated the same
+    # way here: through the gate, never the sidecar's raw payload.
+    _, number_value = accounts.detail(Sidecar(), LABEL)["number"]
+    disposition = "render" if number_value is not None else "deny"
     lines.append(
-        f"detail account_number (S1_DETAIL): {sealed.disposition.value} (value={sealed.value!r})"
+        f"detail account_number (S1_DETAIL): {disposition} (value={number_value!r})"
     )
 
     window.close()
-    lines.append(f"{ACCOUNT} — cover (resting): {window.state} — Nothing is open (I-21/I-32)")
+    lines.append(f"{LABEL} — cover (resting): {window.state} — Nothing is open (I-21/I-32)")
     return "\n".join(lines)
 
 

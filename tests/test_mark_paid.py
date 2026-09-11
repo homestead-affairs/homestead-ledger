@@ -17,18 +17,28 @@ from homestead.keep.rungs import Classified, Rung, Surface, serve
 from homestead.keep.store import RecordExists
 from homestead.keep import paths
 
-from homestead_ledger import obligations, queue
+from homestead_ledger import accounts, obligations, queue
 from homestead_ledger.cadence import UnknownCadence
 from homestead_ledger.store import Sidecar
 
 AMOUNT = "1450.00"
 ACCOUNT_NUMBER_PLANT = "9821"     # a bank account number, to grep the log for
 
+#: Bite 2b: a paid-by record names an account *instance*'s label, never a
+#: kind name — the same string `books.import_transaction` files a
+#: transaction under, so the two doors cannot disagree about what an account
+#: is. Both are registered by the `store` fixture below.
+ACCOUNT = "chk-main"
+ACCOUNT_2 = "sav-main"
+
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
-    return Sidecar()
+    store = Sidecar()
+    accounts.add_account(store, ACCOUNT, kind="checking", number=ACCOUNT_NUMBER_PLANT)
+    accounts.add_account(store, ACCOUNT_2, kind="savings", number="7314")
+    return store
 
 
 def _pre_anchor_obligation(store, item_id, *, due_date, cadence):
@@ -59,7 +69,7 @@ def _add_rent(store, due_date="2026-08-05", cadence="monthly"):
 def test_mark_paid_rolls_the_due_date_forward(store):
     _add_rent(store)
     ref, rolled = obligations.mark_paid(
-        store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-07",
+        store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-07",
     )
     assert ref == ("obligations", "paid_by", "rent.2026-08-07")
     assert rolled.old_due == "2026-08-05" and rolled.new_due == "2026-09-05"
@@ -70,7 +80,7 @@ def test_mark_paid_rolls_the_due_date_forward(store):
 def test_once_resolves_instead_of_rescheduling(store):
     _add_rent(store, due_date="2026-08-05", cadence="once")
     ref, rolled = obligations.mark_paid(
-        store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-05",
+        store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-05",
     )
     assert rolled.new_due is None and rolled.old_due == "2026-08-05"
     # the due date itself is left as-is; a "resolved" record is what changes
@@ -81,14 +91,14 @@ def test_once_resolves_instead_of_rescheduling(store):
 
 def test_a_resolved_once_obligation_drops_out_of_the_queue(store):
     _add_rent(store, due_date="2026-08-05", cadence="once")
-    obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-05")
+    obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-05")
     items = queue.queue(store, today="2026-08-06")
     assert items == []
 
 
 def test_the_list_shows_paid_by_reference_next_to_the_row(store):
     _add_rent(store)
-    obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-07")
+    obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-07")
     rows = {r.item_id: r for r in obligations.rows(store)}
     assert rows["rent"].paid_on == "2026-08-07"
     assert rows["rent"].resolved is False
@@ -96,7 +106,7 @@ def test_the_list_shows_paid_by_reference_next_to_the_row(store):
 
 def test_the_list_flags_a_resolved_once_obligation(store):
     _add_rent(store, due_date="2026-08-05", cadence="once")
-    obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-05")
+    obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-05")
     rows = {r.item_id: r for r in obligations.rows(store)}
     assert rows["rent"].resolved is True
 
@@ -109,12 +119,12 @@ def test_mark_paid_writes_exactly_the_l2_record_and_nothing_above(store):
     itself, not the log."""
     _add_rent(store)
     obligations.mark_paid(
-        store, "rent", account="checking", fingerprint=ACCOUNT_NUMBER_PLANT, paid_on="2026-08-07",
+        store, "rent", account=ACCOUNT, fingerprint=ACCOUNT_NUMBER_PLANT, paid_on="2026-08-07",
     )
     record = store.get("obligations", "paid_by", "rent.2026-08-07")
     assert record.rung is Rung.L2
     served = serve(record, Surface.S1_LIST)
-    assert served.value == {"account": "checking", "fingerprint": ACCOUNT_NUMBER_PLANT}
+    assert served.value == {"account": ACCOUNT, "fingerprint": ACCOUNT_NUMBER_PLANT}
     # the amount is never in this record, at any rung
     assert AMOUNT not in json.dumps(served.value)
     assert AMOUNT not in json.dumps(record.payload)
@@ -126,7 +136,7 @@ def test_the_visible_log_carries_a_reference_only(store, tmp_path):
     line."""
     _add_rent(store)
     obligations.mark_paid(
-        store, "rent", account="checking", fingerprint=ACCOUNT_NUMBER_PLANT, paid_on="2026-08-07",
+        store, "rent", account=ACCOUNT, fingerprint=ACCOUNT_NUMBER_PLANT, paid_on="2026-08-07",
     )
     log_path = paths.logs_dir() / "visible.jsonl"
     text = log_path.read_text("utf-8")
@@ -149,7 +159,7 @@ def test_the_log_is_written_through_visiblelog_not_a_free_string(store, monkeypa
 
     monkeypatch.setattr(VisibleLog, "record", spy)
     _add_rent(store)
-    obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-07")
+    obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-07")
     assert calls == [(Event.ITEM_RESOLVED, ("obligations", "rent"))]
 
 
@@ -157,7 +167,7 @@ def test_the_log_is_written_through_visiblelog_not_a_free_string(store, monkeypa
 
 def test_an_unknown_obligation_id_is_refused(store):
     with pytest.raises(KeyError):
-        obligations.mark_paid(store, "nope", account="checking", fingerprint="fp-1", paid_on="2026-08-07")
+        obligations.mark_paid(store, "nope", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-07")
 
 
 def test_an_unknown_account_is_refused(store):
@@ -172,14 +182,14 @@ def test_a_non_iso_paid_on_is_refused(store):
     _add_rent(store)
     for bad in ("08/07/2026", "August 7 2026", "not a date", ""):
         with pytest.raises(ValueError, match="ISO"):
-            obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on=bad)
+            obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on=bad)
     assert not store.has("obligations", "paid_by", "rent.2026-08-07")
 
 
 def test_an_empty_fingerprint_is_refused(store):
     _add_rent(store)
     with pytest.raises(ValueError, match="fingerprint"):
-        obligations.mark_paid(store, "rent", account="checking", fingerprint="  ", paid_on="2026-08-07")
+        obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="  ", paid_on="2026-08-07")
 
 
 def test_a_cadence_outside_cadences_on_file_is_refused(store):
@@ -189,30 +199,30 @@ def test_a_cadence_outside_cadences_on_file_is_refused(store):
     obligations.add_obligation(store, item_id="rent", name="a", amount="1", due_date="2026-08-05", cadence="monthly")
     store.put("obligations", "cadence", "rent", Classified(Rung.L2, "fortnightly"), overwrite=True)
     with pytest.raises(UnknownCadence):
-        obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-07")
+        obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-07")
 
 
 def test_a_sealed_due_date_is_refused_not_silently_skipped(store):
     obligations.add_obligation(store, item_id="rent", name="a", amount="1", due_date="2026-08-05", cadence="monthly")
     store.put("obligations", "due_date", "rent", Classified(Rung.L5, "2026-08-05"), overwrite=True)
     with pytest.raises(ValueError, match="sealed"):
-        obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-07")
+        obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-07")
 
 
 # ── I-9: TOCTOU — the atomic insert is the gate, not a check ────────────────
 
 def test_a_second_mark_paid_for_the_same_id_and_date_is_refused_unless_replace(store):
     _add_rent(store)
-    obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-07")
+    obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-07")
     with pytest.raises(RecordExists):
-        obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-2", paid_on="2026-08-07")
+        obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-2", paid_on="2026-08-07")
     # the due date only rolled once
     assert obligations.detail(store, "rent")["due_date"] == ("L2", "2026-09-05")
 
     # --replace is the one path that goes through, and rolls again from the
     # (already rolled) due date on file
     _ref, rolled = obligations.mark_paid(
-        store, "rent", account="checking", fingerprint="fp-2", paid_on="2026-08-07", replace=True,
+        store, "rent", account=ACCOUNT, fingerprint="fp-2", paid_on="2026-08-07", replace=True,
     )
     assert rolled.old_due == "2026-09-05"
 
@@ -222,12 +232,12 @@ def test_a_racing_second_mark_paid_is_refused_by_the_store_not_a_check(store, mo
     (I-9): poison `has()` to always answer "free" — the lost-race answer —
     and the refusal must still arrive out of the adapter's atomic insert."""
     _add_rent(store)
-    obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-1", paid_on="2026-08-07")
+    obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-1", paid_on="2026-08-07")
 
     monkeypatch.setattr(type(store), "has", lambda *a, **k: False)
 
     with pytest.raises(RecordExists):
-        obligations.mark_paid(store, "rent", account="checking", fingerprint="fp-2", paid_on="2026-08-07")
+        obligations.mark_paid(store, "rent", account=ACCOUNT, fingerprint="fp-2", paid_on="2026-08-07")
 
 
 # ── the CLI and server refusals never echo an amount ────────────────────────
@@ -282,7 +292,7 @@ def test_a_month_end_obligation_climbs_back_after_february(store):
     seen = []
     for paid_on in ("2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30"):
         _ref, rolled = obligations.mark_paid(
-            store, "rent", account="checking", fingerprint=f"fp-{paid_on}",
+            store, "rent", account=ACCOUNT, fingerprint=f"fp-{paid_on}",
             paid_on=paid_on,
         )
         seen.append(rolled.new_due)
@@ -308,10 +318,10 @@ def test_a_quarterly_month_end_obligation_keeps_its_anchor(store):
         due_date="2026-11-30", cadence="quarterly",
     )
     _ref, first = obligations.mark_paid(
-        store, "water", account="checking", fingerprint="f1", paid_on="2026-11-30")
+        store, "water", account=ACCOUNT, fingerprint="f1", paid_on="2026-11-30")
     assert first.new_due == "2027-02-28"
     _ref, second = obligations.mark_paid(
-        store, "water", account="checking", fingerprint="f2", paid_on="2027-02-28")
+        store, "water", account=ACCOUNT, fingerprint="f2", paid_on="2027-02-28")
     assert second.new_due == "2027-05-30"
 
 
@@ -325,7 +335,7 @@ def test_an_obligation_added_mid_month_never_moves(store):
     seen = []
     for paid_on in ("2026-01-15", "2026-02-15", "2026-03-15"):
         _ref, rolled = obligations.mark_paid(
-            store, "gym", account="checking", fingerprint=f"f-{paid_on}", paid_on=paid_on)
+            store, "gym", account=ACCOUNT, fingerprint=f"f-{paid_on}", paid_on=paid_on)
         seen.append(rolled.new_due)
     assert seen == ["2026-02-15", "2026-03-15", "2026-04-15"]
 
@@ -362,11 +372,11 @@ def test_an_obligation_without_an_anchor_falls_back_to_its_due_date(store):
     """
     _pre_anchor_obligation(store, "rent", due_date="2026-01-31", cadence="monthly")
     _ref, rolled = obligations.mark_paid(
-        store, "rent", account="checking", fingerprint="f1", paid_on="2026-01-31")
+        store, "rent", account=ACCOUNT, fingerprint="f1", paid_on="2026-01-31")
     assert rolled.new_due == "2026-02-28"
     # and the next one stays clamped — the anchor is gone, not recoverable
     _ref, again = obligations.mark_paid(
-        store, "rent", account="checking", fingerprint="f2", paid_on="2026-02-28")
+        store, "rent", account=ACCOUNT, fingerprint="f2", paid_on="2026-02-28")
     assert again.new_due == "2026-03-28"
 
 
@@ -377,7 +387,7 @@ def test_a_corrupt_anchor_falls_back_rather_than_refusing(store):
     store.put(obligations.KIND, "due_day", "rent",
               Classified(Rung.L2, "the thirty-first"), overwrite=True)
     _ref, rolled = obligations.mark_paid(
-        store, "rent", account="checking", fingerprint="f1", paid_on="2026-01-31")
+        store, "rent", account=ACCOUNT, fingerprint="f1", paid_on="2026-01-31")
     assert rolled.new_due == "2026-02-28"
 
 
@@ -404,7 +414,7 @@ def test_a_payment_for_last_period_does_not_tick_the_open_one(store):
         store, item_id="rent", name="Sunrise Properties LLC", amount=AMOUNT,
         due_date="2026-07-01", cadence="monthly",
     )
-    obligations.mark_paid(store, "rent", account="checking",
+    obligations.mark_paid(store, "rent", account=ACCOUNT,
                           fingerprint="f1", paid_on="2026-07-01")
 
     before = [r for r in obligations.rows(store, today="2026-07-20")
@@ -424,7 +434,7 @@ def test_a_lapsed_obligation_is_not_ticked_by_an_old_payment(store):
     payment for it."""
     _add_rent(store, due_date="2026-08-01")
     store.put(obligations.KIND, "paid_by", "rent.2026-05-15",
-              Classified(Rung.L2, {"account": "checking", "fingerprint": "f1"}),
+              Classified(Rung.L2, {"account": ACCOUNT, "fingerprint": "f1"}),
               overwrite=True)
     row = [r for r in obligations.rows(store) if r.item_id == "rent"][0]
     assert row.paid_on == "2026-05-15" and row.paid_current is False
@@ -437,11 +447,11 @@ def test_a_payment_inside_the_current_period_does_tick_it(store):
         store, item_id="rent", name="Sunrise Properties LLC", amount=AMOUNT,
         due_date="2026-07-01", cadence="monthly",
     )
-    obligations.mark_paid(store, "rent", account="checking",
+    obligations.mark_paid(store, "rent", account=ACCOUNT,
                           fingerprint="f1", paid_on="2026-07-01")
     # a second, later payment — now the due date is 2026-09-01 and the
     # payment that moved it there (2026-08-01) is inside the closed period.
-    obligations.mark_paid(store, "rent", account="checking",
+    obligations.mark_paid(store, "rent", account=ACCOUNT,
                           fingerprint="f2", paid_on="2026-08-01")
     row = [r for r in obligations.rows(store) if r.item_id == "rent"][0]
     assert (row.due_date, row.paid_on, row.paid_current) == (
@@ -454,7 +464,7 @@ def test_paid_on_exactly_the_previous_due_date_counts_as_current(store):
     obligations.add_obligation(
         store, item_id="gym", name="Gym", amount=AMOUNT,
         due_date="2026-07-15", cadence="monthly")
-    obligations.mark_paid(store, "gym", account="checking",
+    obligations.mark_paid(store, "gym", account=ACCOUNT,
                           fingerprint="f1", paid_on="2026-07-15")
     row = [r for r in obligations.rows(store) if r.item_id == "gym"][0]
     # due is now 2026-08-15; the previous due date is 2026-07-15 exactly.
@@ -465,7 +475,7 @@ def test_a_resolved_once_obligation_is_always_marked_paid(store):
     """A `once` obligation has no next period to be behind on: once resolved,
     the mark is simply true."""
     _add_rent(store, cadence="once")
-    obligations.mark_paid(store, "rent", account="checking",
+    obligations.mark_paid(store, "rent", account=ACCOUNT,
                           fingerprint="f1", paid_on="2026-08-06")
     row = [r for r in obligations.rows(store) if r.item_id == "rent"][0]
     assert row.resolved is True and row.paid_current is True
@@ -475,7 +485,7 @@ def test_an_unresolved_once_obligation_is_never_marked_current(store):
     """No cadence window, no resolution: no claim."""
     _add_rent(store, cadence="once")
     store.put(obligations.KIND, "paid_by", "rent.2026-08-06",
-              Classified(Rung.L2, {"account": "checking", "fingerprint": "f1"}),
+              Classified(Rung.L2, {"account": ACCOUNT, "fingerprint": "f1"}),
               overwrite=True)
     row = [r for r in obligations.rows(store) if r.item_id == "rent"][0]
     assert row.paid_on == "2026-08-06" and row.paid_current is False
@@ -487,7 +497,7 @@ def test_an_unreadable_cadence_makes_no_claim_rather_than_a_wrong_one(store):
     store.put(obligations.KIND, "cadence", "rent",
               Classified(Rung.L2, "fortnightly"), overwrite=True)
     store.put(obligations.KIND, "paid_by", "rent.2026-08-06",
-              Classified(Rung.L2, {"account": "checking", "fingerprint": "f1"}),
+              Classified(Rung.L2, {"account": ACCOUNT, "fingerprint": "f1"}),
               overwrite=True)
     row = [r for r in obligations.rows(store) if r.item_id == "rent"][0]
     assert row.paid_on == "2026-08-06" and row.paid_current is False
@@ -498,7 +508,7 @@ def test_the_cli_list_ticks_only_the_current_period(store, capsys):
     its own clock, so a lapsed obligation reads "last paid", not "paid ✓"."""
     from homestead_ledger.cli import run_cli
     _add_rent(store, due_date="2020-07-01")   # long past, on any real clock
-    obligations.mark_paid(store, "rent", account="checking",
+    obligations.mark_paid(store, "rent", account=ACCOUNT,
                           fingerprint="f1", paid_on="2020-07-01")
     capsys.readouterr()
     assert run_cli(["obligation", "list"]) == 0
@@ -519,11 +529,11 @@ def test_a_back_dated_payment_does_not_re_roll_the_due_date(store):
         store, item_id="card", name="Card", amount=AMOUNT,
         due_date="2026-01-01", cadence="monthly")
     _ref, first = obligations.mark_paid(
-        store, "card", account="checking", fingerprint="f1", paid_on="2026-01-01")
+        store, "card", account=ACCOUNT, fingerprint="f1", paid_on="2026-01-01")
     assert first.new_due == "2026-02-01" and first.rolled is True
 
     _ref, back = obligations.mark_paid(
-        store, "card", account="checking", fingerprint="f0", paid_on="2025-12-01")
+        store, "card", account=ACCOUNT, fingerprint="f0", paid_on="2025-12-01")
     assert back.rolled is False
     # not forwards, and — the weaker claim, worth stating — not backwards:
     # the date on file is the one the January payment set, unchanged.
@@ -540,15 +550,15 @@ def test_re_recording_the_same_date_with_replace_does_not_advance_twice(store):
     one correction."""
     _add_rent(store, due_date="2026-08-05")
     _ref, first = obligations.mark_paid(
-        store, "rent", account="checking", fingerprint="f1", paid_on="2026-08-06")
+        store, "rent", account=ACCOUNT, fingerprint="f1", paid_on="2026-08-06")
     assert first.new_due == "2026-09-05"
     _ref, again = obligations.mark_paid(
-        store, "rent", account="savings", fingerprint="f2",
+        store, "rent", account=ACCOUNT_2, fingerprint="f2",
         paid_on="2026-08-06", replace=True)
     assert again.rolled is False and again.new_due == "2026-09-05"
     served = serve(store.get(obligations.KIND, "paid_by", "rent.2026-08-06"),
                    Surface.S1_DETAIL)
-    assert served.value == {"account": "savings", "fingerprint": "f2"}
+    assert served.value == {"account": ACCOUNT_2, "fingerprint": "f2"}
 
 
 def test_the_cli_says_the_schedule_stood_still(store, capsys):
@@ -556,10 +566,10 @@ def test_the_cli_says_the_schedule_stood_still(store, capsys):
     obligations.add_obligation(
         store, item_id="card", name="Card", amount=AMOUNT,
         due_date="2026-01-01", cadence="monthly")
-    obligations.mark_paid(store, "card", account="checking",
+    obligations.mark_paid(store, "card", account=ACCOUNT,
                           fingerprint="f1", paid_on="2026-01-01")
     capsys.readouterr()
-    assert run_cli(["obligation", "paid", "card", "--account", "checking",
+    assert run_cli(["obligation", "paid", "card", "--account", ACCOUNT,
                     "--fingerprint", "f0", "--on", "2025-12-01"]) == 0
     out = capsys.readouterr().out
     assert "schedule unchanged" in out and "2026-02-01" in out
@@ -584,7 +594,7 @@ def test_an_obligation_stored_as_annual_is_still_readable(store):
     assert any(q.ref[2] == "registration" for q in queue.queue(store, today="2026-10-01"))
 
     with pytest.raises(UnknownCadence) as caught:
-        obligations.mark_paid(store, "registration", account="checking",
+        obligations.mark_paid(store, "registration", account=ACCOUNT,
                               fingerprint="f1", paid_on="2026-11-01")
     assert "yearly" in str(caught.value)
 
@@ -611,7 +621,7 @@ def test_a_resolved_once_obligation_still_shows(store, capsys):
     """
     from homestead_ledger.cli import run_cli
     _add_rent(store, cadence="once")
-    obligations.mark_paid(store, "rent", account="checking",
+    obligations.mark_paid(store, "rent", account=ACCOUNT,
                           fingerprint="f1", paid_on="2026-08-06")
 
     assert not queue.queue(store, today="2026-08-20")

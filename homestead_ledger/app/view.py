@@ -22,13 +22,14 @@ re-serves that one field and the amount renders in full (opening the pane
 *is* the purpose declaration). "What's due" composes the obligations queue,
 gaps first, then overdue, then soonest (I-8).
 
-**Bite 2a — one button per registered account kind.** `account_buttons()`
-pairs each `registry.all_accounts()` kind with the label its cover button
-shows ("Open checking account", "Open savings account", …) — factored out
-headless (no tkinter) so bite 2a's new packs (`savings`, `credit_card`,
-`loan`) prove they get a button with no other change here, the same "one
-enumeration" posture `registry.py` itself takes. `show_list` opens whichever
-kind its button named; there is no longer one hardcoded checking pane.
+**Bite 2a — one button per registered account kind; bite 2b — one per
+instance.** `account_buttons(sidecar)` now pairs each real account
+*instance* (`accounts.instances()`) with the label its cover button shows
+("Open chk-main (checking)", …) — factored out headless (no tkinter) so a
+newly registered instance proves it gets a button with no other change
+here, the same "one enumeration" posture `registry.py` itself takes for
+kinds. `show_list` opens whichever instance's label its button named; there
+is no longer one hardcoded checking pane.
 
 **No reveal-expire timer.** I-32's ground is "a reveal does not persist past
 the act that asked for it" — `Window.close()` already enforces that by
@@ -64,7 +65,7 @@ from datetime import date
 from homestead.app import theme
 from homestead.keep.rungs import Disposition
 
-from homestead_ledger import registry
+from homestead_ledger import accounts, registry
 from homestead_ledger import queue as queue_mod
 from homestead_ledger.app import demo
 from homestead_ledger.app.window import Window
@@ -100,12 +101,12 @@ class LedgerContext:
 
 def _has_real_data(canonical: Canonical, sidecar: Sidecar) -> bool:
     """True the moment the real books hold one transaction for a registered
-    account, or the real sidecar holds one record for a registered
-    obligation kind. Iterates the registries (I-23) rather than hand-naming
-    `"checking"`/`"obligations"`, so a future account or obligation kind is
-    picked up with no change here."""
-    for account_name in registry.all_accounts():
-        if canonical.records(account_name):
+    account instance, or the real sidecar holds one record for a registered
+    obligation kind. Iterates `accounts.instances()`/`all_obligations()`
+    (I-23) rather than hand-naming a label or a kind, so a future account or
+    obligation is picked up with no change here."""
+    for label in accounts.instances(sidecar):
+        if canonical.records(label):
             return True
     for kind in registry.all_obligations():
         if sidecar.records(kind):
@@ -113,12 +114,17 @@ def _has_real_data(canonical: Canonical, sidecar: Sidecar) -> bool:
     return False
 
 
-def account_buttons() -> tuple[tuple[str, str], ...]:
-    """`(label, kind)` for every registered account kind, in registry order
-    — the cover's one-button-per-kind list, factored out headless so bite
-    2a's new packs prove they get a button with no other change here (I-23:
-    iterate `registry.all_accounts()`, never a hand-kept list of buttons)."""
-    return tuple((f"Open {kind} account", kind) for kind in registry.all_accounts())
+def account_buttons(sidecar: Sidecar) -> tuple[tuple[str, str], ...]:
+    """`(button label, account label)` for every registered account
+    *instance*, in `accounts.instances()`'s sorted order — the cover's
+    one-button-per-instance list (bite 2b), factored out headless so a newly
+    registered instance proves it gets a button with no other change here
+    (I-23: iterate the registry of instances, never a hand-kept list of
+    buttons)."""
+    return tuple(
+        (f"Open {label} ({accounts.kind_of(sidecar, label)})", label)
+        for label in accounts.instances(sidecar)
+    )
 
 
 def compose_store() -> LedgerContext:
@@ -189,15 +195,16 @@ def run() -> int:
         # The resting cover shows only counts that survive the re-identification
         # check (I-31). Over the single obligation kind bite 2 registers that is
         # nothing, so the cover rests on "Nothing is open" — the queue is there
-        # the moment the operator asks for it.
-        resting = queue_mod.cover(sidecar, today=today)
+        # the moment the operator asks for it. Bite 2b adds the same check over
+        # the household's own account instances (`accounts.cover`).
+        resting = {**queue_mod.cover(sidecar, today=today), **accounts.cover(sidecar)}
         summary = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in resting.items())
         ttk.Label(content, text=summary or "Nothing is open.", style="Muted.TLabel").pack(anchor="w")
         ttk.Button(content, text="What's due", command=show_queue).pack(anchor="w", pady=(24, 0))
-        for label, kind in account_buttons():
+        for button_label, account_label in account_buttons(sidecar):
             ttk.Button(
-                content, text=label, style="Secondary.TButton",
-                command=lambda kind=kind: show_list(kind),
+                content, text=button_label, style="Secondary.TButton",
+                command=lambda account_label=account_label: show_list(account_label),
             ).pack(anchor="w", pady=(8, 0))
 
     def show_queue() -> None:
@@ -239,10 +246,10 @@ def run() -> int:
             content, text="Close", style="Secondary.TButton", command=show_cover,
         ).pack(anchor="w", pady=(4, 0))
 
-    def show_list(kind: str) -> None:
+    def show_list(label: str) -> None:
         clear()
-        window.open_list(canonical.records(kind))
-        ttk.Label(content, text=kind, style="Heading.TLabel").pack(anchor="w")
+        window.open_list(canonical.records(label))
+        ttk.Label(content, text=label, style="Heading.TLabel").pack(anchor="w")
         # one indicator per pane, not per row (I-33): the pane says an L4 is
         # present in its derived form, never a badge on every line — each
         # row's own colour (`theme.rung_color`) is the per-row signal.
@@ -265,7 +272,7 @@ def run() -> int:
         def on_open(_event: object = None) -> None:
             selection = listbox.curselection()
             if selection:
-                show_detail(rows[selection[0]].ref, back=lambda: show_list(kind))
+                show_detail(rows[selection[0]].ref, back=lambda: show_list(label))
 
         listbox.bind("<Double-Button-1>", on_open)
         ttk.Button(content, text="Open", command=on_open).pack(anchor="w", pady=(12, 0))

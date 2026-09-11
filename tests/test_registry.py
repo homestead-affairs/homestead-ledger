@@ -81,6 +81,26 @@ def test_account_is_strict_about_an_unknown_name():
         account("not_an_account")
 
 
+# ── bite 2b — the accounts sidecar matter is not a discovered account kind ──
+
+def test_the_accounts_sidecar_is_not_a_discovered_pack():
+    """`packs/accounts.py` declares a schema for the sidecar matter
+    `accounts` (real account instances, decision 9) — it is not a pack in
+    `all_accounts()`, and must never become one: a label could then be
+    mistaken for a kind, exactly what I-43's own refusal exists to prevent.
+    It declares no `ACCOUNT`/`OBLIGATION` (the attributes `_discover_packs`/
+    `_discover_obligation_packs` scan for), so neither registry ever finds
+    it — checked directly against both discovery functions, not only against
+    today's `REGISTRY` contents."""
+    from homestead_ledger.packs import accounts as accounts_pack
+
+    assert not hasattr(accounts_pack, "ACCOUNT")
+    assert not hasattr(accounts_pack, "OBLIGATION")
+    assert "accounts" not in all_accounts()
+    assert accounts_pack not in registry_mod._discover_packs().values()
+    assert accounts_pack not in registry_mod._discover_obligation_packs().values()
+
+
 # ── the import-time guard fires — BUG-6's shape, from each side ─────────────
 
 def _fake_pack(name: str, *, liability: bool = False) -> types.ModuleType:

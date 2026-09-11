@@ -8,6 +8,10 @@ record; the app reads it and never edits or deletes it"). `books.py` is that
 operator tool for this bite: it writes straight to the CANONICAL table via
 the low-level adapter, which is why these tests exist here rather than
 against `Canonical`/`Sidecar`.
+
+Bite 2b: a transaction's `account` is a registered account **instance**
+label, not a bare kind name — every test here registers one (via the shared
+`make_account` fixture, `conftest.py`) before importing against it.
 """
 from __future__ import annotations
 
@@ -22,59 +26,63 @@ from homestead_ledger.books import Transaction, import_transaction
 from homestead_ledger.fingerprint import fingerprint
 from homestead_ledger.store import Canonical
 
+LABEL = "chk-t"
+
 
 def _txn(**overrides) -> Transaction:
     base = dict(
-        account="checking",
+        account=LABEL,
         kind="checking",
         date="2026-08-01",
         amount="-84.23",
         description="Whole Foods Market",
-        account_number="9821",
     )
     base.update(overrides)
     return Transaction(**base)
 
 
-def test_import_writes_one_record_per_field(tmp_path, monkeypatch):
+def test_import_writes_one_record_per_field(tmp_path, monkeypatch, make_account):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
     txn = _txn()
     item_id = import_transaction(txn)
 
     assert item_id == fingerprint(
-        date=txn.date, amount=txn.amount, description=txn.description, account=txn.account_number
+        date=txn.date, amount=txn.amount, description=txn.description, account="9821"
     )
     canonical = Canonical()
-    assert canonical.get("checking", "date", item_id).payload == "2026-08-01"
-    assert canonical.get("checking", "amount", item_id).payload == "-84.23"
-    assert canonical.get("checking", "description", item_id).payload == "Whole Foods Market"
-    assert canonical.get("checking", "account_number", item_id).payload == "9821"
+    assert canonical.get(LABEL, "date", item_id).payload == "2026-08-01"
+    assert canonical.get(LABEL, "amount", item_id).payload == "-84.23"
+    assert canonical.get(LABEL, "description", item_id).payload == "Whole Foods Market"
+    with pytest.raises(KeyError):
+        canonical.get(LABEL, "account_number", item_id)  # I-43: no longer written
 
 
-def test_import_classifies_each_field_at_the_packs_declared_rung(tmp_path, monkeypatch):
+def test_import_classifies_each_field_at_the_packs_declared_rung(tmp_path, monkeypatch, make_account):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
     txn = _txn()
     item_id = import_transaction(txn)
     canonical = Canonical()
 
-    assert canonical.get("checking", "date", item_id).rung is Rung.L2
-    assert canonical.get("checking", "description", item_id).rung is Rung.L3
-    assert canonical.get("checking", "amount", item_id).rung is Rung.L4
-    assert canonical.get("checking", "account_number", item_id).rung is Rung.L5
+    assert canonical.get(LABEL, "date", item_id).rung is Rung.L2
+    assert canonical.get(LABEL, "description", item_id).rung is Rung.L3
+    assert canonical.get(LABEL, "amount", item_id).rung is Rung.L4
 
 
-def test_l4_amount_carries_a_generic_derived_form_not_the_number(tmp_path, monkeypatch):
+def test_l4_amount_carries_a_generic_derived_form_not_the_number(tmp_path, monkeypatch, make_account):
     """The derived form stands in for the payload on a surface that cannot
     take the real amount — it must not itself leak the magnitude, only that a
     debit or a credit is on file (the same convention the bite-0 store-binding
     fixture already used: `derived="a debit is on file"`)."""
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
     debit_id = import_transaction(_txn(amount="-84.23"))
     credit_id = import_transaction(_txn(date="2026-08-02", amount="1500.00", description="Payroll"))
 
     canonical = Canonical()
-    debit = canonical.get("checking", "amount", debit_id)
-    credit = canonical.get("checking", "amount", credit_id)
+    debit = canonical.get(LABEL, "amount", debit_id)
+    credit = canonical.get(LABEL, "amount", credit_id)
     assert debit.derived == "a debit is on file"
     assert credit.derived == "a credit is on file"
     assert "84.23" not in debit.derived
@@ -83,8 +91,9 @@ def test_l4_amount_carries_a_generic_derived_form_not_the_number(tmp_path, monke
 
 # ── idempotent re-import — I-7 (one key) / I-9 (no silent clobber) ─────────
 
-def test_reimporting_the_same_transaction_is_refused_not_duplicated(tmp_path, monkeypatch):
+def test_reimporting_the_same_transaction_is_refused_not_duplicated(tmp_path, monkeypatch, make_account):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
     txn = _txn()
     first_id = import_transaction(txn)
 
@@ -94,18 +103,19 @@ def test_reimporting_the_same_transaction_is_refused_not_duplicated(tmp_path, mo
     # and nothing was overwritten or duplicated: the one record is still there,
     # unchanged, and there is exactly one row for this transaction's amount.
     canonical = Canonical()
-    assert canonical.get("checking", "amount", first_id).payload == "-84.23"
+    assert canonical.get(LABEL, "amount", first_id).payload == "-84.23"
 
     adapter = SQLiteAdapter(paths.home() / "homestead-ledger.db")
-    rows = adapter.read_matter(CANONICAL, "checking")
+    rows = adapter.read_matter(CANONICAL, LABEL)
     amount_rows = [r for r in rows if r[0][1] == "amount"]
     assert len(amount_rows) == 1
 
 
-def test_reimport_refusal_does_not_touch_a_different_transaction(tmp_path, monkeypatch):
+def test_reimport_refusal_does_not_touch_a_different_transaction(tmp_path, monkeypatch, make_account):
     """A refused re-import must not disturb an unrelated transaction sharing
     the same account — the refusal is scoped to the one occupied key."""
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
     first = _txn()
     second = _txn(date="2026-08-02", amount="1500.00", description="Payroll")
     import_transaction(first)
@@ -118,13 +128,14 @@ def test_reimport_refusal_does_not_touch_a_different_transaction(tmp_path, monke
     # the second transaction is untouched
     second_id = fingerprint(
         date=second.date, amount=second.amount, description=second.description,
-        account=second.account_number,
+        account="9821",
     )
-    assert canonical.get("checking", "amount", second_id).payload == "1500.00"
+    assert canonical.get(LABEL, "amount", second_id).payload == "1500.00"
 
 
-def test_two_genuinely_different_transactions_both_import(tmp_path, monkeypatch):
+def test_two_genuinely_different_transactions_both_import(tmp_path, monkeypatch, make_account):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
     a = import_transaction(_txn())
     b = import_transaction(_txn(date="2026-08-02", amount="1500.00", description="Payroll"))
     assert a != b
@@ -143,49 +154,80 @@ def test_canonical_still_exposes_no_write_method():
 
 # ── bite 2a — classification is registry-driven, not `checking`-shaped ─────
 
-def test_import_classifies_by_the_registered_kind_not_checking(tmp_path, monkeypatch):
+def test_import_classifies_by_the_registered_kind_not_checking(tmp_path, monkeypatch, make_account):
     """A `credit_card` import must derive the *card's* words for its amount
     ("a charge is on file"), not checking's ("a debit is on file") — proof
     that `import_transaction` reads the pack `txn.kind` names, never the one
     pack this module used to import by name."""
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
-    txn = _txn(
-        account="credit_card", kind="credit_card", amount="-42.00",
-        description="Hardware Store",
-    )
+    label = make_account("credit_card", number="4242")
+    txn = _txn(account=label, kind="credit_card", amount="-42.00", description="Hardware Store")
     item_id = import_transaction(txn)
 
     canonical = Canonical()
-    amount = canonical.get("credit_card", "amount", item_id)
+    amount = canonical.get(label, "amount", item_id)
     assert amount.rung is Rung.L4
     assert amount.derived == "a charge is on file"
     assert amount.derived != "a debit is on file"
 
     payment = _txn(
-        account="credit_card", kind="credit_card", date="2026-08-02",
-        amount="42.00", description="Payment Received",
+        account=label, kind="credit_card", date="2026-08-02", amount="42.00",
+        description="Payment Received",
     )
     payment_id = import_transaction(payment)
-    assert canonical.get("credit_card", "amount", payment_id).derived == (
+    assert canonical.get(label, "amount", payment_id).derived == (
         "a payment or credit is on file"
     )
 
 
-def test_an_unregistered_kind_is_refused_by_name(tmp_path, monkeypatch):
-    """A phantom kind must never reach the store — refused by name, as a
-    `ValueError` naming `all_accounts()`, before any row is written."""
+def test_a_label_with_no_account_instance_is_refused_by_name(tmp_path, monkeypatch):
+    """I-43/bite 2b: a transaction filed under a label nothing registered is
+    refused by name, before any row is written — the phantom-matter shape
+    I-23 forbids for a kind, one level down for a label."""
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
-    from homestead_ledger import registry
+    txn = _txn(account="no-such-label")
+    with pytest.raises(ValueError) as exc:
+        import_transaction(txn)
+    assert "no-such-label" in str(exc.value)
 
-    txn = _txn(account="brokerage", kind="brokerage")
+    assert Canonical().records("no-such-label") == []
+
+
+def test_an_instance_with_a_kind_the_registry_no_longer_has_is_refused_by_name(tmp_path, monkeypatch):
+    """`accounts.add_account` validates `kind` at write time, but nothing
+    stops a registry from later dropping a kind an instance was registered
+    under — `import_transaction`'s own `registry.account` lookup is a second
+    fail-closed check, not a redundant one. Written directly, bypassing
+    `add_account`'s own validation, to exercise exactly that path."""
+    from homestead.keep.rungs import Classified, Rung
+
+    from homestead_ledger import accounts
+    from homestead_ledger.store import Sidecar
+
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    sidecar = Sidecar()
+    sidecar.put(accounts.MATTER, "kind", "phantom-t", Classified(Rung.L2, "brokerage"))
+    sidecar.put(accounts.MATTER, "number", "phantom-t", Classified(Rung.L5, "4242"))
+
+    txn = _txn(account="phantom-t", kind="brokerage")
     with pytest.raises(ValueError) as exc:
         import_transaction(txn)
     assert "brokerage" in str(exc.value)
-    for name in registry.all_accounts():
-        assert name in str(exc.value)
+    assert Canonical().records("phantom-t") == []
 
-    # and nothing landed on the books for the refused kind.
-    assert Canonical().records("brokerage") == []
+
+def test_a_kind_mismatch_with_the_instance_is_refused(tmp_path, monkeypatch, make_account):
+    """`txn.kind` disagreeing with the instance's own registered kind is
+    refused rather than silently trusted — a stale or hand-typed value would
+    otherwise classify a card's fields against the checking pack."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
+    txn = _txn(account=LABEL, kind="credit_card")
+    with pytest.raises(ValueError) as exc:
+        import_transaction(txn)
+    assert LABEL in str(exc.value)
+    assert "checking" in str(exc.value)
+    assert "credit_card" in str(exc.value)
 
 
 def _transaction_calls_missing_kind(tree) -> list[int]:
@@ -207,12 +249,11 @@ def _transaction_calls_missing_kind(tree) -> list[int]:
 
 
 def test_every_transaction_in_the_package_says_which_kind_it_is():
-    """`Transaction.kind` defaults to `checking` so bite 1's callers keep
-    working — which means a caller that forgets it does not fail, it
-    classifies a card's or a loan's fields against the *checking* pack and
-    writes "a debit is on file" over a charge. Nothing silent about it is
-    visible at the call site, so the call sites are held here: every
-    `Transaction(...)` built inside the package names its kind."""
+    """Nothing silent is visible at a call site that forgets `kind` — it
+    would classify a card's or a loan's fields against the *checking* pack
+    and write "a debit is on file" over a charge (or, since bite 2b, simply
+    disagree with the instance and be refused). Every `Transaction(...)`
+    built inside the package names its kind."""
     import ast
     from pathlib import Path
 
@@ -236,26 +277,28 @@ def test_the_kind_scan_catches_a_planted_call_without_it():
 
     planted = ast.parse(
         "books.Transaction(account='credit_card', date='2026-08-01', "
-        "amount='-42.00', description='x', account_number='1')\n"
+        "amount='-42.00', description='x')\n"
     )
     assert _transaction_calls_missing_kind(planted) == [1]
     clean = ast.parse(
         "books.Transaction(account='credit_card', kind='credit_card', "
-        "date='2026-08-01', amount='-42.00', description='x', account_number='1')\n"
+        "date='2026-08-01', amount='-42.00', description='x')\n"
     )
     assert _transaction_calls_missing_kind(clean) == []
 
 
-def test_import_transaction_bypasses_canonical_and_sidecar_deliberately(tmp_path, monkeypatch):
+def test_import_transaction_bypasses_canonical_and_sidecar_deliberately(tmp_path, monkeypatch, make_account):
     """books.py does not — cannot — call `Canonical.put` (it does not exist)
-    or `Sidecar.put` (that would land a transaction in the household's
-    overlay, not the books). It writes through the adapter directly, at the
-    one place the operator's own import tool is allowed to. This test pins
-    that the round-trip still reads back correctly through the real engine's
-    own `Canonical.get`, so a future change to the store's serialization
-    format would be caught here rather than only in the engine's own suite.
+    or `Sidecar.put` for a transaction's own fields (that would land it in
+    the household's overlay, not the books). It writes through the adapter
+    directly, at the one place the operator's own import tool is allowed to.
+    This test pins that the round-trip still reads back correctly through the
+    real engine's own `Canonical.get`, so a future change to the store's
+    serialization format would be caught here rather than only in the
+    engine's own suite.
     """
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
     txn = _txn()
     item_id = import_transaction(txn)
     adapter = SQLiteAdapter(paths.home() / "homestead-ledger.db")

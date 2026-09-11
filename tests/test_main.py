@@ -130,33 +130,47 @@ def test_no_display_returns_nonzero_with_guidance(capsys, monkeypatch):
 # ── a statement flag with no statement is refused, never quietly dropped ───
 
 
-def test_kind_and_liability_columns_without_import_are_refused(capsys, monkeypatch):
-    """Both flags describe a statement being imported. With no `--import`
-    there is nothing for either to describe, and the old behaviour — fall
-    through to the window — ran as though the declaration had been honoured:
-    the operator who typed `--kind credit_card` got the default view and no
-    word that their kind was never read. Refused by name, exit 2, and the
-    window never opened."""
-    opened: list[int] = []
-    monkeypatch.setattr("homestead_ledger.app.view.run", lambda: opened.append(1) or 0)
-
+def test_retired_flags_are_refused_by_name(capsys):
+    """Bite 2b: `--account-number` and `--kind` are retired outright — the
+    number and kind live on the account instance now (`account add`), not on
+    the statement. Refused whether or not `--import` is present at all;
+    accepting and ignoring either would report a declaration as honoured
+    that never was."""
     for argv in (
         ["--kind", "credit_card"],
-        ["--liability-columns", "debit,credit"],
-        ["--kind", "credit_card", "--liability-columns", "debit,credit"],
+        ["--account-number", "4242"],
+        ["--import", "x.csv", "--kind", "credit_card"],
+        ["--import", "x.csv", "--account-number", "4242"],
     ):
         assert main(argv) == 2, argv
         err = capsys.readouterr().err
-        assert "--import" in err
-        assert argv[0] in err
+        assert "retired" in err
+        assert "account add" in err
+
+
+def test_liability_columns_without_import_is_refused(capsys, monkeypatch):
+    """`--liability-columns` describes a statement being imported. With no
+    `--import` there is nothing for it to describe, and the old behaviour —
+    fall through to the window — ran as though the declaration had been
+    honoured. Refused by name, exit 2, and the window never opened."""
+    opened: list[int] = []
+    monkeypatch.setattr("homestead_ledger.app.view.run", lambda: opened.append(1) or 0)
+
+    assert main(["--liability-columns", "debit,credit"]) == 2
+    err = capsys.readouterr().err
+    assert "--import" in err
+    assert "--liability-columns" in err
     assert opened == [], "the window opened despite an unhonoured declaration"
 
 
-def test_kind_and_liability_columns_are_still_honoured_with_import(tmp_path, monkeypatch, capsys):
+def test_liability_columns_is_still_honoured_with_import(tmp_path, monkeypatch, capsys):
     """The refusal above must key on the *absence of a statement*, not on the
-    flags themselves — the same flags with `--import` still reach the
-    importer."""
+    flag itself — the same flag with `--import` still reaches the importer."""
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    from homestead_ledger import accounts
+    from homestead_ledger.store import Sidecar
+
+    accounts.add_account(Sidecar(), "card-t", kind="credit_card", number="4242")
     csv_path = tmp_path / "card.csv"
     csv_path.write_text(
         "Date,Description,Debit,Credit\n2026-08-01,Hardware Store,100.00,\n"
@@ -164,8 +178,7 @@ def test_kind_and_liability_columns_are_still_honoured_with_import(tmp_path, mon
         "utf-8",
     )
     rc = main([
-        "--import", str(csv_path), "--account-number", "4242",
-        "--account", "credit_card", "--kind", "credit_card",
+        "--import", str(csv_path), "--account", "card-t",
         "--liability-columns", "debit,credit",
     ])
     assert rc == 0
@@ -307,7 +320,8 @@ def test_smoke_actually_imports_the_ui_and_the_cli(tmp_path):
          "'homestead_ledger.obligations','homestead_ledger.importer',"
          "'homestead_ledger.intake','homestead_ledger.queue',"
          "'homestead_ledger.recurring','homestead_ledger.nestor_seam',"
-         "'homestead_ledger.nestor_store') if m not in sys.modules];"
+         "'homestead_ledger.nestor_store','homestead_ledger.accounts')"
+         " if m not in sys.modules];"
          "print(rc, missing)"],
         capture_output=True, text=True,
         env={"HOMESTEAD_HOME": str(tmp_path), "PATH": "/usr/bin:/bin",

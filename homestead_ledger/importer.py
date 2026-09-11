@@ -55,23 +55,31 @@ this module catches only that, counts it as an error, and prints one line to
 stderr naming the row — it never invents a date or an amount to keep a
 partial row moving.
 
-**Bite 2a — `kind`, and a debit/credit header on a liability account.**
-`import_csv` gains `kind` (the registered account kind a statement's rows
-classify against — `books.Transaction.kind`, handed to the row parsers so a
-`Transaction` is never built with a kind it does not mean, not even for the
-line between parsing and a later correction) and `liability_columns`. A bank's own "Debit"/"Credit" column
-headers do not say which direction is a charge and which is a payment on a
-*liability* account the way they unambiguously do on an asset one (see
-`packs/credit_card.py`'s docstring) — so a debit/credit-shaped statement for
-a registered liability kind is refused outright unless `liability_columns`
-names which of the two literal headers means a charge and which means a
-payment. Naming them re-points the header lookup the existing debit/credit
-reader already does — `debit` reads as negative, `credit` as positive,
-matching the sign convention exactly — rather than adding a second amount
-parser next to it. On an *asset* kind the same two column names are not
-ambiguous, so there is nothing for the mapping to re-point and passing it is
-refused rather than ignored: a flag that is accepted and never read reports a
-declaration as honoured that was never applied.
+**Bite 2a — a debit/credit header on a liability account.** A bank's own
+"Debit"/"Credit" column headers do not say which direction is a charge and
+which is a payment on a *liability* account the way they unambiguously do
+on an asset one (see `packs/credit_card.py`'s docstring) — so a debit/credit-
+shaped statement for a registered liability kind is refused outright unless
+`liability_columns` names which of the two literal headers means a charge
+and which means a payment. Naming them re-points the header lookup the
+existing debit/credit reader already does — `debit` reads as negative,
+`credit` as positive, matching the sign convention exactly — rather than
+adding a second amount parser next to it. On an *asset* kind the same two
+column names are not ambiguous, so there is nothing for the mapping to
+re-point and passing it is refused rather than ignored: a flag that is
+accepted and never read reports a declaration as honoured that was never
+applied.
+
+**Bite 2b — `--account <label>` is required, and names an account
+*instance* (`accounts.py`), not a kind.** `--account-number` and `--kind`
+are retired from this function's own parameters: the number lives once, on
+the instance (I-43), and the kind is looked up from it
+(`accounts.kind_of`) rather than declared again for the statement — a
+statement is for one already-registered account, and `account add` is where
+an operator says what kind it is and what its number is, once. A label with
+no account instance is refused by name, before the file is even opened.
+`--liability-columns` is unaffected — it is still a per-statement fact about
+*this* file's own header shape, not about the account.
 """
 from __future__ import annotations
 
@@ -87,8 +95,8 @@ from typing import Callable
 from homestead.keep.dates import UnparseableDate, parse_deadline
 from homestead.keep.store import RecordExists
 
-from homestead_ledger import books, money, registry
-from homestead_ledger.packs import checking
+from homestead_ledger import accounts, books, money, registry
+from homestead_ledger.store import Sidecar
 
 __all__ = [
     "BANK_DATE_FORMATS",
@@ -297,8 +305,7 @@ def _cell(row: dict[str, str], hmap: dict[str, str], name: str) -> str:
 
 
 def _parse_single_amount_row(
-    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str,
-    kind: str,
+    row: dict[str, str], hmap: dict[str, str], *, account: str, kind: str,
     bank: str | None,
 ) -> books.Transaction:
     date_raw = _cell(row, hmap, "date").strip()
@@ -308,14 +315,12 @@ def _parse_single_amount_row(
     description = _cell(row, hmap, "description").strip()
     amount = _single_amount(_cell(row, hmap, "amount"))
     return books.Transaction(
-        account=account, kind=kind, date=date, amount=amount,
-        description=description, account_number=account_number,
+        account=account, kind=kind, date=date, amount=amount, description=description,
     )
 
 
 def _parse_debit_credit_row(
-    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str,
-    kind: str,
+    row: dict[str, str], hmap: dict[str, str], *, account: str, kind: str,
     bank: str | None,
 ) -> books.Transaction:
     date_raw = _cell(row, hmap, "date").strip()
@@ -325,8 +330,7 @@ def _parse_debit_credit_row(
     description = _cell(row, hmap, "description").strip()
     amount = _debit_credit_amount(_cell(row, hmap, "debit"), _cell(row, hmap, "credit"))
     return books.Transaction(
-        account=account, kind=kind, date=date, amount=amount,
-        description=description, account_number=account_number,
+        account=account, kind=kind, date=date, amount=amount, description=description,
     )
 
 
@@ -346,45 +350,44 @@ _ORDINARY_REIMPORT_MARKER = "already on the books"
 def import_csv(
     path: str | Path,
     *,
-    account: str = checking.ACCOUNT,
-    account_number: str,
-    kind: str = checking.ACCOUNT,
+    account: str,
     liability_columns: tuple[str, str] | None = None,
     bank: str | None = None,
     dry_run: bool = False,
     adapter=None,
 ) -> ImportResult:
-    """Import one bank-statement CSV for one account.
+    """Import one bank-statement CSV for one already-registered account.
 
-    `account` is the pack label (`checking.ACCOUNT` by default); `account_number`
-    is the L5 bank identifier — both are parameters for the whole statement,
-    never a per-row column, because a statement is for one account. `kind` is
-    the registered account kind each row classifies against
-    (`registry.all_accounts()`; defaults to `checking.ACCOUNT`, matching
-    `account`'s own default). `bank` names an entry in `BANK_DATE_FORMATS` —
-    the format an ambiguous slashed date column in *this* statement is
-    written in — and applies to every row; a bank the table does not know is
-    refused before any row is read, the same way an unrecognized header shape
-    is. `adapter` is passed straight through to `books.import_transaction`
-    (`None` uses this package's own database) — the same seam the tests use
-    to point at a tmp store via `HOMESTEAD_HOME`.
+    `account` is a **label** — a registered account instance
+    (`accounts.add_account`), required, with no default: a statement always
+    names which real account it is for, and there is no honest default label
+    to fall back on. The instance's kind (`accounts.kind_of`) is looked up
+    once, before the file is opened, and every row classifies against it;
+    its number is read once by `books.import_transaction`, from the instance
+    (I-43) — never a per-row column and never a parameter here anymore.
+    `bank` names an entry in `BANK_DATE_FORMATS` — the format an ambiguous
+    slashed date column in *this* statement is written in — and applies to
+    every row; a bank the table does not know is refused before any row is
+    read, the same way an unrecognized header shape is. `adapter` is passed
+    straight through to `books.import_transaction` (`None` uses this
+    package's own database) — the same seam the tests use to point at a tmp
+    store via `HOMESTEAD_HOME`.
 
     `liability_columns` names, as `(charge_header, payment_header)` — each
     one of the literal header names `detect_format` already recognizes for
     the debit/credit shape ("debit"/"credit", case-insensitive) — which
     column means a charge and which means a payment, for a debit/credit
-    statement against a registered liability kind. Required in that one
-    case, and refused in every other (see the module docstring) — a mapping
-    that would not be read is a declaration reported as honoured that never
-    was.
+    statement against a liability-kind instance. Required in that one case,
+    and refused in every other (see the module docstring) — a mapping that
+    would not be read is a declaration reported as honoured that never was.
 
     Returns an `ImportResult` tally. Raises `ValueError` immediately, before
-    reading any row, if `kind` is not registered, if `bank` is given but not
-    one this module knows, if `liability_columns` is given for a kind that
-    is not a liability, if the header names neither supported shape, or if
-    a liability kind's debit/credit statement has no `liability_columns` —
-    an unrecognized or ambiguous file, or an unrecognized bank, is refused
-    outright, not silently misread or silently ignored.
+    reading any row, if `account` has no registered instance, if `bank` is
+    given but not one this module knows, if `liability_columns` is given for
+    an instance that is not a liability kind, if the header names neither
+    supported shape, or if a liability kind's debit/credit statement has no
+    `liability_columns` — an unrecognized or ambiguous file, or an
+    unrecognized bank, is refused outright, not silently misread or ignored.
     """
     if bank is not None and bank not in BANK_DATE_FORMATS:
         raise ValueError(
@@ -395,10 +398,11 @@ def import_csv(
     imported = skipped = errors = 0
     error_messages: list[str] = []
 
-    # Both declarations are settled before the file is opened, so an
-    # unimportable statement is refused as a whole rather than a row at a
-    # time — and so `registry.account`'s strict `KeyError` never escapes this
-    # module as an exception type no caller of `import_csv` is told to catch.
+    # Settled before the file is opened, so an unimportable statement is
+    # refused as a whole rather than a row at a time — and so
+    # `registry.account`'s strict `KeyError` never escapes this module as an
+    # exception type no caller of `import_csv` is told to catch.
+    kind = accounts.kind_of(Sidecar(), account)
     try:
         account_type = registry.account(kind)
     except KeyError:
@@ -413,10 +417,11 @@ def import_csv(
         # declaration as honoured that was never read — including one naming
         # columns this statement does not have.
         raise ValueError(
-            f"--liability-columns was given for {kind!r}, which is not a "
-            "liability account — a charge/payment mapping applies only to a "
-            "liability kind's debit/credit statement. Drop the flag, or name "
-            "a liability kind with --kind."
+            f"--liability-columns was given for {account!r}, registered as "
+            f"{kind!r}, which is not a liability account — a charge/payment "
+            "mapping applies only to a liability kind's debit/credit "
+            "statement. Drop the flag, or import against an account "
+            "instance registered as a liability kind."
         )
 
     with path.open(newline="", encoding="utf-8-sig") as fh:
@@ -453,10 +458,7 @@ def import_csv(
 
         for line_no, row in enumerate(reader, start=2):  # header is line 1
             try:
-                txn = parser(
-                    row, hmap, account=account, account_number=account_number, kind=kind,
-                    bank=bank,
-                )
+                txn = parser(row, hmap, account=account, kind=kind, bank=bank)
             except ValueError as exc:
                 errors += 1
                 message = f"{path.name}:{line_no}: {exc}"
