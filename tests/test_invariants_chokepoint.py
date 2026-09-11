@@ -232,11 +232,20 @@ def test_i16_regression_every_bypass_is_caught(tmp_path):
 def test_the_surface_set_is_every_surface_not_only_the_window():
     """The ban is a property of the surface *layer*, so the layer has to be the
     whole layer. A reflection ban that reads `app/` and not the browser or the
-    terminal is a ban on one third of the surfaces."""
+    terminal is a ban on one third of the surfaces — planted here as the two
+    named files plus a file that has never existed, so the classifier is shown
+    to generalize by path rather than by a hardcoded pair of names."""
     assert _is_surface(PKG / "server.py"), "the browser UI is a surface"
     assert _is_surface(PKG / "cli.py"), "the terminal is a surface"
     assert _is_surface(PKG / "app" / "window.py")
+    # planted: a surface file that does not exist on disk and was never one of
+    # the two named exceptions — it still classifies as a surface because it
+    # sits under app/, which is the actual boundary, not the two names above.
+    assert _is_surface(PKG / "app" / "planted_new_surface.py")
     # and not the payload boundary or the registry, which reflect over *modules*
     # (pack discovery), never over a record
     assert not _is_surface(BOOKS) and not _is_surface(BALANCE)
     assert not _is_surface(PKG / "registry.py")
+    # planted: a file that merely sits beside app/ — one path segment away —
+    # must not be swept in by a looser match than "app" is a whole part.
+    assert not _is_surface(PKG / "apparatus.py")
