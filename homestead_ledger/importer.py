@@ -1,6 +1,27 @@
 """The CSV importer — bite 4's first slice: a bank-statement CSV, one account
 at a time, into the books.
 
+**Every row's date is ISO by the time it reaches `books.Transaction` (fix:
+G2c-importer-dates).** `_row_date` is the one function every row's raw date
+cell passes through: first the engine's own strict parser
+(`homestead.keep.dates.parse_deadline`, which reads ISO calendar dates, ISO
+datetimes and written month names, and refuses every slashed numeric form as
+a family — `03/04/2026` is genuinely ambiguous between month-first and
+day-first); if that refuses and a `--bank` was named, the closed
+`BANK_DATE_FORMATS` table for that bank; if that fails too, or no bank was
+named for a slashed date, the row is counted as an error, never guessed. The
+stored `Transaction.date` this module builds is always this ISO string, so
+`fingerprint` (which hashes the date string verbatim) is computed over ISO —
+the same transaction imported once as `08/11/2026 --bank chase` and once as
+`2026-08-11` dedups.
+
+**No migration for rows already on the books before this fix.** v1 is
+synthetic-only (the build plan's own ground truth), so a household's real
+statement rows, if any predate this change, keep whatever unparsed date
+string they were written with; they simply will not dedup against a
+re-import in the new ISO form, and `transaction list --gaps` is how an
+operator finds them.
+
 **This module writes nothing itself.** Every row that parses becomes a
 `books.Transaction` and is handed to `books.import_transaction` — the one
 place allowed to name `homestead.keep.store.CANONICAL`
@@ -36,22 +57,96 @@ partial row moving.
 from __future__ import annotations
 
 import csv
+import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
+from homestead.keep.dates import UnparseableDate, parse_deadline
 from homestead.keep.store import RecordExists
 
 from homestead_ledger import books, money
 from homestead_ledger.packs import checking
 
 __all__ = [
+    "BANK_DATE_FORMATS",
     "ImportResult",
     "detect_format",
     "import_csv",
 ]
+
+#: A closed, per-bank table of `strptime` formats for statements whose date
+#: column the engine's own strict parser refuses by family — every slashed
+#: numeric date, because `03/04/2026` is genuinely ambiguous between
+#: month-first and day-first and the engine will not guess (I-25). Naming a
+#: bank is the operator opting into *this specific* order for *this specific*
+#: statement; this module never infers it from the value.
+#:
+#: Every entry below is `%m/%d/%Y` because every bank listed is a US bank
+#: exporting month-first dates. A day-first bank (`%d/%m/%Y`) would need its
+#: own separate table entry, never a format squeezed to admit both orders —
+#: no `strptime` directive does that, and `test_no_bank_format_admits_both_
+#: day_orders` pins it: every entry here parses `"03/04/2026"` to exactly one
+#: date, and no bank name maps to more than one format.
+BANK_DATE_FORMATS: dict[str, str] = {
+    "wells-fargo": "%m/%d/%Y",
+    "chase": "%m/%d/%Y",
+    "bank-of-america": "%m/%d/%Y",
+    "capital-one": "%m/%d/%Y",
+    "usaa": "%m/%d/%Y",
+    "discover": "%m/%d/%Y",
+    "amex": "%m/%d/%Y",
+}
+
+#: The same shape `homestead.keep.dates` refuses as a family (its private
+#: `_SLASHED`, restated here rather than imported — it is not part of that
+#: module's public surface). Used only to decide *which* refusal message a
+#: bankless slashed date gets; the actual parsing never touches this.
+_SLASHED = re.compile(r"\A\d{1,4}[/.]\d{1,2}[/.]\d{1,4}\Z")
+
+
+def _row_date(raw: str, bank: str | None) -> str:
+    """One row's raw date cell, as ISO — the only spelling this module ever
+    hands to `books.Transaction`.
+
+    1. `parse_deadline(raw).iso` — the engine's strict parser. Unambiguous
+       forms (ISO calendar dates, ISO datetimes, written month names) succeed
+       here and never touch a bank format at all.
+    2. If that refuses and `bank` was given, `BANK_DATE_FORMATS[bank]` via
+       `datetime.strptime` — the operator's own declared order for this
+       statement. A value that does not fit that exact format is an error;
+       this never falls back to trying the *other* day/month order (that
+       would be exactly the guess I-25 forbids).
+    3. Anything else — a slashed date with no `--bank` named — is an error
+       naming that `--bank <name>` is needed. Every message here is built
+       from the date text and the bank name alone; the row's amount and
+       description never reach this function, so they cannot leak into a
+       refusal (I-15).
+
+    Raises `ValueError` (or its `UnparseableDate` subclass) in every refusal
+    case; never returns `None` and never guesses.
+    """
+    try:
+        return parse_deadline(raw).iso
+    except UnparseableDate as exc:
+        if bank is not None:
+            try:
+                return datetime.strptime(raw, BANK_DATE_FORMATS[bank]).date().isoformat()
+            except ValueError:
+                raise ValueError(
+                    f"date does not fit the {bank!r} format "
+                    f"({BANK_DATE_FORMATS[bank]}) — refusing to re-try it as "
+                    "the other day/month order"
+                ) from exc
+        if _SLASHED.match(raw.strip()):
+            raise ValueError(
+                "a slashed date needs --bank <name> to say which order this "
+                f"statement uses — one of: {', '.join(sorted(BANK_DATE_FORMATS))}"
+            ) from exc
+        raise
 
 #: header sets (lower-cased) that identify each supported shape. Checked in
 #: this order — debit/credit first — so a file that (unusually) carries all
@@ -149,11 +244,13 @@ def _cell(row: dict[str, str], hmap: dict[str, str], name: str) -> str:
 
 
 def _parse_single_amount_row(
-    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str
+    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str,
+    bank: str | None,
 ) -> books.Transaction:
-    date = _cell(row, hmap, "date").strip()
-    if not date:
+    date_raw = _cell(row, hmap, "date").strip()
+    if not date_raw:
         raise ValueError("missing date")
+    date = _row_date(date_raw, bank)
     description = _cell(row, hmap, "description").strip()
     amount = _single_amount(_cell(row, hmap, "amount"))
     return books.Transaction(
@@ -163,11 +260,13 @@ def _parse_single_amount_row(
 
 
 def _parse_debit_credit_row(
-    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str
+    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str,
+    bank: str | None,
 ) -> books.Transaction:
-    date = _cell(row, hmap, "date").strip()
-    if not date:
+    date_raw = _cell(row, hmap, "date").strip()
+    if not date_raw:
         raise ValueError("missing date")
+    date = _row_date(date_raw, bank)
     description = _cell(row, hmap, "description").strip()
     amount = _debit_credit_amount(_cell(row, hmap, "debit"), _cell(row, hmap, "credit"))
     return books.Transaction(
@@ -194,6 +293,7 @@ def import_csv(
     *,
     account: str = checking.ACCOUNT,
     account_number: str,
+    bank: str | None = None,
     dry_run: bool = False,
     adapter=None,
 ) -> ImportResult:
@@ -201,15 +301,26 @@ def import_csv(
 
     `account` is the pack label (`checking.ACCOUNT` by default); `account_number`
     is the L5 bank identifier — both are parameters for the whole statement,
-    never a per-row column, because a statement is for one account. `adapter`
-    is passed straight through to `books.import_transaction` (`None` uses this
-    package's own database) — the same seam the tests use to point at a tmp
-    store via `HOMESTEAD_HOME`.
+    never a per-row column, because a statement is for one account. `bank`
+    names an entry in `BANK_DATE_FORMATS` — the format an ambiguous slashed
+    date column in *this* statement is written in — and applies to every row;
+    a bank the table does not know is refused before any row is read, the
+    same way an unrecognized header shape is. `adapter` is passed straight
+    through to `books.import_transaction` (`None` uses this package's own
+    database) — the same seam the tests use to point at a tmp store via
+    `HOMESTEAD_HOME`.
 
     Returns an `ImportResult` tally. Raises `ValueError` immediately, before
-    reading any row, if the header names neither supported shape — an
-    unrecognized file is refused outright, not silently misread.
+    reading any row, if the header names neither supported shape, or if
+    `bank` is given but not one this module knows — an unrecognized file or
+    an unrecognized bank is refused outright, not silently misread or
+    silently ignored.
     """
+    if bank is not None and bank not in BANK_DATE_FORMATS:
+        raise ValueError(
+            f"unknown bank {bank!r} — one of: {', '.join(sorted(BANK_DATE_FORMATS))}"
+        )
+
     path = Path(path)
     imported = skipped = errors = 0
     error_messages: list[str] = []
@@ -223,7 +334,9 @@ def import_csv(
 
         for line_no, row in enumerate(reader, start=2):  # header is line 1
             try:
-                txn = parser(row, hmap, account=account, account_number=account_number)
+                txn = parser(
+                    row, hmap, account=account, account_number=account_number, bank=bank,
+                )
             except ValueError as exc:
                 errors += 1
                 message = f"{path.name}:{line_no}: {exc}"

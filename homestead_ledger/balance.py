@@ -21,10 +21,43 @@ on screen. Nothing in this bite serves a `BalancePoint` to a surface.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from homestead_ledger.store import Canonical
 
-__all__ = ["BalancePoint", "running_balance", "transaction_tuples"]
+__all__ = ["BalancePoint", "is_iso_date", "running_balance", "transaction_tuples"]
+
+
+def is_iso_date(value: str) -> bool:
+    """True if `value` is a calendar day `date.fromisoformat` accepts.
+
+    This is the one check both the sort below and `transaction list --gaps`
+    (`cli.py`) use to tell a genuinely-ordered row from a **pre-existing
+    unparsed one** — a transaction the importer wrote before fix:
+    G2c-importer-dates, back when a row's date column was stored verbatim
+    (`08/11/2026`, say). There is no migration for such a row (v1 is
+    synthetic-only); this is how it stays *findable* instead of silently
+    misplaced. A caller may hand this a value already served through the
+    gate (an L2 payload) without reaching `.payload` of its own.
+    """
+    try:
+        date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _sort_key(raw: str, item_id: str) -> tuple:
+    """Order by the real calendar day when `raw` is ISO; a row whose date
+    predates this fix and will not parse sorts after every real date, by its
+    own raw text (the only ordering left available for it) — "falling back
+    to lexical only for a row whose date will not parse", never for the rest.
+    The leading `0`/`1` keeps the two groups from ever comparing a `date`
+    against a `str` (Python cannot order those against each other)."""
+    try:
+        return (0, date.fromisoformat(raw), item_id)
+    except (TypeError, ValueError):
+        return (1, raw, item_id)
 
 
 @dataclass(frozen=True)
@@ -61,7 +94,7 @@ def running_balance(canonical: Canonical, account: str) -> list[BalancePoint]:
 
     complete_ids = sorted(
         (i for i in amounts if i in dates),
-        key=lambda i: (dates[i], i),
+        key=lambda i: _sort_key(dates[i], i),
     )
 
     points: list[BalancePoint] = []
@@ -100,7 +133,7 @@ def transaction_tuples(canonical: Canonical, account: str) -> list[tuple[str, fl
 
     complete = sorted(
         (i for i in amounts if i in dates and i in descriptions),
-        key=lambda i: (dates[i], i),
+        key=lambda i: _sort_key(dates[i], i),
     )
     out: list[tuple[str, float, str]] = []
     for item_id in complete:

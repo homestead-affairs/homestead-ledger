@@ -55,8 +55,23 @@ homestead-ledger queue                                           # what's due
 homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account-number 9821
 homestead-ledger transaction list                                # the books, through the gate — the account number is never a row
 python -m homestead_ledger --import statement.csv --account-number 9821   # a whole statement
+python -m homestead_ledger --import statement.csv --account-number 9821 --bank chase   # a slashed date column
+homestead-ledger transaction list --gaps                        # rows whose stored date predates this fix
 python -m homestead_ledger                                       # the window, on these books (the demo only if empty)
 ```
+
+Every imported row's date is parsed to ISO before it is ever written: an
+unambiguous form (`2026-08-01`, `August 1, 2026`, …) parses on its own, and a
+slashed, ambiguous one (`08/01/2026`) needs `--bank <name>` naming which
+day/month order that statement uses (`wells-fargo`, `chase`,
+`bank-of-america`, `capital-one`, `usaa`, `discover`, `amex`) — a slashed date
+with no bank named is a per-row import error, never a guess. This is what
+lets the same transaction imported once as `08/01/2026 --bank chase` and once
+as `2026-08-01` dedup as the same row. **There is no migration** for a
+transaction already on the books from before this fix with an unparsed,
+slashed date (v1's own books are synthetic-only) — such a row keeps its old
+date text, will not dedup against a re-import in the new ISO form, and
+`transaction list --gaps` is how an operator finds it.
 
 An obligation is one record per field at the pack's rungs
 (`homestead_ledger/obligations.py`), under the household's own short id

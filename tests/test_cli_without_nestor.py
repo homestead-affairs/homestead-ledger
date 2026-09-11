@@ -138,6 +138,33 @@ def test_an_amount_that_is_not_finite_is_refused_without_being_echoed(capsys):
     assert "nothing on the books" in capsys.readouterr().out
 
 
+def test_transaction_list_gaps_names_unparsed_rows_by_reference(capsys):
+    """fix: G2c-importer-dates — `--gaps` finds a row from before this fix
+    (a date written verbatim, never parsed) by its already-served text, never
+    by reaching `.payload` of its own (I-16); a row imported the normal way,
+    with an ISO date, is not a gap."""
+    from homestead_ledger.books import Transaction, import_transaction
+
+    import_transaction(Transaction(
+        account="checking", date="9/2/2026", amount="-20.00",
+        description="Pre-fix Row", account_number="9821",
+    ))
+    assert run_cli(["transaction", "add", "2026-09-03", "-30.00", "Normal Row",
+                    "--account-number", "9821"]) == 0
+    capsys.readouterr()
+
+    assert run_cli(["transaction", "list", "--gaps"]) == 0
+    out = capsys.readouterr().out
+    assert "9/2/2026" in out
+    assert "date:" in out
+    assert "2026-09-03" not in out                    # the normal ISO row is not a gap
+    assert "Pre-fix Row" not in out and "-20.00" not in out   # L3/L4 never render
+
+    assert run_cli(["transaction", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "9/2/2026" in out and "2026-09-03" in out   # --gaps narrows; plain list does not
+
+
 def test_an_obligation_id_is_one_closed_shape(capsys):
     """The id is a key segment and a string the browser renders back; one
     closed shape, refused at the door rather than escaped at every surface."""

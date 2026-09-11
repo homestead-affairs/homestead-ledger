@@ -8,8 +8,18 @@ own contract on top of that: which header shape it recognizes, how it signs
 a debit/credit split, that a re-import is skipped rather than duplicated,
 that `--dry-run` touches no adapter at all, and that a malformed row is
 counted and surfaced rather than silently dropped or guessed into a fact.
+
+Bite fix: G2c-importer-dates adds one more contract on top of the above —
+every row's date is parsed to ISO (`_row_date`) before it ever reaches
+`books.Transaction`, so the fingerprint (which hashes the date string
+verbatim) is computed over ISO regardless of which accepted spelling a
+statement used. `BANK_DATE_FORMATS` is the closed table a slashed,
+genuinely-ambiguous date needs `--bank` to resolve; without one, it is a row
+error naming that `--bank` is needed, never a guess at the day/month order.
 """
 from __future__ import annotations
+
+from datetime import datetime
 
 import pytest
 from homestead.keep.store import RecordExists
@@ -240,3 +250,142 @@ def test_account_number_is_taken_as_a_parameter_not_a_csv_column(tmp_path, monke
         record.payload for ref, record in canonical.records("checking") if ref[1] == "account_number"
     }
     assert numbers == {"1234"}
+
+
+# ── fix: G2c-importer-dates — dates parsed to ISO, per-bank, never guessed ──
+
+def test_a_slashed_date_without_a_bank_is_refused_not_guessed(tmp_path, monkeypatch):
+    """`08/11/2026` is genuinely ambiguous (August 11th or November 8th) and
+    the engine's own parser refuses the whole slashed family for exactly that
+    reason. With no `--bank` named, this module must not pick an order for
+    the operator — the row is an error, and the two good rows around it still
+    land."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    csv_text = (
+        "Date,Description,Amount\n"
+        "2026-08-01,Whole Foods Market,-84.23\n"
+        "08/11/2026,Ambiguous Row,-12.00\n"
+        "2026-08-03,Employer Payroll,1500.00\n"
+    )
+    path = _write(tmp_path, "slashed.csv", csv_text)
+
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER)
+    assert result.imported == 2
+    assert result.errors == 1
+    assert "--bank" in result.error_messages[0]
+
+    canonical = Canonical()
+    dates = sorted(
+        record.payload for ref, record in canonical.records("checking") if ref[1] == "date"
+    )
+    assert dates == ["2026-08-01", "2026-08-03"]
+
+
+def test_a_bank_format_parses_to_iso_and_dedups_against_an_iso_reimport(tmp_path, monkeypatch):
+    """A statement written `MM/DD/YYYY` and read with `--bank chase` lands as
+    ISO on the books; the very same transaction, re-imported later already in
+    ISO form (no `--bank` needed at all), computes the same fingerprint and
+    is skipped rather than duplicated — proof the stored date, not the input
+    spelling, is what identity is built from."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    slashed_csv = _write(
+        tmp_path, "slashed.csv",
+        "Date,Description,Amount\n08/11/2026,Whole Foods Market,-84.23\n",
+    )
+    iso_csv = _write(
+        tmp_path, "iso.csv",
+        "Date,Description,Amount\n2026-08-11,Whole Foods Market,-84.23\n",
+    )
+
+    first = importer.import_csv(slashed_csv, account_number=ACCOUNT_NUMBER, bank="chase")
+    assert first.imported == 1
+    assert first.errors == 0
+
+    canonical = Canonical()
+    dates = [
+        record.payload for ref, record in canonical.records("checking") if ref[1] == "date"
+    ]
+    assert dates == ["2026-08-11"]                    # stored as ISO, not "08/11/2026"
+
+    second = importer.import_csv(iso_csv, account_number=ACCOUNT_NUMBER)
+    assert second.imported == 0
+    assert second.skipped == 1                          # same fingerprint — deduped
+    assert second.errors == 0
+
+
+def test_a_bank_format_that_does_not_fit_is_an_error_never_the_other_order(tmp_path, monkeypatch):
+    """`2026/08/11` does not fit `chase`'s declared `%m/%d/%Y` at all (2026
+    is not a month) — this must be an error, never a second attempt reading
+    it as `%d/%m/%Y` or any other order."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    csv_text = "Date,Description,Amount\n2026/08/11,Whole Foods Market,-84.23\n"
+    path = _write(tmp_path, "bad_bank_date.csv", csv_text)
+
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER, bank="chase")
+    assert result.imported == 0
+    assert result.errors == 1
+
+    canonical = Canonical()
+    assert canonical.records("checking") == []
+
+
+def test_an_unknown_bank_is_refused_by_name(tmp_path, monkeypatch):
+    """`BANK_DATE_FORMATS` is closed — a bank not in it is refused up front,
+    before any row is read, the same way an unrecognized header shape is."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    path = _write(tmp_path, "single.csv", _SINGLE_AMOUNT_CSV)
+
+    with pytest.raises(ValueError, match="unknown bank"):
+        importer.import_csv(path, account_number=ACCOUNT_NUMBER, bank="not-a-real-bank")
+
+    canonical = Canonical()
+    assert canonical.records("checking") == []
+
+
+def test_no_bank_format_admits_both_day_orders(tmp_path):
+    """Every entry in `BANK_DATE_FORMATS` parses the same ambiguous input to
+    exactly one date — no format string here reads as both month-first and
+    day-first depending on the value — and no bank name maps to more than
+    one format (a plain dict already guarantees the second half; asserted
+    directly all the same)."""
+    ambiguous = "03/04/2026"                      # March 4th, or April 3rd?
+    seen_formats: dict[str, str] = {}
+    for bank, fmt in importer.BANK_DATE_FORMATS.items():
+        assert bank not in seen_formats or seen_formats[bank] == fmt
+        seen_formats[bank] = fmt
+
+        parsed = datetime.strptime(ambiguous, fmt).date()
+        # this table is month-first throughout: March 4th, consistently.
+        assert parsed.isoformat() == "2026-03-04"
+
+        # the format string itself cannot be read the other way around —
+        # asking it to parse the *day-first* reading of the same digits
+        # back out under its own format recovers the identical date only
+        # when the two readings coincide, and diverges (rather than
+        # silently agreeing) whenever they do not.
+        transposed = datetime.strptime("04/03/2026", fmt).date()
+        assert transposed.isoformat() == "2026-04-03"
+        assert parsed != transposed
+
+
+def test_a_date_error_never_echoes_the_rows_content(tmp_path, monkeypatch, capsys):
+    """I-15: a row's amount and description are never a date refusal's
+    business. A distinctive amount and description in the offending row must
+    not appear anywhere in the tally's error text or on stderr."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    secret_amount = "-31337.42"
+    secret_description = "Confidential Merchant Name LLC"
+    csv_text = (
+        f"Date,Description,Amount\n08/11/2026,{secret_description},{secret_amount}\n"
+    )
+    path = _write(tmp_path, "secret.csv", csv_text)
+
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER)
+    assert result.errors == 1
+    joined = " ".join(result.error_messages)
+    assert secret_amount not in joined
+    assert secret_description not in joined
+
+    err = capsys.readouterr().err
+    assert secret_amount not in err
+    assert secret_description not in err
