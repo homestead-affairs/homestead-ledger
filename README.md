@@ -195,6 +195,34 @@ split is refused unless `--liability-columns CHARGE,PAYMENT` says which column
 means which: an issuer's own column names do not say, and guessing would
 misstate a debt.
 
+## Exporting your liabilities
+
+`homestead-ledger schedules show` lists every liability account instance —
+`credit_card`, `loan` — on the household's own screen: `checking` and
+`savings` never appear here, and the amount fields derive (`"a balance is
+on file"`), never the number. `homestead-ledger schedules export [--out
+DIR]` composes the same instances into one JSON document — the amounts
+themselves this time, never the number — shows exactly what will be
+written, and writes nothing until that is confirmed: a declined
+confirmation writes no file, and ledgers nothing either. It goes out
+through the engine's own `export.export_record` (one artifact, one
+`IntegrityLog` row, one `VisibleLog` line, all references and never
+content), the same machinery every export on this face uses rather than a
+second one built here. `GET /api/schedules` in the browser reads the same
+derived-amount rows `schedules show` prints; there is **no export door on
+the server** — an export is an operator act at the terminal, confirmed
+there, never a click in the browser.
+
+Every export carries this notice, verbatim:
+
+> A list of the household's liabilities as the ledger holds them, for the household's own use. It is not a schedule on any official form, it carries no form number, and the Chapter 13 plan payment is an ordinary obligation here, not a claim.
+
+The Chapter 13 plan payment itself is an ordinary obligation
+(`obligation add rent …`-shaped, at the pack's own `L4`) — this module
+tracks what a household owes and nothing about a bankruptcy case, a
+claim, or a filing (provisional I-44: no drafting, no filing, no official
+form language anywhere in this package — `tests/test_i44_no_drafting.py`).
+
 ## The method
 
 Test-first, as in `homestead`: every claim is a check somebody can run. From a
