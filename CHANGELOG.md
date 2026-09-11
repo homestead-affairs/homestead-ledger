@@ -5,7 +5,7 @@
 
 ### Added
 
-* three account packs, registry-driven classification, and a liability sign convention ([e106f56](https://github.com/homestead-affairs/homestead-ledger/commit/e106f5649feaa81bf822d5b776ebe78c3fb236e9))
+* three account packs, registry-driven classification, liability sign ([6235ef6](https://github.com/homestead-affairs/homestead-ledger/commit/6235ef69e8db1af341fab2453e2ad3acc6080cc1))
 
 
 ### Fixed
