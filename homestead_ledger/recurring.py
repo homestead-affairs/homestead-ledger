@@ -28,9 +28,14 @@ Pipeline:
      subscription in two. If no cluster alone qualifies, fall back to the
      whole merchant group as one variable/usage-metered subscription.
   4. Infer cadence from the median gap between sorted charge dates, bucketed
-     to `weekly` / `monthly` / `quarterly` / `annual` (`docs/build-plan.md`'s
-     cadence set — no `biweekly` bucket, unlike the predecessor). Require
-     **≥3 occurrences** (**≥2 for annual**, where history is thin by nature).
+     to `weekly` / `biweekly` / `monthly` / `quarterly` / `annual`. Bite
+     G3-cadence-paidby added `biweekly` (14±2 days) once `obligations.py`
+     gained a cadence an operator can actually *declare* as biweekly
+     (`cadence.CADENCES`) — a detector that could never name what the
+     household's own form accepts was the gap; the bucket is centered
+     narrowly enough (12-16 days) not to eat into `weekly` (≤9) or
+     `monthly` (≥25). Require **≥3 occurrences** (**≥2 for annual**, where
+     history is thin by nature).
   5. Score confidence by blending interval regularity and amount stability;
      drop anything below `min_confidence`.
   6. Derive `next_expected`, `monthly_equivalent`, `annualized`, and a status
@@ -62,10 +67,11 @@ _CODE_KW_RE = re.compile(
 #: field, unlike its private-ledger ancestor.
 _EXCLUDED_DESCRIPTION_RE = re.compile(r"hous|rent|mortgage|debt|loan", re.IGNORECASE)
 
-# ── cadence buckets (build-plan's set: no biweekly) ──────────────────────────
+# ── cadence buckets ───────────────────────────────────────────────────────
 
 _CADENCE_BUCKETS: tuple[tuple[str, int, int], ...] = (
     ("weekly", 5, 9),
+    ("biweekly", 12, 16),
     ("monthly", 25, 35),
     ("quarterly", 80, 100),
     ("annual", 350, 380),

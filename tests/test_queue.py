@@ -95,6 +95,21 @@ def test_a_sealed_obligation_is_not_in_the_queue(tmp_path, monkeypatch):
     assert "insurance" in refs
 
 
+def test_a_resolved_obligation_is_dropped_not_shown(tmp_path, monkeypatch):
+    """G3-cadence-paidby: `mark_paid` marks a `once` obligation done by
+    writing a `resolved` record rather than deleting anything (there is no
+    delete on `Sidecar`) — the queue is where that record takes effect."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    store = Sidecar()
+    _obligation(store, "obligations", "insurance", Rung.L2, "2026-09-15", "a payment is due")
+    _obligation(store, "obligations", "dmv", Rung.L2, "2026-08-01", "a payment is due")
+    store.put("obligations", "resolved", "dmv", Classified(Rung.L2, "resolved"))
+
+    refs = {it.ref[2] for it in queue(store, today=TODAY)}
+    assert "dmv" not in refs
+    assert "insurance" in refs
+
+
 def test_only_the_due_date_field_is_read_not_the_others(tmp_path, monkeypatch):
     """`name`, `amount`, and `cadence` are separate records under the same
     item id — the queue reads only `due_date`, never mistaking a sibling

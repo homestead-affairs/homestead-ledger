@@ -108,7 +108,7 @@ def test_obligation_round_trip_through_the_gate(ui):
     status, data = ui.json("/api/obligations")
     assert data["rows"] == [{"id": "rent", "name": "Sunrise", "due_date": "2099-10-01",
                              "cadence": "monthly", "amount": "a payment is due", "rung": "L4",
-                             "gap": False}]
+                             "gap": False, "paid_on": None, "resolved": False}]
 
     status, data = ui.json("/api/obligation?id=rent")
     assert data["fields"]["amount"] == {"rung": "L4", "value": "1450.00"}
@@ -463,3 +463,90 @@ def test_a_refused_content_length_reaches_the_drain(ui, monkeypatch):
     status, rest = ui.raw("POST", "/api/obligation", body="{}", content_length="abc")
     assert status == 400 and json.loads(rest)["error"]
     assert len(calls) == 1 and hasattr(calls[0], "recv")
+
+
+# ── the cadence select equals cadence.CADENCES structurally ─────────────────
+
+def test_the_cadence_select_options_equal_cadences(ui):
+    """The `<select id="ocadence">` on the page is generated from
+    `cadence.CADENCES` (`server._CADENCE_OPTIONS`), never a second, hand-kept
+    literal — parsed out of the real served page, not the module's private
+    string, so this fails the moment the two drift apart."""
+    from homestead_ledger.cadence import CADENCES
+
+    status, body = ui.get("/")
+    page = body.decode()
+    m = re.search(r'<select id="ocadence">(.*?)</select>', page, re.S)
+    assert m is not None
+    options = re.findall(r'<option value="([^"]+)">', m.group(1))
+    assert tuple(options) == CADENCES
+
+
+# ── /api/obligation/paid ─────────────────────────────────────────────────────
+
+def _add_rent(ui, due_date="2026-08-05", cadence="monthly"):
+    status, data = ui.json("/api/obligation", {"id": "rent", "name": "Sunrise", "amount": "1450",
+                                               "due_date": due_date, "cadence": cadence})
+    assert status == 200 and data["ok"]
+
+
+def test_obligation_paid_rolls_the_due_date_and_the_list_shows_the_mark(ui):
+    _add_rent(ui)
+    status, data = ui.json("/api/obligation/paid", {
+        "id": "rent", "account": "checking", "fingerprint": "fp-1", "paid_on": "2026-08-07",
+    })
+    assert status == 200 and data["ok"] is True
+    assert data["old_due"] == "2026-08-05" and data["new_due"] == "2026-09-05"
+
+    status, data = ui.json("/api/obligations")
+    row = data["rows"][0]
+    assert row["due_date"] == "2026-09-05"
+    assert row["paid_on"] == "2026-08-07"
+    assert row["resolved"] is False
+
+
+def test_obligation_paid_resolves_a_once_obligation_and_drops_it_from_the_queue(ui):
+    _add_rent(ui, due_date="2026-08-05", cadence="once")
+    status, data = ui.json("/api/obligation/paid", {
+        "id": "rent", "account": "checking", "fingerprint": "fp-1", "paid_on": "2026-08-05",
+    })
+    assert status == 200 and data["new_due"] is None
+
+    status, data = ui.json("/api/obligations")
+    assert data["rows"][0]["resolved"] is True
+
+    status, data = ui.json("/api/queue")
+    assert data["items"] == []
+
+
+def test_obligation_paid_refuses_before_writing_and_never_echoes_an_amount(ui):
+    _add_rent(ui)
+    for bad in (
+        {"id": "rent", "account": "mattress", "fingerprint": "fp-1", "paid_on": "2026-08-07"},
+        {"id": "rent", "account": "checking", "fingerprint": "", "paid_on": "2026-08-07"},
+        {"id": "rent", "account": "checking", "fingerprint": "fp-1", "paid_on": "08/07/2026"},
+        {"id": "nope", "account": "checking", "fingerprint": "fp-1", "paid_on": "2026-08-07"},
+    ):
+        status, data = ui.json("/api/obligation/paid", bad)
+        assert status == 400 and data["ok"] is False
+        assert "1450" not in data["error"]
+
+    status, data = ui.json("/api/obligations")
+    assert data["rows"][0]["due_date"] == "2026-08-05"   # nothing rolled
+
+
+def test_obligation_paid_replace_true_only_as_a_json_boolean(ui):
+    """The same I-9 posture `_post_obligation`'s `replace` already carries:
+    the *string* `"false"` must not read as `True` (`bool("false")` is
+    `True` in Python)."""
+    _add_rent(ui)
+    status, data = ui.json("/api/obligation/paid", {
+        "id": "rent", "account": "checking", "fingerprint": "fp-1", "paid_on": "2026-08-07",
+    })
+    assert status == 200
+
+    status, data = ui.json("/api/obligation/paid", {
+        "id": "rent", "account": "checking", "fingerprint": "fp-2", "paid_on": "2026-08-07",
+        "replace": "false",
+    })
+    assert status == 400 and "overwrite" in data["error"]

@@ -132,7 +132,7 @@ def compose_demo() -> str:
 _DEMO_OBLIGATIONS: dict[str, tuple[str, str, str, str]] = {
     "rent": ("Sunrise Properties LLC", "-1450.00", "2026-08-05", "monthly"),        # overdue by 5
     "insurance": ("Homestead Mutual Auto", "-96.40", "2026-08-12", "monthly"),      # due in 2
-    "registration": ("County DMV", "-180.00", "2026-11-01", "annual"),              # due in 83
+    "registration": ("County DMV", "-180.00", "2026-11-01", "yearly"),              # due in 83
 }
 
 #: field → the stand-in text for its L3/L4 rungs (`Classified` requires one).

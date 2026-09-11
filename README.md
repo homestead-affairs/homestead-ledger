@@ -76,6 +76,35 @@ slashed date (v1's own books are synthetic-only) — such a row keeps its old
 date text, will not dedup against a re-import in the new ISO form, and
 `transaction list --gaps` is how an operator finds it.
 
+## Marking an obligation paid
+
+```bash
+homestead-ledger obligation paid rent --account checking --fingerprint a1b2c3      # today
+homestead-ledger obligation paid rent --account checking --fingerprint a1b2c3 --on 2026-08-07
+homestead-ledger obligation paid rent --account checking --fingerprint a1b2c3 --replace
+```
+
+`cadence` (`homestead_ledger/cadence.py`) is now a closed set —
+`weekly`/`biweekly`/`monthly`/`quarterly`/`yearly`/`once` — and `add_obligation`
+refuses anything outside it by name; the server's `<select>` and the CLI's own
+help text both list the set from `cadence.CADENCES`, never a copy typed a
+second time. ~~Earlier, nothing held `cadence` to anything, because nothing
+yet rolled a due date forward by it.~~
+
+`obligation paid <id> --account <label> --fingerprint <fp> [--on YYYY-MM-DD]
+[--replace]` (and the browser's *Mark an obligation paid* form) writes a
+reference — the labeled account and the transaction's fingerprint, never an
+amount — under `(obligations, "paid_by", "<id>.<paid-on>")`, then advances the
+obligation's `due_date` by its cadence (`cadence.roll_forward`, which walks
+forward from the *due* date and clamps a month-length cadence to the target
+month's real length without permanently drifting a month-end date down to the
+28th). A `once` obligation has no next date: it is marked `resolved` instead,
+and `queue`/`/api/queue` stop surfacing it. A second `obligation paid` for the
+same id and date is refused (`--replace` to record it again) the same way a
+second `obligation add` under an occupied id is; `obligation list` and the
+Records tab both mark a paid obligation `paid ✓ <date>` by reference, next to
+the row.
+
 An obligation is one record per field at the pack's rungs
 (`homestead_ledger/obligations.py`), under the household's own short id
 (lowercase letters, digits and hyphens — `rent`, `car-insurance`), which is

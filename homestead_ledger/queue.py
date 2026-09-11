@@ -40,6 +40,14 @@ flagged, never silently dropped.
 The **cover** counts (I-31) are the queue's aggregate passed through the
 re-identification check, so the resting screen shows a number only where it
 reveals nothing about which obligation it came from.
+
+**A resolved obligation drops out here, not out of the store.** There is no
+delete on `Sidecar` (I-9's append-only posture holds for obligations too), so
+`mark_paid` (`obligations.py`) marking a `once` obligation done writes a
+`(kind, "resolved", id)` record rather than removing anything, and this is
+where that record takes effect: an item with one on file is skipped before
+it is ever scored for urgency, the same way an `L5` due date is dropped
+without a trace.
 """
 from __future__ import annotations
 
@@ -105,6 +113,8 @@ def queue(store: Sidecar, *, today: str) -> list[QueueItem]:
     for kind in all_obligations():
         for ref, record in store.records(kind):
             if ref[1] != _DUE_DATE:
+                continue
+            if store.has(kind, "resolved", ref[2]):
                 continue
             served = serve(record, Surface.S1_LIST)
             if served.disposition is Disposition.DENY:

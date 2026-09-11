@@ -7,8 +7,8 @@ gap → require a minimum occurrence count → score confidence → derive
 next-expected/monthly-equivalent/annualized/status), adapted to this bite's
 plain-tuple interface (no `category` field — housing/rent/mortgage/debt/loan
 is excluded by matching the description text instead) and to
-`docs/build-plan.md`'s cadence set (weekly/monthly/quarterly/annual, no
-biweekly bucket).
+`docs/build-plan.md`'s cadence set (weekly/monthly/quarterly/annual, plus
+`biweekly` added by G3-cadence-paidby).
 """
 from __future__ import annotations
 
@@ -56,6 +56,29 @@ def test_weekly_subscription_detected():
     subs = _by_merchant(detect_recurring(txns, today=TODAY))
     assert "coffee sub" in subs
     assert subs["coffee sub"].cadence == "weekly"
+
+
+def test_biweekly_subscription_detected():
+    """G3-cadence-paidby's addition: a 14-day gap now buckets to `biweekly`
+    rather than falling into the gap between `weekly` (<=9) and `monthly`
+    (>=25) where it used to detect nothing at all."""
+    from datetime import timedelta
+    start = date(2026, 6, 1)
+    txns = [((start + timedelta(days=14 * i)).isoformat(), -22.50, "MEAL KIT BOX")
+            for i in range(4)]
+    subs = _by_merchant(detect_recurring(txns, today=TODAY))
+    assert "meal kit box" in subs
+    assert subs["meal kit box"].cadence == "biweekly"
+
+
+def test_a_ten_to_twenty_four_day_gap_used_to_detect_nothing_biweekly_now_does():
+    """Pinning the bucket boundaries: 14 days lands in `biweekly`, and stays
+    out of both `weekly` (<=9) and `monthly` (>=25)."""
+    txns = [(date(2026, 1, 1), -10.0, "X"), (date(2026, 1, 15), -10.0, "X"),
+            (date(2026, 1, 29), -10.0, "X")]
+    txns = [(d.isoformat(), a, m) for d, a, m in txns]
+    subs = _by_merchant(detect_recurring(txns, today=TODAY))
+    assert subs["x"].cadence == "biweekly"
 
 
 def test_quarterly_subscription_detected():
