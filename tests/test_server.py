@@ -1011,3 +1011,40 @@ def test_there_is_no_export_door_on_the_server(ui):
     source = inspect.getsource(server.build_server)
     post_block = source.split("def _route_post")[1].split("def _field")[0]
     assert "schedule" not in post_block
+
+
+def test_subscriptions_excludes_a_paired_leg_and_a_do_not_use_row_together(ui):
+    """`/api/subscriptions` has **one** exclusion set: G4-transfers' paired
+    fingerprints unioned with bite 4's `do_not_use` rows, filtered by
+    reference over `balance.dated_transactions`. Neither module knows the
+    other exists, so the door is the only place the union can be wrong —
+    and a test of either mechanism alone would not notice the other being
+    dropped on the floor here."""
+    ui.add_account(label="chk-main", kind="checking", number="1111")
+    ui.add_account(label="sav-main", kind="savings", number="2222")
+
+    for month in ("06", "07", "08"):
+        _post_transaction(ui, "chk-main", date=f"2026-{month}-01",
+                          amount="-15.99", description="Netflix")
+        out = _post_transaction(ui, "chk-main", date=f"2026-{month}-02",
+                                amount="-200.00", description="Sweep to savings")
+        inn = _post_transaction(ui, "sav-main", date=f"2026-{month}-02",
+                                amount="200.00", description="Sweep from checking")
+        status, data = ui.json("/api/transaction/transfer", {"fp_out": out, "fp_in": inn})
+        assert status == 200 and data["ok"] is True
+
+    # the sweep is three equal monthly movements and would read as a
+    # subscription; paired, it is not spending at all
+    status, data = ui.json("/api/subscriptions")
+    assert status == 200
+    assert {s["merchant"] for s in data["subscriptions"]} == {"netflix"}
+
+    # and the overlay's own exclusion still applies in the same pass
+    netflix = [r["item_id"] for r in ui.json("/api/transactions?account=chk-main")[1]["rows"]
+               if r["field"] == "description" and r["text"] == "Netflix"]
+    assert len(netflix) == 3
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": netflix[0],
+                                                    "do_not_use": True})
+    assert status == 200
+    status, data = ui.json("/api/subscriptions")
+    assert status == 200 and data["subscriptions"] == []

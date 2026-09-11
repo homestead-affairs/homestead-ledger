@@ -4,11 +4,12 @@ envelope state a household reads them through.
 `(budget, "limit", "<category>.<YYYY-MM>")` is the one record `set_limit`
 writes (decision 9) — never a figure the books themselves produced
 ("mirror, not judge", restated for a number the household typed).
-`category` is held to the identical closed shape and protected-word list
-`overlay.py` classifies a transaction's own category against — mirrored
-here rather than imported (`overlay._CATEGORY` is private), with
-`PROTECTED_CATEGORY_WORDS` read straight off `packs.overlay` so there is
-only ever one word list. **A protected category's *limit* is `L4` either
+`category` is held to the identical closed shape `overlay.py` classifies a
+transaction's own category against — mirrored here rather than imported
+(`overlay._CATEGORY` is private) — and the identical protected-word rule,
+reused rather than mirrored: `overlay._is_protected` is called directly,
+so a change to the word list or the containment rule can never drift
+between the two doors. **A protected category's *limit* is `L4` either
 way** (money has no lower floor); what still argues up is the category's
 own *name* wherever an envelope names one on a list
 (`_displayed_category`, the same stand-in `overlay.tags_of` gives).
@@ -31,7 +32,7 @@ from decimal import Decimal, InvalidOperation
 from homestead.keep.logs import Event, VisibleLog
 from homestead.keep.rungs import Classified, Disposition, Surface, serve
 
-from homestead_ledger import accounts, overlay
+from homestead_ledger import accounts, overlay, transfers
 from homestead_ledger.balance import dated_transactions
 from homestead_ledger.packs import budget as pack
 from homestead_ledger.packs import overlay as overlay_pack
@@ -104,19 +105,14 @@ def _limit_amount(value: object) -> Decimal:
     return amount
 
 
-def _is_protected(category: str) -> bool:
-    """Substring containment — the false-negative-avoiding rule
-    `overlay._is_protected` applies, reused via `PROTECTED_CATEGORY_WORDS`
-    rather than a second list."""
-    return any(word in category for word in overlay_pack.PROTECTED_CATEGORY_WORDS)
-
-
 def _displayed_category(category: str) -> str:
     """`category` as an envelope names it on `S1_LIST`: the real word, or —
     the instant it contains a protected word — the same derived stand-in
-    `overlay.tags_of` gives its own `category` field. Argues up only, the
-    same as `overlay.tag`."""
-    return _CATEGORY_DERIVED if _is_protected(category) else category
+    `overlay.tags_of` gives its own `category` field. `overlay._is_protected`
+    is called directly rather than mirrored, so the containment rule and the
+    word list it reads (`PROTECTED_CATEGORY_WORDS`) can never drift between
+    the two doors. Argues up only, the same as `overlay.tag`."""
+    return _CATEGORY_DERIVED if overlay._is_protected(category) else category
 
 
 def set_limit(
@@ -221,11 +217,12 @@ def envelopes(
     Spend is read through `balance.dated_transactions` (no `.payload` of
     this module's own) over every registered account instance, filtered to
     `month`, to outflows only (`amount < 0`, `recurring.py`'s own
-    convention), with `overlay.excluded_fingerprints` (`do_not_use`)
-    dropped before anything is summed. A transaction's category comes from
-    `overlay.tags_of` at `S1_DETAIL` — the real word, needed to group spend
-    under the same key a limit is filed under; only the *result*
-    (`Envelope.category`) derives on the way out.
+    convention), with `overlay.excluded_fingerprints` (`do_not_use`) and
+    `transfers.paired_fingerprints` (a transfer's two legs are not
+    spending) dropped before anything is summed. A transaction's category
+    comes from `overlay.tags_of` at `S1_DETAIL` — the real word, needed to
+    group spend under the same key a limit is filed under; only the
+    *result* (`Envelope.category`) derives on the way out.
 
     A limit's real figure is read once, through the gate at `S1_DETAIL`
     (`Served.value`, never `.payload`), purely to decide `over` — the
@@ -233,7 +230,12 @@ def envelopes(
     `store`.
     """
     mon = _month(month)
-    excluded = overlay.excluded_fingerprints(store)
+    # G4-transfers landed a sibling exclusion for the same reason
+    # `do_not_use` exists: a transfer's two legs are not spending, and its
+    # own docstring asks every household aggregate to union
+    # `paired_fingerprints()` in — the same posture `server.py`'s
+    # `_get_subscriptions` takes.
+    excluded = overlay.excluded_fingerprints(store) | transfers.paired_fingerprints(store)
 
     spent_by_category: dict[str, Decimal] = {}
     uncategorised = 0

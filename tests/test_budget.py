@@ -25,7 +25,7 @@ from homestead.keep.logs import Event
 from homestead.keep.rungs import Rung
 from homestead.keep.store import RecordExists
 
-from homestead_ledger import accounts, budget, overlay, registry, server
+from homestead_ledger import accounts, budget, overlay, registry, server, transfers
 from homestead_ledger.books import Transaction, import_transaction
 from homestead_ledger.packs import budget as pack
 from homestead_ledger.store import Canonical, Sidecar
@@ -42,10 +42,12 @@ def store(tmp_path, monkeypatch):
 
 def _txn(monkeypatch, tmp_path, make_account, *, date, amount, description, label=LABEL):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
-    if not accounts.label_exists(Sidecar(), label):
+    sidecar = Sidecar()
+    if not accounts.label_exists(sidecar, label):
         make_account("checking", label=label, number="9821")
+    kind = accounts.kind_of(sidecar, label)
     return import_transaction(Transaction(
-        account=label, kind="checking", date=date, amount=amount, description=description,
+        account=label, kind=kind, date=date, amount=amount, description=description,
     ))
 
 
@@ -224,6 +226,29 @@ def test_do_not_use_changes_over_from_true_to_false(tmp_path, monkeypatch, make_
     overlay.tag(sidecar, fp_big, do_not_use=True)
     rows, _ = budget.envelopes(canonical, sidecar, "2026-09")
     assert {r.category: r.over for r in rows}["dining"] is False
+
+
+def test_a_paired_transfer_leg_never_counts_as_spend(tmp_path, monkeypatch, make_account):
+    """G4-transfers' own exclusion, unioned in alongside `do_not_use`: a
+    transfer's outgoing leg is not spending, even when it is tagged with a
+    category (a household can tag either)."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
+    make_account("savings", label="sav-b", number="1234")
+    sidecar, canonical = Sidecar(), Canonical()
+
+    fp_out = _txn(monkeypatch, tmp_path, make_account, date="2026-09-05", amount="-50.00",
+                  description="To savings", label=LABEL)
+    fp_in = _txn(monkeypatch, tmp_path, make_account, date="2026-09-05", amount="50.00",
+                 description="From checking", label="sav-b")
+    overlay.tag(sidecar, fp_out, category="groceries")
+    transfers.pair(sidecar, fp_out, fp_in)
+    budget.set_limit(sidecar, "groceries", "2026-09", "10.00")
+
+    rows, _ = budget.envelopes(canonical, sidecar, "2026-09")
+    row = {r.category: r for r in rows}["groceries"]
+    assert row.spent_state == budget.NO_SPEND
+    assert row.over is False
 
 
 def test_a_transaction_in_another_month_does_not_count(tmp_path, monkeypatch, make_account):

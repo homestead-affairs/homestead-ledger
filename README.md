@@ -252,7 +252,43 @@ transactions still waiting on a category. The comparison is computed fresh
 from the books and the limits on record every time it is asked, and nothing
 about it is stored on its own. A protected category's name derives on this
 list exactly as it does when tagging a transaction, and a transaction marked
-do-not-use never counts toward it.
+do-not-use, or paired as a transfer, never counts toward it.
+
+## Transfers between your accounts
+
+A transfer between two of your own accounts posts twice on the real books —
+a debit leaving one account, a credit landing in another — and without a way
+to say "these two rows are one movement", a recurring-charge pass can call a
+monthly savings sweep a subscription. `transaction transfer <fp_out> <fp_in>
+[--replace]` (and the browser's equivalent, `POST /api/transaction/transfer`)
+records that the two are one transfer: `fp_out` (the outflow) and `fp_in`
+(the inflow) must both already be on the books, on two **different**
+accounts, equal and opposite in amount, and posted within **5 days** of each
+other (5 days apart is inside the window; 6 is not) — refused by name
+otherwise, and never by repeating an amount. The **first** fingerprint is
+the outgoing leg, the account the money left: the other order is refused by
+name rather than quietly swapped, so the record says what actually happened.
+`transaction transfer --suggest` (`GET /api/transaction/transfers/suggest`)
+proposes candidate pairs that fit those rules without writing anything; you
+still confirm each one with `transaction transfer`. When more than one row
+fits, every candidate is listed and marked **ambiguous** — nothing is ever
+paired for you. A fingerprint already part of a pair, on either side, is
+refused unless `--replace`, which retires the old pairing entirely (its
+other leg is unpaired again) before writing the new one.
+
+Paired transactions are **excluded from every household aggregate** —
+`recurring.detect_recurring`'s subscription pass, and any running balance a
+future surface draws — so a transfer never reads as new income, a new
+expense, or a subscription. The account's own list still shows both rows,
+each annotated `transfer → <the other account's label>` by reference, never
+by amount: a transfer is visible on the statement it actually posted on, it
+is only excluded from what the household's *whole* books add up to.
+
+The paired-transaction moving-money case: a credit-card payment from
+checking to a credit card — `-100.00` on `chk-main`, `+100.00` on
+`visa-chase` — is the same shape whether the destination is another asset
+account or a liability one, because every account pack signs `amount` from
+the household's own side (money leaving is negative, everywhere).
 
 ## Exporting your liabilities
 
