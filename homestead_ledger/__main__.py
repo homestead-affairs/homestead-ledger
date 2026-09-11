@@ -65,6 +65,7 @@ usage: python -m homestead_ledger [--help] [--smoke | --demo]
 commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
   obligation   obligation add <id> <payee> <amount> <due-date> <cadence> [--replace]
                obligation list · obligation show <id>
+               obligation paid <id> --account <label> --fingerprint <fp> [--on YYYY-MM-DD] [--replace]
   transaction  transaction add <date> <amount> <description> --account-number N
                transaction list [--account NAME] [--gaps]
   queue        queue — what's due
@@ -106,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         from homestead_ledger import (  # noqa: F401
             balance,
             books,
+            cadence,
             cli,
             fingerprint,
             importer,

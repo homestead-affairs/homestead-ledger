@@ -54,7 +54,7 @@ def test_rows_and_detail_go_through_the_gate(store):
     obligations.add_obligation(store, item_id="rent", name="Sunrise", amount="1450",
                                due_date="2026-10-01", cadence="monthly")
     obligations.add_obligation(store, item_id="car", name="County DMV", amount="180",
-                               due_date="2026-11-01", cadence="annual")
+                               due_date="2026-11-01", cadence="yearly")
     rows = obligations.rows(store)
     assert [r.item_id for r in rows] == ["car", "rent"]
     rent = rows[1]
@@ -232,6 +232,18 @@ def test_a_refusal_never_echoes_the_amount(store):
                                    due_date="2026-10-01", cadence="monthly")
     assert "4242" not in str(caught.value)
     assert "amount" in str(caught.value)
+
+
+def test_a_cadence_outside_cadences_is_refused_by_name(store):
+    """I-23's reasoning applied to the household-typed `cadence` word:
+    `cadence.CADENCES` is the one enumeration `mark_paid`'s `roll_forward`
+    reads, so nothing may land in the field that arithmetic does not also
+    recognise. Plant `"fortnightly"` — a word an operator might reasonably
+    type for `biweekly` — and it must be refused, not silently accepted."""
+    with pytest.raises(ValueError, match="cadence must be one of"):
+        obligations.add_obligation(store, item_id="rent", name="a", amount="1",
+                                   due_date="2026-10-01", cadence="fortnightly")
+    assert store.records("obligations") == []
 
 
 def test_a_non_finite_amount_is_not_an_amount(store):

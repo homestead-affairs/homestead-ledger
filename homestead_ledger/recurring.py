@@ -28,9 +28,16 @@ Pipeline:
      subscription in two. If no cluster alone qualifies, fall back to the
      whole merchant group as one variable/usage-metered subscription.
   4. Infer cadence from the median gap between sorted charge dates, bucketed
-     to `weekly` / `monthly` / `quarterly` / `annual` (`docs/build-plan.md`'s
-     cadence set — no `biweekly` bucket, unlike the predecessor). Require
-     **≥3 occurrences** (**≥2 for annual**, where history is thin by nature).
+     to `weekly` / `biweekly` / `monthly` / `quarterly` / `yearly` (the
+     names come from `cadence.CADENCES`; ~~`annual`~~ was this module's own
+     spelling of `yearly` and is gone). Bite
+     G3-cadence-paidby added `biweekly` (14±2 days) once `obligations.py`
+     gained a cadence an operator can actually *declare* as biweekly
+     (`cadence.CADENCES`) — a detector that could never name what the
+     household's own form accepts was the gap; the bucket is centered
+     narrowly enough (12-16 days) not to eat into `weekly` (≤9) or
+     `monthly` (≥25). Require **≥3 occurrences** (**≥2 for yearly**, where
+     history is thin by nature).
   5. Score confidence by blending interval regularity and amount stability;
      drop anything below `min_confidence`.
   6. Derive `next_expected`, `monthly_equivalent`, `annualized`, and a status
@@ -62,15 +69,35 @@ _CODE_KW_RE = re.compile(
 #: field, unlike its private-ledger ancestor.
 _EXCLUDED_DESCRIPTION_RE = re.compile(r"hous|rent|mortgage|debt|loan", re.IGNORECASE)
 
-# ── cadence buckets (build-plan's set: no biweekly) ──────────────────────────
+# ── cadence buckets ───────────────────────────────────────────────────────
+#
+# The bucket *names* are `cadence.CADENCES` members, not a second vocabulary.
+# They were one until this bite: this table said `annual` where the
+# obligations form says `yearly`, so the subscriptions pane could report a
+# cadence the household could not then type into the form beside it — two
+# spellings for one concept, which is the drift I-23 exists to stop (a
+# detector's inferred word and an operator's declared word must at least be
+# the *same word*). They are written out as literals here rather than imported,
+# because this module imports nothing from `homestead_ledger` or the engine
+# on purpose — it takes plain tuples and a date and nothing else, and
+# `test_recurring.py`'s import guard holds it to that. What holds the two
+# vocabularies together instead is a test
+# (`test_cadence.py::test_every_recurring_bucket_names_a_cadence`, which
+# plants a rogue bucket and watches it fail), not an import: purity and I-23
+# both keep what they are owed.
+#
+# `once` has no bucket and never will: it is the one cadence that is not a
+# gap between two charges, so nothing observed can be detected as it.
 
 _CADENCE_BUCKETS: tuple[tuple[str, int, int], ...] = (
     ("weekly", 5, 9),
+    ("biweekly", 12, 16),
     ("monthly", 25, 35),
     ("quarterly", 80, 100),
-    ("annual", 350, 380),
+    ("yearly", 350, 380),
 )
-_MIN_OCCURRENCES = {"annual": 2}   # every other cadence defaults to 3
+#: ~~`annual`~~ → `yearly`: the same bucket under `CADENCES`'s spelling.
+_MIN_OCCURRENCES = {"yearly": 2}   # every other cadence defaults to 3
 _DEFAULT_MIN_OCCURRENCES = 3
 
 _DAYS_PER_YEAR = 365.25
