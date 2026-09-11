@@ -198,32 +198,34 @@ have to rediscover them.
   page. Both are wired and tested server-side; only the HTML is missing.~~
   (2026-09-11, G9c-business-books-ui, #50, released 0.12.0 — closed the same
   way as the paragraph above.)
-- ~~**Inline scans the meta-scan cannot see.** `tests/test_scans_fire.py`
+- **Inline scans the meta-scan cannot see.** `tests/test_scans_fire.py`
   reads module-level helpers. A guard written inline in a test body is
   invisible to it and can never be planted — the X7 audit factored out the
   three page scans in `tests/test_server.py` and the second-copy guard in
   `tests/test_budget.py`, but the suite still carries inline scans of this
   shape (for example `tests/test_view.py`'s module-scope tkinter check and
   `tests/test_nestor_seam.py`'s lazy-import check). Each is asserted against
-  the real tree and none has been shown to fire on a violation.~~ (2026-09-11:
-  closed by G9d-inline-scans (this branch; PR number filled in by the
-  orchestrator) — `tests/test_scans_fire.py` now carries an inline half that
-  walks every test body for the same four shapes, and every inline scan it
-  found (`test_view.py`'s tkinter check and `test_nestor_seam.py`'s
-  lazy-import check among them) is factored into a planted module-level
-  helper.)
-- ~~**Duplicated chokepoint scans.** `tests/test_queue.py`,
+  the real tree and none has been shown to fire on a violation.
+  (2026-09-11: **built** on `claude/ledger-inline-scans` — an inline half of
+  `tests/test_scans_fire.py` that walks every test body for the same shapes,
+  with `test_view.py`'s and `test_nestor_seam.py`'s checks factored into
+  planted module-level helpers. Not struck: a document does not mark its own
+  landing, and this branch has no PR number and no release yet. The strike,
+  with `#NN` and the release `CHANGELOG.md` confirms, is a `docs:` follow-up
+  the orchestrator makes once both exist.)
+- **Duplicated chokepoint scans.** `tests/test_queue.py`,
   `tests/test_recurring.py`, `tests/test_transfers.py`,
   `tests/test_budget.py` and `tests/test_business_books.py` each re-implement
   the `.payload`-reach walk that `tests/test_invariants_chokepoint.py`
   already owns and plants. The mechanism is proven once; the copies are not,
-  and a copy that drifts is the shape this whole sweep is about.~~
-  (2026-09-11: closed by G9d-inline-scans (this branch; PR number filled in
-  by the orchestrator) — `test_queue.py`, `test_recurring.py`,
-  `test_budget.py` and `test_business_books.py` now call
+  and a copy that drifts is the shape this whole sweep is about.
+  (2026-09-11: **built** on `claude/ledger-inline-scans` — `test_queue.py`,
+  `test_recurring.py`, `test_budget.py` and `test_business_books.py` now call
   `test_invariants_chokepoint`'s own `_payload_reaches`/`_canonical_reaches`
-  rather than re-walking the AST; `test_transfers.py` already delegated to
-  the same helper and carried no copy to remove.)
+  rather than re-walking the AST; `test_transfers.py` already delegated and
+  carried no copy to remove. Not struck, for the same reason as the item
+  above: no PR number, no release, and a document does not mark its own
+  landing.)
 - **Closed here, recorded so it is not re-opened as an open item:** the
   cover's distribution gate. The sweep's first pass called
   `accounts.cover`'s missing `by_matter` wiring an open item; the audit found

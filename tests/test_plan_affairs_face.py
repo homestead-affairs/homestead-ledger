@@ -37,20 +37,6 @@ _STRIKE_RE = re.compile(r"~~(.*?)~~", re.DOTALL)
 _PR_RE = re.compile(r"#\d+")
 _RELEASE_RE = re.compile(r"released\s+\d+\.\d+\.\d+")
 
-#: The one other evidence shape this file accepts, alongside PR+release: a
-#: bite closing an *open item it recorded itself*, on its own branch, before
-#: the orchestrator has opened (let alone merged) its PR. "A document does
-#: not mark its own landing" (G9d-inline-scans) means such a strike can name
-#: no PR number yet -- inventing one would be the exact wishful claim this
-#: file exists to forbid. `docs/PLAN-affairs-face.md`'s "Inline scans"/
-#: "Duplicated chokepoint scans" bullets are struck this way, once the
-#: branch that closed them existed to write the sentence.
-_SELF_CLOSURE_RE = re.compile(
-    r"closed\s+by\s+[\w-]+\s+\(this\s+branch;\s+PR\s+number\s+filled\s+in\s+by"
-    r"\s+the\s+orchestrator\)",
-    re.DOTALL,
-)
-
 #: How far past a `~~...~~` span to look for its `(#NN, released ...)` tail —
 #: generous enough for this file's longest struck bite's trailing note. The
 #: window alone is *not* narrow enough on its own: two short struck lines a
@@ -91,13 +77,20 @@ def _struck_blocks(text: str) -> list[tuple[str, str]]:
 
 def _strikes_missing_evidence(text: str) -> list[str]:
     """Every struck bite whose tail does not carry both a PR number and a
-    release version, named by what it is missing -- except the one other
-    accepted shape, `_SELF_CLOSURE_RE`, which is exempt from both because it
-    makes neither claim."""
+    release version, named by what it is missing.
+
+    There is no second accepted shape. G9d-inline-scans proposed one -- a
+    branch striking an open item *it* recorded, with "PR number filled in by
+    the orchestrator" in place of the number -- and it was refused on audit
+    (2026-09-11): an exemption keyed on a phrase is an exemption any future
+    sweep can type, and "a document does not mark its own landing" is the
+    whole rule this file is. A bite that closed an open item on its branch
+    leaves the bullet **unstruck** with a dated "built on <branch>" note, and
+    a `docs:` follow-up strikes it once the PR number and the release exist
+    -- the same course `homestead-law` took for the identical case on the
+    same day."""
     missing = []
     for struck, tail in _struck_blocks(text):
-        if _SELF_CLOSURE_RE.search(tail):
-            continue
         lacks = []
         if not _PR_RE.search(tail):
             lacks.append("PR number")
@@ -149,32 +142,47 @@ def test_the_evidence_guard_fires_on_a_strikethrough_missing_either_half(tmp_pat
     )
 
 
-def test_the_self_closure_exemption_fires_on_the_documented_phrase(tmp_path):
-    """Planted: the one other accepted evidence shape. A bite closing an
-    open item it recorded itself, on its own branch, before the
-    orchestrator has opened a PR -- naming no PR number is honest here, not
-    wishful, so it must not be reported."""
+def test_a_branch_may_not_strike_the_open_item_it_closed_itself(tmp_path):
+    """Planted: the exemption this guard refused. A bite that closed an open
+    item *it* recorded, striking it on its own branch with "PR number filled
+    in by the orchestrator" where the number belongs, still claims a landing
+    the tree cannot show -- so it is reported, exactly like any other strike
+    missing its evidence. The honest shape (left unstruck, with a dated
+    "built on <branch>" note) is planted beside it and must not be."""
     planted = tmp_path / "PLAN-planted.md"
     planted.write_text(
         "~~an open item this branch closed~~ (closed by G9d-inline-scans "
-        "(this branch; PR number filled in by the orchestrator))\n",
-        encoding="utf-8",
-    )
-    assert _strikes_missing_evidence(planted.read_text(encoding="utf-8")) == []
-
-
-def test_the_self_closure_exemption_does_not_swallow_a_bare_closed_claim(tmp_path):
-    """And not over-strict in the other direction: the exemption is the one
-    documented phrase, not the word "closed" alone -- a strike that merely
-    asserts it is closed, with neither a PR number nor the orchestrator
-    phrase, is still the wishful claim this file exists to catch."""
-    planted = tmp_path / "PLAN-planted.md"
-    planted.write_text(
-        "~~an open item~~ (closed, trust me)\n",
+        "(this branch; PR number filled in by the orchestrator))\n"
+        "\n"
+        "- **an open item this branch built** (2026-09-11: built on "
+        "`claude/ledger-inline-scans`; the orchestrator strikes it with the "
+        "PR number and the release.)\n",
         encoding="utf-8",
     )
     missing = _strikes_missing_evidence(planted.read_text(encoding="utf-8"))
-    assert missing, "a bare 'closed' claim with no PR/release must still be reported"
+    assert len(missing) == 1 and "PR number" in missing[0] and "release version" in missing[0], (
+        "a self-closure strike names neither a PR nor a release and must be "
+        f"reported for both; got {missing}"
+    )
+    assert "built" not in "".join(missing), (
+        "the unstruck note is not a strike and must not be reported at all"
+    )
+
+
+def test_the_two_g9d_open_items_are_named_and_unstruck():
+    """The refusal, held against the real document. The inline-scan and
+    duplicated-chokepoint items were built on `claude/ledger-inline-scans`
+    and have no PR number and no release, so they stay named and unstruck
+    until a `docs:` follow-up carries both."""
+    text = PLAN_FACE.read_text(encoding="utf-8")
+    struck = "\n".join(struck for struck, _ in _struck_blocks(text))
+    for item in ("Inline scans the meta-scan cannot see",
+                 "Duplicated chokepoint scans"):
+        assert item in text, f"{item!r} is an open item and must stay named"
+        assert item not in struck, (
+            f"{item!r} is struck through with no PR number and no release: a "
+            "document does not mark its own landing"
+        )
 
 
 def test_every_ledger_bite_the_plan_names_has_an_entry():
