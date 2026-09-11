@@ -5,7 +5,7 @@
 
 ### Added
 
-* budget limits per category and month, envelopes derived on the list ([83df4cb](https://github.com/homestead-affairs/homestead-ledger/commit/83df4cbc148aa50bc3b1e45b7540fb902790e1c7))
+* budget limits per category and month, envelopes derived on the list ([5f39ae8](https://github.com/homestead-affairs/homestead-ledger/commit/5f39ae8a8de4de8dcd59f697984cb84b48fa9e0e))
 
 
 ### Fixed
