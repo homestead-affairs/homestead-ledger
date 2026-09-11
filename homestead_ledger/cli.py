@@ -169,7 +169,8 @@ def _cmd_obligation(argv: list[str]) -> int:
             return 0
         print(f"  {len(found)} obligation(s):")
         for row in found:
-            print(f"  [{row.rung.value}]  {row.item_id}: {row.name}  ·  due {row.due_date}  ·  {row.cadence}  ·  {row.amount}")
+            mark = "  [incomplete — a field is not on file]" if row.gap else ""
+            print(f"  [{row.rung.value}]  {row.item_id}: {row.name}  ·  due {row.due_date}  ·  {row.cadence}  ·  {row.amount}{mark}")
         return 0
 
     if sub == "show":
@@ -205,7 +206,7 @@ def _cmd_transaction(argv: list[str]) -> int:
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import RecordExists
 
-    from homestead_ledger import books
+    from homestead_ledger import books, money, registry
     from homestead_ledger.app.window import Window
     from homestead_ledger.packs import checking
     from homestead_ledger.store import Canonical
@@ -217,6 +218,17 @@ def _cmd_transaction(argv: list[str]) -> int:
     sub, rest = args[0], args[1:]
     rest, account = _flag(rest, "--account")
     account = account or checking.ACCOUNT
+    # I-23: the registry is the only enumeration. An unregistered `--account`
+    # would otherwise grow a whole phantom account in the canonical books —
+    # rows nothing that iterates `all_accounts()` (the queue, the subscription
+    # pass, the window) would ever reach. Refused by name, never created.
+    if account not in registry.all_accounts():
+        print(
+            f"  unknown account {account!r} — one of: "
+            f"{', '.join(registry.all_accounts())}",
+            file=sys.stderr,
+        )
+        return 2
     _boot()
 
     if sub == "add":
@@ -227,12 +239,13 @@ def _cmd_transaction(argv: list[str]) -> int:
         date, amount, description = rest[0], rest[1], " ".join(rest[2:])
         try:
             date = parse_deadline(date).iso
-            amount = f"{float(amount.replace(',', '').replace('$', '')):.2f}"
-        except UnparseableDate as exc:
+            # `money.amount_text`, not `float()`: `float("nan")` and
+            # `float("inf")` both succeed and land an amount in the books that
+            # poisons every sum it joins. The refusal names the field and
+            # never repeats the value (I-15 — an amount is L4).
+            amount = money.amount_text(amount)
+        except (UnparseableDate, ValueError) as exc:
             print(f"  refused: {exc}", file=sys.stderr)
-            return 1
-        except ValueError:
-            print(f"  refused: amount {amount!r} is not a number (e.g. -84.23)", file=sys.stderr)
             return 1
         if not description.strip():
             print("  refused: a transaction names its payee or description", file=sys.stderr)

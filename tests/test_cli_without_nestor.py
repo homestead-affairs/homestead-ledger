@@ -98,3 +98,68 @@ def test_nestor_backed_commands_refuse_in_one_line_naming_the_extra(argv, capsys
     captured = capsys.readouterr()
     assert "homestead-ledger[entity]" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_an_unknown_account_is_refused_before_the_books_grow_one(capsys):
+    """I-23: the registry is the only enumeration, and `--account` is the one
+    place a person can name one. `books.import_transaction` writes whatever
+    matter string it is handed, so an unvalidated flag grows a whole phantom
+    account in the canonical books — rows nothing that iterates
+    `all_accounts()` (the queue, the subscription pass, the window) will ever
+    reach. That is BUG-6's shape with a bank statement in it."""
+    rc = run_cli(["transaction", "add", "2026-08-01", "-1.00", "x",
+                  "--account-number", "1", "--account", "mattress"])
+    assert rc == 2                                   # a flag value, like an unknown subcommand
+    err = capsys.readouterr().err
+    assert "unknown account" in err and "checking" in err
+
+    assert run_cli(["transaction", "list", "--account", "mattress"]) == 2
+    capsys.readouterr()
+    # nothing was written under the phantom name, and nothing under checking
+    assert run_cli(["transaction", "list"]) == 0
+    assert "nothing on the books" in capsys.readouterr().out
+
+
+def test_an_amount_that_is_not_finite_is_refused_without_being_echoed(capsys):
+    """`float("nan")` succeeds and `f"{float('nan'):.2f}"` is the string "nan".
+    And I-15: the refusal names the field, never the value (an amount is L4)."""
+    for bad in ("nan", "inf", "-inf"):
+        assert run_cli(["transaction", "add", "2026-08-01", bad, "x",
+                        "--account-number", "1"]) == 1
+        err = capsys.readouterr().err
+        assert "finite" in err and "Traceback" not in err
+
+    assert run_cli(["obligation", "add", "rent", "a", "8675.309lots",
+                    "2099-10-01", "monthly"]) == 1
+    err = capsys.readouterr().err
+    assert "8675.309" not in err and "amount" in err
+
+    assert run_cli(["transaction", "list"]) == 0
+    assert "nothing on the books" in capsys.readouterr().out
+
+
+def test_an_obligation_id_is_one_closed_shape(capsys):
+    """The id is a key segment and a string the browser renders back; one
+    closed shape, refused at the door rather than escaped at every surface."""
+    assert run_cli(["obligation", "add", "a'-alert(1)-'b", "a", "1",
+                    "2099-10-01", "monthly"]) == 1
+    assert "refused" in capsys.readouterr().err
+    assert run_cli(["obligation", "add", "Rent Account", "a", "1",
+                    "2099-10-01", "monthly"]) == 1
+    capsys.readouterr()
+    assert run_cli(["obligation", "list"]) == 0
+    assert "no obligations on file" in capsys.readouterr().out
+
+
+def test_a_racing_second_add_is_refused_at_the_cli_too(capsys):
+    """The same I-9 refusal an operator meets: a second `obligation add` under
+    an id already on file leaves the first untouched and says how to mean it."""
+    assert run_cli(["obligation", "add", "rent", "Sunrise", "1450",
+                    "2099-10-01", "monthly"]) == 0
+    capsys.readouterr()
+    assert run_cli(["obligation", "add", "rent", "Interloper", "9999",
+                    "2099-12-25", "weekly"]) == 1
+    assert "--replace" in capsys.readouterr().err
+    assert run_cli(["obligation", "show", "rent"]) == 0
+    out = capsys.readouterr().out
+    assert "name: Sunrise" in out and "Interloper" not in out

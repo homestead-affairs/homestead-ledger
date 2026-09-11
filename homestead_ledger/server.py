@@ -24,6 +24,15 @@ recurring pass reads the books through ``balance.transaction_tuples`` at the
 payload boundary.  Merchant resolution comes through Nestor's public API —
 optional, and absent without the ``entity`` extra.
 
+**The door answers.** Every request is routed inside a ``try``: a malformed
+body, a ``Content-Length`` that is not a number or names a gigabyte, a JSON
+value that is not an object, a field that is not text, an account the registry
+does not know — each gets a status and a sentence, never a traceback on the
+operator's terminal and a browser left spinning. A handler that fails anyway
+answers with the *class* of what broke and nothing out of it: an exception's
+text can carry the record it was handed, and this answer crosses to a browser
+(I-15). No error here repeats an account number or an amount.
+
 ``build_server()`` returns the bound ``HTTPServer`` without serving, so a
 test can drive the real handlers on an ephemeral port; ``serve()`` is the
 operator's door and blocks until Ctrl+C.
@@ -139,10 +148,11 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
 <body>
 <header>
   <h1>homestead-ledger</h1>
-  <span class="sub">receipt intake &amp; dashboard</span>
+  <span class="sub">the household's own entry desk</span>
 </header>
 <nav>
-  <button class="tb on" onclick="show('intake',this)">Intake</button>
+  <button class="tb on" onclick="show('records',this)">Records</button>
+  <button class="tb" onclick="show('intake',this)">Intake</button>
   <button class="tb" onclick="show('queue',this)">What's Due</button>
   <button class="tb" onclick="show('entities',this)">Entities</button>
   <button class="tb" onclick="show('subscriptions',this)">Subscriptions</button>
@@ -279,14 +289,21 @@ function loadObligations() {
     if(!data.rows||!data.rows.length){div.innerHTML='<p class="empty">No obligations on file yet.</p>';return;}
     var html='';
     data.rows.forEach(function(o){
-      html+='<div class="qi rw" onclick="openObligation(\''+esc(o.id)+'\')">'
-        +'<span class="rb r-'+o.rung+'">'+o.rung+'</span>'
+      html+='<div class="qi rw" data-oid="'+attr(o.id)+'">'
+        +'<span class="rb r-'+attr(o.rung)+'">'+esc(o.rung)+'</span>'
         +'<span class="rk">'+esc(o.id)+'</span>'
         +'<span class="qs">'+esc(o.name)+'</span>'
         +'<span class="qn">due '+esc(o.due_date)+' &middot; '+esc(o.cadence)+' &middot; '+esc(o.amount)+'</span>'
+        +(o.gap?'<span class="qu u-over">incomplete</span>':'')
         +'</div>';
     });
     div.innerHTML=html;
+    // The id goes in as *data*, never as text spliced into an onclick — an
+    // attribute escape is not a JavaScript-string escape, and an apostrophe
+    // in an id would otherwise close the string and run what follows.
+    div.querySelectorAll('[data-oid]').forEach(function(el){
+      el.addEventListener('click',function(){openObligation(el.getAttribute('data-oid'))});
+    });
   }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load obligations</p>';});
 }
 
@@ -297,7 +314,7 @@ function openObligation(id) {
     var html='<div class="dt"><strong>'+esc(id)+'</strong>';
     Object.keys(data.fields).forEach(function(k){
       var f=data.fields[k];
-      html+='<div><span class="rb r-'+f.rung+'">'+f.rung+'</span> <span class="rk">'+esc(k.replace(/_/g,' '))+'</span> '
+      html+='<div><span class="rb r-'+attr(f.rung)+'">'+esc(f.rung)+'</span> <span class="rk">'+esc(k.replace(/_/g,' '))+'</span> '
         +(f.value===null?'(sealed)':esc(f.value))+'</div>';
     });
     div.innerHTML=html+'</div>';
@@ -313,7 +330,7 @@ function loadTransactions() {
     var html='';
     data.rows.forEach(function(r){
       html+='<div class="qi">'
-        +'<span class="rb r-'+r.rung+'">'+r.rung+'</span>'
+        +'<span class="rb r-'+attr(r.rung)+'">'+esc(r.rung)+'</span>'
         +'<span class="rk">'+esc(r.item_id.slice(0,12))+' &middot; '+esc(r.field)+'</span>'
         +'<span class="qs">'+esc(r.text)+'</span>'
         +'</div>';
@@ -323,7 +340,14 @@ function loadTransactions() {
 }
 
 function esc(s) {
-  var d=document.createElement('div'); d.textContent=s; return d.innerHTML;
+  var d=document.createElement('div'); d.textContent=(s===null||s===undefined)?'':s; return d.innerHTML;
+}
+
+// Text bound for an *attribute* value. `esc` escapes &, < and > — enough for
+// a text node, not enough inside quotes, where a ' or a " closes the
+// attribute early and everything after it is markup again.
+function attr(s) {
+  return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 var _items=[];
@@ -392,7 +416,7 @@ function loadQueue() {
       else if(item.days_until<=14){cls='u-soon';txt='in '+item.days_until+'d';}
       else{txt='in '+item.days_until+'d';}
       html+='<div class="qi">'
-        +'<span class="rb r-'+item.rung+'">'+item.rung+'</span>'
+        +'<span class="rb r-'+attr(item.rung)+'">'+esc(item.rung)+'</span>'
         +'<span class="rk">'+esc(item.id)+'</span>'
         +'<span class="qs">'+esc(item.shown)+'</span>'
         +'<span class="qu '+cls+'">'+txt+'</span>'
@@ -472,7 +496,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import InvalidKey, RecordExists
 
-    from homestead_ledger import balance, books, nestor_seam, obligations, registry
+    from homestead_ledger import balance, books, money, nestor_seam, obligations, registry
     from homestead_ledger.app.window import Window
     from homestead_ledger.intake import extract
     from homestead_ledger.nestor_store import get_store
@@ -484,10 +508,31 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     root.mkdir(parents=True, exist_ok=True)
     (root / "keep").mkdir(parents=True, exist_ok=True)
 
-    nestor_ok = nestor_seam.bind(root) is not None
+    try:
+        nestor_ok = nestor_seam.bind(root) is not None
+    except Exception:
+        # The extra is installed but would not bind (a ledger path it cannot
+        # open, a version that moved a symbol). The books never needed Nestor;
+        # the UI comes up with merchant resolution absent rather than not at
+        # all, and `/api/resolve` says so with a 503.
+        nestor_ok = False
 
     sidecar = Sidecar()
     canonical = Canonical()
+
+    #: The largest request body this door will read. A browser form sends a few
+    #: hundred bytes; an intake paste, a few thousand. Without a cap,
+    #: `rfile.read(Content-Length)` is an instruction from the client to
+    #: allocate whatever it names — and this process holds the household's
+    #: books. 1 MiB is far above any honest paste and far below trouble.
+    max_body = 1024 * 1024
+
+    class _BadRequest(Exception):
+        """A request refused at the door, with the status to answer it with."""
+
+        def __init__(self, message: str, status: int = 400) -> None:
+            super().__init__(message)
+            self.status = status
 
     class _H(http.server.BaseHTTPRequestHandler):
 
@@ -511,12 +556,55 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             self.wfile.write(body)
 
         def _body(self):
-            n = int(self.headers.get("Content-Length", 0))
-            return json.loads(self.rfile.read(n)) if n else {}
+            """The request body as a JSON object, or `_BadRequest`.
+
+            Every failure mode here used to be an unhandled exception inside
+            `do_POST`, which means no response at all and a traceback on the
+            operator's terminal: a `Content-Length` that is not a number, a
+            body that is not JSON, a body that is JSON but not an object
+            (`[1,2]` — then `body.get` explodes), and a `Content-Length` that
+            names a gigabyte. Each is answered, by status, naming the shape
+            expected and never echoing what arrived.
+            """
+            raw_length = self.headers.get("Content-Length")
+            if raw_length is None:
+                raise _BadRequest("a request body is required (send JSON)")
+            try:
+                n = int(raw_length)
+            except (TypeError, ValueError):
+                raise _BadRequest("Content-Length is not a number") from None
+            if n < 0:
+                raise _BadRequest("Content-Length is negative")
+            if n > max_body:
+                raise _BadRequest(
+                    f"request body is larger than the {max_body}-byte limit", 413
+                )
+            if n == 0:
+                return {}
+            try:
+                body = json.loads(self.rfile.read(n))
+            except (ValueError, UnicodeDecodeError):
+                raise _BadRequest("request body is not valid JSON") from None
+            if not isinstance(body, dict):
+                raise _BadRequest("request body is a JSON object, not a list or a bare value")
+            return body
 
         # ── GET ───────────────────────────────────────────────────────
 
         def do_GET(self):
+            try:
+                return self._route_get()
+            except _BadRequest as exc:
+                return self._json({"ok": False, "error": str(exc)}, exc.status)
+            except Exception as exc:
+                # The handler failed. Say *that* — the class of what broke and
+                # nothing out of it: an exception's text can carry a record it
+                # was handed, and this answer crosses to a browser (I-15).
+                return self._json(
+                    {"ok": False, "error": f"the request failed ({type(exc).__name__})"}, 500
+                )
+
+        def _route_get(self):
             p = urllib.parse.urlparse(self.path)
             qs = dict(urllib.parse.parse_qsl(p.query))
 
@@ -551,7 +639,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
         def _get_obligations(self):
             self._json({"rows": [
                 {"id": r.item_id, "name": r.name, "due_date": r.due_date,
-                 "cadence": r.cadence, "amount": r.amount, "rung": r.rung.value}
+                 "cadence": r.cadence, "amount": r.amount, "rung": r.rung.value,
+                 "gap": r.gap}
                 for r in obligations.rows(sidecar)
             ]})
 
@@ -567,7 +656,9 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
         def _get_transactions(self, qs):
             account = qs.get("account", checking.ACCOUNT)
             if account not in registry.all_accounts():
-                return self._json({"error": f"unknown account {account!r}"}, 400)
+                # Named, not echoed, and the same answer either way: the
+                # registry is the only enumeration (I-23).
+                return self._json({"error": "unknown account"}, 400)
             # The list pane over the read-only books (I-6): date and payee
             # render, the amount derives, the account number is never a row.
             window = Window()
@@ -610,6 +701,16 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
         # ── POST ──────────────────────────────────────────────────────
 
         def do_POST(self):
+            try:
+                return self._route_post()
+            except _BadRequest as exc:
+                return self._json({"ok": False, "error": str(exc)}, exc.status)
+            except Exception as exc:
+                return self._json(
+                    {"ok": False, "error": f"the request failed ({type(exc).__name__})"}, 500
+                )
+
+        def _route_post(self):
             p = urllib.parse.urlparse(self.path).path
             body = self._body()
 
@@ -621,8 +722,24 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._post_transaction(body)
             self.send_error(404)
 
+        def _field(self, body, name):
+            """One form field out of a JSON body, as text.
+
+            JSON carries objects, lists, booleans and nulls, and a form field
+            is none of those. `str()` on whatever arrives would turn `{"a": 1}`
+            into the string `"{'a': 1}"` and store *that* — so a value that is
+            not a string or a number is refused by name here, before any
+            parser sees it. The refusal names the type, never the value.
+            """
+            value = body.get(name)
+            if value is None:
+                return ""
+            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                raise _BadRequest(f"{name} is text, not a {type(value).__name__}")
+            return str(value)
+
         def _post_extract(self, body):
-            text = body.get("text", "")
+            text = self._field(body, "text")
             items = extract(text)
             self._json({"items": [
                 {"kind": e.kind, "text": e.text, "value": e.value,
@@ -631,16 +748,28 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             ]})
 
         def _post_obligation(self, body):
-            name = str(body.get("name") or "")
+            name = self._field(body, "name")
+            # JSON `true` and nothing else. `bool("false")` is `True` — so a
+            # checkbox posted as the *string* `"false"`, which is what several
+            # form serializers send, would have been read as "yes, replace it"
+            # and silently overwritten an obligation (I-9). An explicit act
+            # needs an explicitly true value.
+            replace = body.get("replace") is True
+            # Cadence is stored as the household's own word for it. It is not
+            # held against `recurring.py`'s buckets (which know weekly /
+            # monthly / quarterly / annual and no `biweekly` or `once`),
+            # because nothing yet rolls an obligation forward by its cadence —
+            # when that lands, the accepted set becomes one enumeration and
+            # this door validates against it.
             try:
                 ref, replaced = obligations.add_obligation(
                     sidecar,
-                    item_id=str(body.get("id") or ""),
+                    item_id=self._field(body, "id"),
                     name=name,
-                    amount=body.get("amount") or "",
-                    due_date=str(body.get("due_date") or ""),
-                    cadence=str(body.get("cadence") or ""),
-                    replace=bool(body.get("replace", False)),
+                    amount=self._field(body, "amount"),
+                    due_date=self._field(body, "due_date"),
+                    cadence=self._field(body, "cadence"),
+                    replace=replace,
                 )
             except (ValueError, UnparseableDate, InvalidKey, RecordExists) as exc:
                 return self._json({"ok": False, "error": str(exc)}, 400)
@@ -654,24 +783,32 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             self._json({"ok": True, "id": ref[2], "replaced": replaced is not None})
 
         def _post_transaction(self, body):
-            account = str(body.get("account") or checking.ACCOUNT)
+            # I-23: the registry is the only enumeration, and this door is the
+            # one place a browser can name an account. An unregistered name
+            # would grow a phantom account in the canonical books that nothing
+            # iterating `all_accounts()` would ever read back.
+            account = self._field(body, "account") or checking.ACCOUNT
             if account not in registry.all_accounts():
-                return self._json({"ok": False, "error": f"unknown account {account!r}"}, 400)
-            account_number = str(body.get("account_number") or "").strip()
-            description = str(body.get("description") or "").strip()
+                return self._json({"ok": False, "error": "unknown account"}, 400)
+            account_number = self._field(body, "account_number").strip()
+            description = self._field(body, "description").strip()
             if not account_number:
                 return self._json({"ok": False, "error": "an account number is required"}, 400)
             if not description:
                 return self._json({"ok": False, "error": "a description is required"}, 400)
             try:
-                date = parse_deadline(str(body.get("date") or "")).iso
+                date = parse_deadline(self._field(body, "date")).iso
             except UnparseableDate as exc:
                 return self._json({"ok": False, "error": str(exc)}, 400)
             try:
-                raw = str(body.get("amount") or "").replace(",", "").replace("$", "")
-                amount = f"{float(raw):.2f}"
-            except ValueError:
-                return self._json({"ok": False, "error": "amount is not a number (e.g. -84.23)"}, 400)
+                # `money.amount_text`, never `float()`: `float("nan")` and
+                # `float("1e400")` both succeed, and `f"{float('nan'):.2f}"` is
+                # the string "nan" — an amount on the books that makes every
+                # balance after it `nan`. The refusal names the field and never
+                # repeats what was typed (I-15 — an amount is L4).
+                amount = money.amount_text(self._field(body, "amount"))
+            except ValueError as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
             txn = books.Transaction(
                 account=account, date=date, amount=amount,
                 description=description, account_number=account_number,
@@ -692,7 +829,7 @@ def serve(*, host: str = "127.0.0.1", port: int = 8385) -> None:
     srv = build_server(host=host, port=port)
     url = f"http://{host}:{srv.server_address[1]}"
     print(f"  homestead-ledger ui: {url}")
-    print(f"  press Ctrl+C to stop")
+    print("  press Ctrl+C to stop")
 
     try:
         webbrowser.open(url)

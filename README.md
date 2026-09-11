@@ -59,8 +59,11 @@ python -m homestead_ledger                                       # the window, o
 ```
 
 An obligation is one record per field at the pack's rungs
-(`homestead_ledger/obligations.py`), under the household's own short id, which
-is what the queue carries; a transaction is grown onto the read-only canonical
+(`homestead_ledger/obligations.py`), under the household's own short id
+(lowercase letters, digits and hyphens — `rent`, `car-insurance`), which is
+what the queue carries; a second `add` under an id already on file is refused
+by the store itself, not by a check that another writer could have raced, and
+`--replace` is how you mean it; a transaction is grown onto the read-only canonical
 books through `books.import_transaction`, the one writer — entered once,
 refused on re-entry, never edited ("mirror, not judge"). The browser UI (`ui`)
 has a *Records* tab with both forms and both lists, an *Intake* tab that
@@ -68,7 +71,8 @@ extracts amounts, dates, merchants and due dates from a pasted bill or receipt
 and fills a form with one click, the *Queue*, and *Subscriptions* — the
 recurring-charge pass over the real books. Merchant resolution, reconciliation
 and the ledger check need `pip install 'homestead-ledger[entity]'` and say so
-when it is missing.
+when it is missing. `--account` names an account kind the registry knows
+(`checking` today); an unregistered name is refused rather than quietly grown.
 
 ## The method
 

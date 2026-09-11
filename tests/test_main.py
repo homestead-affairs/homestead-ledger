@@ -125,3 +125,148 @@ def test_no_display_returns_nonzero_with_guidance(capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "--demo" in err
     assert "--smoke" in err
+
+
+# ── `--smoke` is the packaging proof, so it must name every runtime module ──
+#
+# `--smoke` is the only leg CI runs against the built PyInstaller artifact. A
+# module it does not import is a module whose packaging is untested: the
+# binary can ship without it and the smoke test still prints "ok". The browser
+# UI (`server.py`) and the whole CLI layer were exactly that — every import in
+# them unproven — until this scan.
+#
+# The scan is structural rather than a list to keep in step by hand: it reads
+# the package directory and the `--smoke` branch out of `__main__.py` and holds
+# one against the other, so a module added tomorrow is covered tomorrow.
+
+import ast
+from pathlib import Path
+
+PKG = Path(__file__).resolve().parent.parent / "homestead_ledger"
+
+#: `__init__` is imported by importing anything at all; `__main__` is the file
+#: doing the importing. Everything else under the package root is runtime.
+_NOT_RUNTIME = {"__init__", "__main__"}
+
+
+def _runtime_modules(pkg: Path) -> set[str]:
+    return {p.stem for p in pkg.glob("*.py")} - _NOT_RUNTIME
+
+
+def _smoke_imported(main_path: Path) -> set[str]:
+    """Every `homestead_ledger.<name>` imported inside the `--smoke` branch.
+
+    Reads the branch out of the AST rather than grepping the file, so a module
+    merely *mentioned* in the usage text or a comment does not count as
+    imported — the thing being proven is that the import runs."""
+    tree = ast.parse(main_path.read_text("utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        literals = {
+            c.value for c in ast.walk(node.test) if isinstance(c, ast.Constant)
+        }
+        if "--smoke" not in literals:
+            continue
+        names: set[str] = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.ImportFrom) and sub.module == "homestead_ledger":
+                names |= {a.name for a in sub.names}
+            elif isinstance(sub, ast.Import):
+                for alias in sub.names:
+                    if alias.name.startswith("homestead_ledger."):
+                        names.add(alias.name.split(".", 1)[1].split(".")[0])
+        return names
+    raise AssertionError(f"no `--smoke` branch found in {main_path}")
+
+
+def _unproven(pkg: Path, main_path: Path) -> list[str]:
+    return sorted(_runtime_modules(pkg) - _smoke_imported(main_path))
+
+
+def test_smoke_imports_every_runtime_module():
+    """Every module under `homestead_ledger/` is named in the `--smoke` import
+    block, so the packaged artifact proves the whole runtime imports — not just
+    the half the demo happens to touch."""
+    assert _unproven(PKG, PKG / "__main__.py") == [], (
+        "these modules are not imported by `--smoke`, so nothing proves they "
+        "survive packaging. Add them to the `--smoke` branch of __main__.py."
+    )
+
+
+def test_the_smoke_import_scan_catches_an_omission(tmp_path):
+    """A scan that has never fired has not been shown to check anything. Plant
+    a package whose `--smoke` branch leaves one module out, and the scan must
+    name it — and must not name the two that are never runtime imports."""
+    pkg = tmp_path / "homestead_ledger"
+    pkg.mkdir()
+    for name in ("__init__", "server", "cli", "obligations"):
+        (pkg / f"{name}.py").write_text("", encoding="utf-8")
+    (pkg / "__main__.py").write_text(
+        "def main(argv):\n"
+        '    if "--smoke" in argv:\n'
+        "        from homestead_ledger import cli, obligations  # noqa: F401\n"
+        "        return 0\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    assert _unproven(pkg, pkg / "__main__.py") == ["server"]
+
+    # and with the omission closed, the same scan is quiet — so a green result
+    # means "covered", not "the scan cannot see anything".
+    (pkg / "__main__.py").write_text(
+        "def main(argv):\n"
+        '    if "--smoke" in argv:\n'
+        "        from homestead_ledger import cli, obligations, server  # noqa: F401\n"
+        "        return 0\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    assert _unproven(pkg, pkg / "__main__.py") == []
+
+
+def test_the_smoke_scan_reads_imports_not_mentions(tmp_path):
+    """A module named in the usage string or a comment is not a module that
+    imports — the scan must not be satisfied by prose."""
+    pkg = tmp_path / "homestead_ledger"
+    pkg.mkdir()
+    for name in ("__init__", "server"):
+        (pkg / f"{name}.py").write_text("", encoding="utf-8")
+    (pkg / "__main__.py").write_text(
+        'USAGE = "ui — the server, see homestead_ledger.server"\n'
+        "def main(argv):\n"
+        '    if "--smoke" in argv:\n'
+        "        # imports homestead_ledger.server one day\n"
+        "        return 0\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    assert _unproven(pkg, pkg / "__main__.py") == ["server"]
+
+
+def test_smoke_actually_imports_the_ui_and_the_cli(tmp_path):
+    """The other half of the scan: it proves the block *names* every module;
+    this proves a cold interpreter *imports* them. Run in a subprocess, the way
+    CI runs it against the built artifact — in-process, `from homestead_ledger
+    import server` is satisfied by an attribute already on the imported package
+    and would prove nothing about a fresh start."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sys;"
+         "from homestead_ledger.__main__ import main;"
+         "rc = main(['--smoke']);"
+         "missing = [m for m in ('homestead_ledger.server','homestead_ledger.cli',"
+         "'homestead_ledger.obligations','homestead_ledger.importer',"
+         "'homestead_ledger.intake','homestead_ledger.queue',"
+         "'homestead_ledger.recurring','homestead_ledger.nestor_seam',"
+         "'homestead_ledger.nestor_store') if m not in sys.modules];"
+         "print(rc, missing)"],
+        capture_output=True, text=True,
+        env={"HOMESTEAD_HOME": str(tmp_path), "PATH": "/usr/bin:/bin",
+             "PYTHONPATH": ":".join(sys.path)},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("0 []"), result.stdout + result.stderr

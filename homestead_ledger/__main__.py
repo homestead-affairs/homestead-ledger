@@ -71,17 +71,40 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if "--smoke" in argv:
-        # Prove the interpreter and every import survived packaging — this
-        # module's store, its pack and registry, the books, the derived
-        # balance, and the app surfaces (window, cover, demo, view) plus the
-        # shared engine theme the view now draws from — and exit without a
-        # display.
+        # Prove the interpreter and **every runtime module** survived
+        # packaging, and exit without a display. This is the only leg CI runs
+        # against the built PyInstaller artifact, so a module it does not name
+        # is a module whose packaging is untested — the browser UI and the CLI
+        # were exactly that until now, and either one is a whole layer of the
+        # app that could be missing from the binary with a green smoke test.
+        # `tests/test_main.py::test_smoke_imports_every_runtime_module` holds
+        # this block against the package on disk so a new module cannot be
+        # left out of it.
         from homestead.app import theme  # noqa: F401
         from homestead.keep import paths
 
-        from homestead_ledger import balance, books, registry, store  # noqa: F401
-        from homestead_ledger.app import demo, view, window  # noqa: F401
-        from homestead_ledger.packs import checking, obligations  # noqa: F401
+        from homestead_ledger import (  # noqa: F401
+            balance,
+            books,
+            cli,
+            fingerprint,
+            importer,
+            intake,
+            money,
+            nestor_seam,
+            nestor_store,
+            obligations,
+            queue,
+            recurring,
+            registry,
+            server,
+            store,
+        )
+        from homestead_ledger.app import cover, demo, view, window  # noqa: F401
+        from homestead_ledger.packs import (  # noqa: F401
+            checking,
+            obligations as _obligations_pack,
+        )
 
         print(f"homestead-ledger ok · books at {paths.home() / 'homestead-ledger.db'}")
         return 0
@@ -115,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         # Bite 4 — a bank-statement CSV import, headless, no tkinter touched.
         # Imported inside this branch so `--smoke` and every other path stay
         # clean of the importer's own imports.
-        from homestead_ledger import importer
+        from homestead_ledger import importer, registry
         from homestead_ledger.packs import checking
 
         try:
@@ -143,6 +166,18 @@ def main(argv: list[str] | None = None) -> int:
             except IndexError:
                 print("homestead-ledger: --account requires a value", file=sys.stderr)
                 return 2
+
+        # I-23: the registry is the only enumeration. An unregistered account
+        # name here would import a whole statement into a phantom account —
+        # rows in the canonical books that nothing iterating `all_accounts()`
+        # will ever reach, which is BUG-6's shape with a bank statement in it.
+        if account not in registry.all_accounts():
+            print(
+                f"homestead-ledger: unknown account {account!r} — one of: "
+                f"{', '.join(registry.all_accounts())}",
+                file=sys.stderr,
+            )
+            return 2
 
         dry_run = "--dry-run" in argv
 
