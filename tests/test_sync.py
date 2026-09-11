@@ -700,21 +700,33 @@ def test_the_fleet_reads_and_validates_a_produced_envelope_before_it_dials(store
 
 
 def test_the_fleet_accepts_a_structured_pair_value(store):
-    """Settled by the engine's E7b (2026-09-11, floor raised here to 0.13.0,
-    G7b-floor-0.13): a `transfers` `pair` is served as a mapping (it is
-    `L2`), and the fleet now stores `value` as canonical JSON text behind a
-    `value_format` column rather than refusing any row that is not already
-    a string — `fleet_cli._validate_rows` accepts it, and the envelope
-    composes, drops to a file and reaches `homestead-fleet ingest` clean.
-    Was `test_the_fleet_refuses_a_structured_pair_value_by_name`, pinning
-    the refusal `_validate_rows` used to raise ("not storable text"); that
-    sentence is struck, not the test.
+    """Settled by the engine's E7b (2026-09-11; the floor is raised to
+    0.13.0 here, G7b-floor-0.13). What this test asserted while the refusal
+    stood — as `test_the_fleet_refuses_a_structured_pair_value_by_name`,
+    struck through rather than deleted, because the reason it was written
+    is the reason it now passes:
 
-    What is left to check past validation is the fleet's own dial — this
-    module never holds a DSN and does not pretend to exercise Postgres, so
-    with the `fleet` extra installed the assertion is that `ingest` fails
-    *only* at `_connect()`, as an `OperationalError` from an unreachable
-    loopback port, and never re-raises `IngestRefused` from validation."""
+    > ~~Pinned, not papered over: a `transfers` `pair` is served as a
+    > mapping (it is `L2`), and the fleet's `value` column is `TEXT`, so
+    > `_validate_rows` refuses the row — and with it the *whole* envelope
+    > (I-11). An envelope whose scope names `transfers` therefore composes
+    > and drops to a file here and is refused at `homestead-fleet ingest`,
+    > loudly and before a row is written. Settling that is the engine's
+    > contract to change (a `TEXT` column versus a structured served
+    > value), not a module's to work around; this test is where it is
+    > recorded.~~
+
+    E7b settled it the other way round from the guess above: the column
+    stays `TEXT`, and what goes in it is the value's canonical JSON text,
+    named by a `value_format` column (`json` from E7b on, `raw` for rows
+    written before, so no legacy row is re-typed). So `_validate_rows` no
+    longer raises its old "not storable text" refusal on a mapping, and an
+    envelope whose scope names `transfers` composes, freezes and validates
+    clean.
+
+    What is left past validation is the fleet's own dial, which this module
+    never holds a DSN for:
+    `test_the_fleet_ingest_of_a_structured_pair_fails_only_at_the_dial`."""
     from homestead.keep import fleet_cli
     from homestead.keep.sync import Envelope
 
@@ -774,7 +786,10 @@ def test_a_transfer_pair_crosses_end_to_end_as_a_structured_value(store):
     encoding, not two that could drift, per `store.canonical_value_text`'s
     own docstring); and `decode_value` on that text, told `value_format=
     "json"` the way a fleet row's own column tells it, hands back the same
-    mapping the household composed, unchanged."""
+    mapping the household composed, unchanged. The row's own `rung` and
+    `disposition` are asserted too — `L2` and `render` are exactly what
+    `fleet_cli._validate_rows` requires before it ever looks at the
+    value."""
     from homestead.keep.store import canonical_value_text
     from homestead.keep.fleet_cli import decode_value
 
@@ -789,8 +804,15 @@ def test_a_transfer_pair_crosses_end_to_end_as_a_structured_value(store):
     wire_bytes = envelope.to_bytes()
 
     pair_rows = [r for r in envelope.rows if r["item_type"] == "pair"]
-    assert pair_rows
-    value = pair_rows[0]["value"]
+    assert len(pair_rows) == 1
+    row = pair_rows[0]
+    # The two halves of the row that decide whether the fleet may store it
+    # at all, asserted rather than assumed: `_validate_rows` accepts only
+    # `render` at a readable rung, so a pair that ever composed as `mask`
+    # or above `L2` would be refused at ingest with this test still green.
+    assert row["rung"] == "L2"
+    assert row["disposition"] == "render"
+    value = row["value"]
     assert isinstance(value, dict)
 
     text = canonical_value_text(value)
