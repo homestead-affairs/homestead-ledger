@@ -69,7 +69,10 @@ __all__ = ["run", "compose_store", "LedgerContext", "DEMO_BANNER"]
 #: fell back to the throwaway demo store — the "clearly-visible indicator"
 #: piece 1 requires, so demonstration numbers are never mistaken for a real
 #: household's books.
-DEMO_BANNER = "demonstration data — import a statement with `--import` to see your own books"
+DEMO_BANNER = (
+    "demonstration data — enter your own with `homestead-ledger ui`, "
+    "`homestead-ledger obligation add`, or import a statement with `--import`"
+)
 
 
 @dataclass(frozen=True)

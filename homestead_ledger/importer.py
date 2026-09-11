@@ -38,13 +38,13 @@ from __future__ import annotations
 import csv
 import sys
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
 from homestead.keep.store import RecordExists
 
-from homestead_ledger import books
+from homestead_ledger import books, money
 from homestead_ledger.packs import checking
 
 __all__ = [
@@ -96,14 +96,14 @@ def _clean_decimal(raw: str) -> Decimal:
     """A bank CSV's numeric text, stripped of the formatting a spreadsheet
     export commonly adds ($ prefix, thousands commas) — never its sign or
     magnitude. Raises `ValueError` (not `InvalidOperation` — the parser's own
-    exception type) on anything that is not, in the end, a number."""
-    text = raw.strip().replace(",", "").replace("$", "").strip()
-    if not text:
-        raise ValueError("missing amount")
-    try:
-        return Decimal(text)
-    except InvalidOperation as exc:
-        raise ValueError(f"amount is not a number: {raw!r}") from exc
+    exception type) on anything that is not, in the end, a finite number.
+
+    One reading, shared with the CLI and the browser UI (`money.py`): a CSV
+    cell reading `nan` or `inf` parses as a `Decimal` perfectly happily, and
+    an amount that is not finite poisons every sum it joins. The refusal names
+    the field and never echoes the cell (I-15 — an amount is L4, and a
+    *rejected* value reaches the same stderr as an accepted one)."""
+    return money.decimal_amount(raw)
 
 
 def _single_amount(raw: str) -> str:
@@ -122,9 +122,10 @@ def _debit_credit_amount(debit_raw: str, credit_raw: str) -> str:
     credit_raw = (credit_raw or "").strip()
     if debit_raw and credit_raw:
         raise ValueError(
-            f"both Debit ({debit_raw!r}) and Credit ({credit_raw!r}) are "
-            "populated for one row — a torn or ambiguous export, not a "
-            "transaction this module will guess a sign for"
+            "both Debit and Credit are populated for one row — a torn or "
+            "ambiguous export, not a transaction this module will guess a "
+            "sign for. (Neither cell is repeated here: I-15 lets an error "
+            "name a field, never echo an L4 value.)"
         )
     if not debit_raw and not credit_raw:
         raise ValueError("neither Debit nor Credit is populated — missing amount")

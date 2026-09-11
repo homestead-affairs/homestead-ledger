@@ -60,3 +60,24 @@ def test_running_balance_writes_nothing(tmp_path, monkeypatch):
     canonical_rows = adapter.read_matter(CANONICAL, "checking")
     # 3 transactions x 4 fields = 12 canonical rows, unmoved by two calls
     assert len(canonical_rows) == 12
+
+
+def test_transaction_tuples_hand_the_recurring_pass_the_real_numbers(tmp_path, monkeypatch):
+    """The recurring-charge detector takes plain `(date, amount, description)`
+    tuples; this read at the payload boundary is what feeds it from the real
+    books, oldest first, complete transactions only."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    from homestead_ledger.balance import transaction_tuples
+    from homestead_ledger.books import Transaction, import_transaction
+    from homestead_ledger.store import Canonical
+
+    import_transaction(Transaction(account="checking", date="2026-08-03", amount="1500.00",
+                                   description="Employer Payroll", account_number="9821"))
+    import_transaction(Transaction(account="checking", date="2026-08-01", amount="-84.23",
+                                   description="Whole Foods Market", account_number="9821"))
+
+    assert transaction_tuples(Canonical(), "checking") == [
+        ("2026-08-01", -84.23, "Whole Foods Market"),
+        ("2026-08-03", 1500.0, "Employer Payroll"),
+    ]
+    assert transaction_tuples(Canonical(), "checking") and transaction_tuples(Canonical(), "nothing") == []

@@ -38,6 +38,42 @@ is only what the household chose to expose.
 > from PyPI, three OSes), and the build plan (`docs/build-plan.md`). The books,
 > the "what's due" queue, CSV import, and the app land in the bites that follow.
 
+## Entering your own information
+
+The demo (`--demo`) is synthetic. The household's own books go into the
+household root — `$HOMESTEAD_HOME`, else `~/.homestead` — and nothing below
+needs the optional `entity` extra:
+
+```bash
+pip install -e .
+
+homestead-ledger ui                                              # entry forms, intake, queue and subscriptions, on localhost
+homestead-ledger obligation add rent "Sunrise Properties LLC" 1450.00 2026-10-01 monthly
+homestead-ledger obligation list                                 # the list pane: payee, due date, cadence; the amount derives
+homestead-ledger obligation show rent                            # the detail pane: the amount renders
+homestead-ledger queue                                           # what's due
+homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account-number 9821
+homestead-ledger transaction list                                # the books, through the gate — the account number is never a row
+python -m homestead_ledger --import statement.csv --account-number 9821   # a whole statement
+python -m homestead_ledger                                       # the window, on these books (the demo only if empty)
+```
+
+An obligation is one record per field at the pack's rungs
+(`homestead_ledger/obligations.py`), under the household's own short id
+(lowercase letters, digits and hyphens — `rent`, `car-insurance`), which is
+what the queue carries; a second `add` under an id already on file is refused
+by the store itself, not by a check that another writer could have raced, and
+`--replace` is how you mean it; a transaction is grown onto the read-only canonical
+books through `books.import_transaction`, the one writer — entered once,
+refused on re-entry, never edited ("mirror, not judge"). The browser UI (`ui`)
+has a *Records* tab with both forms and both lists, an *Intake* tab that
+extracts amounts, dates, merchants and due dates from a pasted bill or receipt
+and fills a form with one click, the *Queue*, and *Subscriptions* — the
+recurring-charge pass over the real books. Merchant resolution, reconciliation
+and the ledger check need `pip install 'homestead-ledger[entity]'` and say so
+when it is missing. `--account` names an account kind the registry knows
+(`checking` today); an unregistered name is refused rather than quietly grown.
+
 ## The method
 
 Test-first, as in `homestead`: every claim is a check somebody can run. From a

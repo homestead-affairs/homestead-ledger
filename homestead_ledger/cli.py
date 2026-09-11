@@ -1,16 +1,23 @@
-"""CLI commands for homestead-ledger — real data, wired through Nestor.
+"""CLI commands for homestead-ledger — real data, in the household root.
 
-Each command maps to a Nestor capability or a ledger operation:
+The household's own commands need only the engine:
 
-  resolve   — entity resolution for merchant domain
-  reconcile — numeric reconciliation for amount domain
-  put       — store a field value (checking or obligation)
-  queue     — what's due (obligation deadlines)
+  obligation   — add / list / show a recurring obligation (rent, insurance…)
+  transaction  — add one transaction to the books, or list the account
+  queue        — what's due (obligation due dates)
+  ui           — the browser UI: entry forms, intake, queue, subscriptions
+
+The Nestor-backed commands need the optional ``entity`` extra and say so in
+one line when it is missing:
+
+  resolve   — entity resolution for the merchant domain
+  reconcile — numeric reconciliation for the amount domain
   verify    — check the Nestor ledger chain
-  ui        — launch the browser intake UI
-  import    — import a bank-statement CSV (delegates to importer)
 
-All commands operate on the household root, not a throwaway.
+``put`` is retired: one field under a random id in the wrong matter was a
+record the queue never found. A bank-statement CSV still comes in through
+``python -m homestead_ledger --import``. All commands operate on the household
+root, not a throwaway.
 """
 from __future__ import annotations
 
@@ -32,11 +39,36 @@ def _boot() -> None:
     nestor_seam.bind(root)
 
 
+def _needs_nestor() -> bool:
+    """True when the Nestor-backed command can run; otherwise says why not."""
+    if nestor_seam.available():
+        return True
+    print(f"  {nestor_seam.NOT_INSTALLED}", file=sys.stderr)
+    return False
+
+
+def _flag(args: list[str], name: str) -> tuple[list[str], str | None]:
+    """Pull ``--name value`` out of ``args``; return the rest and the value."""
+    rest: list[str] = []
+    value: str | None = None
+    i = 0
+    while i < len(args):
+        if args[i] == name and i + 1 < len(args):
+            value = args[i + 1]
+            i += 2
+        else:
+            rest.append(args[i])
+            i += 1
+    return rest, value
+
+
 def _cmd_resolve(argv: list[str]) -> int:
     """resolve <surface> — resolve a merchant name."""
     if len(argv) < 2:
         print("usage: homestead-ledger resolve <surface>", file=sys.stderr)
         return 2
+    if not _needs_nestor():
+        return 1
     _boot()
     surface = " ".join(argv[1:])
     store = get_store()
@@ -58,6 +90,8 @@ def _cmd_reconcile(argv: list[str]) -> int:
     if len(argv) < 3:
         print("usage: homestead-ledger reconcile <baseline> <observed>", file=sys.stderr)
         return 2
+    if not _needs_nestor():
+        return 1
     _boot()
     try:
         baseline = float(argv[1])
@@ -76,32 +110,181 @@ def _cmd_reconcile(argv: list[str]) -> int:
     return 0
 
 
-def _cmd_put(argv: list[str]) -> int:
-    """put <field> <value> — store a ledger field value."""
-    if len(argv) < 3:
-        print("usage: homestead-ledger put <field> <value>", file=sys.stderr)
-        return 2
-    from homestead.keep.rungs import Classified, Rung
-    from homestead_ledger.packs.checking import FIELDS as CHECK_FIELDS
-    from homestead_ledger.packs.obligations import FIELDS as OBL_FIELDS
+_OBLIGATION_USAGE = """\
+usage: homestead-ledger obligation add <id> <payee> <amount> <due-date> <cadence> [--replace]
+       homestead-ledger obligation list
+       homestead-ledger obligation show <id>
+  e.g.: homestead-ledger obligation add rent "Sunrise Properties LLC" 1450.00 2026-10-01 monthly
+"""
+
+
+def _cmd_obligation(argv: list[str]) -> int:
+    """obligation <add|list|show> — the household's recurring obligations."""
+    from homestead.keep.dates import UnparseableDate
+    from homestead.keep.store import InvalidKey, RecordExists
+
+    from homestead_ledger import obligations
     from homestead_ledger.store import Sidecar
 
+    args = argv[1:]
+    if not args:
+        print(_OBLIGATION_USAGE, end="", file=sys.stderr)
+        return 2
+    sub, rest = args[0], args[1:]
     _boot()
-    field = argv[1]
-    value = " ".join(argv[2:])
-    all_fields = {**CHECK_FIELDS, **OBL_FIELDS}
-    if field not in all_fields:
-        print(f"unknown field: {field}", file=sys.stderr)
-        print(f"known fields: {', '.join(sorted(all_fields))}", file=sys.stderr)
-        return 1
-    rung = all_fields[field]
-    item = Classified(rung, value, None)
-    item_id = f"cli-{field}-{hash(value) & 0xFFFFFFFF:08x}"
     sidecar = Sidecar()
-    account = "checking"
-    sidecar.put(account, field, item_id, item, overwrite=True)
-    print(f"stored {field}={value} at {rung.value}")
-    return 0
+
+    if sub == "add":
+        replace = "--replace" in rest
+        rest = [a for a in rest if a != "--replace"]
+        if len(rest) < 5:
+            print(_OBLIGATION_USAGE, end="", file=sys.stderr)
+            return 2
+        item_id, name, amount, due_date, cadence = rest[:5]
+        try:
+            ref, replaced = obligations.add_obligation(
+                sidecar, item_id=item_id, name=name, amount=amount, due_date=due_date,
+                cadence=cadence, replace=replace,
+            )
+        except (ValueError, UnparseableDate, InvalidKey, RecordExists) as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        print(f"  stored: {obligations.KIND}/{ref[2]}")
+        print("  payee L3 · amount L4 · due date L2 · cadence L2")
+        if replaced is not None:
+            print("  (replaced the previous obligation under this id)")
+        if nestor_seam.available():
+            try:
+                resolver = nestor_seam.resolver_for("merchant", get_store())
+                resolver.propose(name, name, reason="entered as payee")
+                print(f"  proposed to merchant resolver: {name}")
+            except Exception:
+                pass
+        return 0
+
+    if sub == "list":
+        found = obligations.rows(sidecar)
+        if not found:
+            print("  no obligations on file — `homestead-ledger obligation add <id> <payee> <amount> <due-date> <cadence>`")
+            return 0
+        print(f"  {len(found)} obligation(s):")
+        for row in found:
+            mark = "  [incomplete — a field is not on file]" if row.gap else ""
+            print(f"  [{row.rung.value}]  {row.item_id}: {row.name}  ·  due {row.due_date}  ·  {row.cadence}  ·  {row.amount}{mark}")
+        return 0
+
+    if sub == "show":
+        if not rest:
+            print(_OBLIGATION_USAGE, end="", file=sys.stderr)
+            return 2
+        fields = obligations.detail(sidecar, rest[0])
+        if not fields:
+            print(f"  {rest[0]}: no such obligation", file=sys.stderr)
+            return 1
+        print(f"  {obligations.KIND}/{rest[0]}")
+        for field in ("name", "amount", "due_date", "cadence"):
+            if field in fields:
+                rung, value = fields[field]
+                shown = value if value is not None else "(sealed)"
+                print(f"  [{rung}]  {field.replace('_', ' ')}: {shown}")
+        return 0
+
+    print(f"unknown subcommand {sub!r} — one of: add, list, show", file=sys.stderr)
+    return 2
+
+
+_TRANSACTION_USAGE = """\
+usage: homestead-ledger transaction add <date> <amount> <description> --account-number N [--account NAME]
+       homestead-ledger transaction list [--account NAME]
+  e.g.: homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account-number 9821
+  (a whole statement: python -m homestead_ledger --import FILE.csv --account-number N)
+"""
+
+
+def _cmd_transaction(argv: list[str]) -> int:
+    """transaction <add|list> — one transaction into the books, or the account listed."""
+    from homestead.keep.dates import UnparseableDate, parse_deadline
+    from homestead.keep.store import RecordExists
+
+    from homestead_ledger import books, money, registry
+    from homestead_ledger.app.window import Window
+    from homestead_ledger.packs import checking
+    from homestead_ledger.store import Canonical
+
+    args = argv[1:]
+    if not args:
+        print(_TRANSACTION_USAGE, end="", file=sys.stderr)
+        return 2
+    sub, rest = args[0], args[1:]
+    rest, account = _flag(rest, "--account")
+    account = account or checking.ACCOUNT
+    # I-23: the registry is the only enumeration. An unregistered `--account`
+    # would otherwise grow a whole phantom account in the canonical books —
+    # rows nothing that iterates `all_accounts()` (the queue, the subscription
+    # pass, the window) would ever reach. Refused by name, never created.
+    if account not in registry.all_accounts():
+        print(
+            f"  unknown account {account!r} — one of: "
+            f"{', '.join(registry.all_accounts())}",
+            file=sys.stderr,
+        )
+        return 2
+    _boot()
+
+    if sub == "add":
+        rest, account_number = _flag(rest, "--account-number")
+        if len(rest) < 3 or not account_number:
+            print(_TRANSACTION_USAGE, end="", file=sys.stderr)
+            return 2
+        date, amount, description = rest[0], rest[1], " ".join(rest[2:])
+        try:
+            date = parse_deadline(date).iso
+            # `money.amount_text`, not `float()`: `float("nan")` and
+            # `float("inf")` both succeed and land an amount in the books that
+            # poisons every sum it joins. The refusal names the field and
+            # never repeats the value (I-15 — an amount is L4).
+            amount = money.amount_text(amount)
+        except (UnparseableDate, ValueError) as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        if not description.strip():
+            print("  refused: a transaction names its payee or description", file=sys.stderr)
+            return 1
+        txn = books.Transaction(
+            account=account, date=date, amount=amount,
+            description=description.strip(), account_number=account_number.strip(),
+        )
+        try:
+            item_id = books.import_transaction(txn)
+        except RecordExists as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        print(f"  on the books: {account}/{item_id[:12]}…")
+        print("  date L2 · description L3 · amount L4 · account number L5")
+        return 0
+
+    if sub == "list":
+        window = Window()
+        rows = window.open_list(Canonical().records(account))
+        if not rows:
+            print(f"  {account}: nothing on the books — `homestead-ledger transaction add …` or `--import`")
+            return 0
+        print(f"  {account}: {len(rows)} row(s) (each transaction is a date, a description and an amount)")
+        for row in rows:
+            _, field, item_id = row.ref
+            print(f"  [{row.rung.value}]  {item_id[:12]}  {field}: {row.text}")
+        return 0
+
+    print(f"unknown subcommand {sub!r} — one of: add, list", file=sys.stderr)
+    return 2
+
+
+def _cmd_put(argv: list[str]) -> int:
+    """put — retired; one field under a random id was a record nothing could find."""
+    print("  `put` is retired — enter an obligation or a transaction whole:", file=sys.stderr)
+    print(_OBLIGATION_USAGE, end="", file=sys.stderr)
+    print(_TRANSACTION_USAGE, end="", file=sys.stderr)
+    return 1
 
 
 def _cmd_queue(argv: list[str]) -> int:
@@ -126,12 +309,14 @@ def _cmd_queue(argv: list[str]) -> int:
             flag = f"  [{abs(item.days_until)}d overdue]"
         elif item.days_until is not None and item.days_until <= 14:
             flag = f"  [in {item.days_until}d]"
-        print(f"  {item.rung.value}  {item.shown}{flag}")
+        print(f"  {item.rung.value}  {item.ref[2]}: {item.shown}{flag}")
     return 0
 
 
 def _cmd_verify(argv: list[str]) -> int:
     """verify — check the Nestor ledger chain."""
+    if not _needs_nestor():
+        return 1
     _boot()
     ok = nestor_seam.verify_ledger()
     if ok:
@@ -157,10 +342,12 @@ def _cmd_ui(argv: list[str]) -> int:
 
 
 COMMANDS: dict[str, tuple] = {
-    "resolve":   (_cmd_resolve,   "resolve <surface> — merchant entity resolution"),
-    "reconcile": (_cmd_reconcile, "reconcile <baseline> <observed> — compare amounts"),
-    "put":       (_cmd_put,       "put <field> <value> — store a ledger field"),
-    "queue":     (_cmd_queue,     "queue — show what's due"),
+    "obligation":  (_cmd_obligation,  "obligation <add|list|show> — recurring obligations"),
+    "transaction": (_cmd_transaction, "transaction <add|list> — the books"),
+    "resolve":     (_cmd_resolve,     "resolve <surface> — merchant entity resolution"),
+    "reconcile":   (_cmd_reconcile,   "reconcile <baseline> <observed> — compare amounts"),
+    "put":         (_cmd_put,         "put — retired; use obligation add / transaction add"),
+    "queue":       (_cmd_queue,       "queue — show what's due"),
     "verify":    (_cmd_verify,    "verify — check ledger chain integrity"),
     "ui":        (_cmd_ui,        "ui [--port N] — intake UI in the browser"),
 }

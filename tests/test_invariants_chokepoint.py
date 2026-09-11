@@ -60,8 +60,17 @@ def _modules() -> list[Path]:
     return sorted(p for p in PKG.rglob("*.py") if "__pycache__" not in p.parts)
 
 
+#: The surface layer. `app/` is the tkinter one; `server.py` is the browser and
+#: `cli.py` is the terminal, and both are surfaces in exactly the sense this
+#: scan means — code that composes what a person sees. They sat *outside* the
+#: reflection ban while `app/` sat inside it, which is the coverage hole the
+#: engine's own audit walked through: `getattr(record, "payload")` in
+#: `server.py` was invisible to a scan that only read `app/`.
+SURFACE_FILES = {PKG / "server.py", PKG / "cli.py"}
+
+
 def _is_surface(mod: Path) -> bool:
-    return "app" in mod.relative_to(PKG).parts
+    return "app" in mod.relative_to(PKG).parts or mod in SURFACE_FILES
 
 
 def _payload_reaches(tree: ast.AST) -> list[int]:
@@ -208,3 +217,16 @@ def test_i16_regression_every_bypass_is_caught(tmp_path):
         "a surface was not handed, or writes a record it may not — none may be "
         "invisible."
     )
+
+
+def test_the_surface_set_is_every_surface_not_only_the_window():
+    """The ban is a property of the surface *layer*, so the layer has to be the
+    whole layer. A reflection ban that reads `app/` and not the browser or the
+    terminal is a ban on one third of the surfaces."""
+    assert _is_surface(PKG / "server.py"), "the browser UI is a surface"
+    assert _is_surface(PKG / "cli.py"), "the terminal is a surface"
+    assert _is_surface(PKG / "app" / "window.py")
+    # and not the payload boundary or the registry, which reflect over *modules*
+    # (pack discovery), never over a record
+    assert not _is_surface(BOOKS) and not _is_surface(BALANCE)
+    assert not _is_surface(PKG / "registry.py")

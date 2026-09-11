@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 from homestead_ledger.store import Canonical
 
-__all__ = ["BalancePoint", "running_balance"]
+__all__ = ["BalancePoint", "running_balance", "transaction_tuples"]
 
 
 @dataclass(frozen=True)
@@ -73,3 +73,40 @@ def running_balance(canonical: Canonical, account: str) -> list[BalancePoint]:
             BalancePoint(item_id=item_id, date=dates[item_id], amount=amount, running=round(total, 2))
         )
     return points
+
+
+def transaction_tuples(canonical: Canonical, account: str) -> list[tuple[str, float, str]]:
+    """Every complete transaction in `account` as the plain `(date, amount,
+    description)` tuples `recurring.detect_recurring` takes — oldest first.
+
+    The recurring-charge pass needs the real amount and the real payee, so
+    this read sits here at the payload boundary beside `running_balance`,
+    and the detector stays a pure function over what it is handed. What the
+    detector returns (a merchant, a cadence, an amount) is the household's own
+    arithmetic over its own books — reflected, never authored — and a surface
+    still receives it only as that summary, never as a `Classified`.
+    """
+    amounts: dict[str, str] = {}
+    dates: dict[str, str] = {}
+    descriptions: dict[str, str] = {}
+    for ref, record in canonical.records(account):
+        _, field, item_id = ref
+        if field == "amount":
+            amounts[item_id] = record.payload
+        elif field == "date":
+            dates[item_id] = record.payload
+        elif field == "description":
+            descriptions[item_id] = record.payload
+
+    complete = sorted(
+        (i for i in amounts if i in dates and i in descriptions),
+        key=lambda i: (dates[i], i),
+    )
+    out: list[tuple[str, float, str]] = []
+    for item_id in complete:
+        try:
+            amount = float(amounts[item_id])
+        except (TypeError, ValueError):
+            continue   # an unreadable amount joins no pattern (I-8)
+        out.append((str(dates[item_id]), amount, str(descriptions[item_id])))
+    return out
