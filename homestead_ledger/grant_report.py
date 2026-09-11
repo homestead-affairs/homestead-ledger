@@ -4,7 +4,10 @@ exported, never drafted (G8-business-books, provisional I-44).
 A restricted (grant) account's transactions are tagged with an
 `overlay.py` `use` — the allowable-use bucket its own award terms permit
 (`overlay.allowable_uses_of`). This module aggregates those tags into one
-report: how much was spent under each use, and how many outflows are still
+report: how much was spent under each use — net of any refund carrying the
+same use, the ruling `budget.py` already states for a category's spend, so
+a funder is never read a gross figure the account never spent — and how
+many outflows are still
 waiting on one (`needs_use` — a gap, never a refusal; grant money arrives
 before the operator has typed the award terms in). It carries no
 transaction description, no fingerprint, and no account number — a use
@@ -44,7 +47,6 @@ from homestead.keep.rungs import Classified, Purpose, Rung
 
 from homestead_ledger import accounts, budget, overlay, transfers
 from homestead_ledger.balance import dated_transactions
-from homestead_ledger.schedules import NOTICE
 from homestead_ledger.store import Canonical, Sidecar
 
 __all__ = [
@@ -56,14 +58,20 @@ __all__ = [
 #: `schedules.SCHEMA` is.
 SCHEMA = "homestead-ledger.grant-report/1"
 
-#: `schedules.NOTICE`, plus one sentence naming what this report adds. Kept
-#: a separate constant (never a copy of the sentence text) so the two can
-#: never drift, and carved out of the I-44 phrase guard the same way
-#: `schedules.NOTICE`/`schedules.BUSINESS_NOTICE` already are
+#: This document's own notice — **not** `schedules.NOTICE` with a sentence
+#: appended, which is what an earlier draft carried: that sentence opens "a
+#: list of the household's liabilities" and closes on the Chapter 13 plan
+#: payment, and this document is neither. A notice states what the reader
+#: is holding, so it has to be true of *this* document. It keeps the same
+#: two disclaimers `schedules.NOTICE` carries, said about a report instead
+#: — and carved out of the I-44 phrase guard by value, the same way
+#: `schedules.NOTICE` and `schedules.BUSINESS_SENTENCES` are
 #: (`tests/test_i44_no_drafting.py`).
 GRANT_REPORT_NOTICE = (
-    f"{NOTICE} Totals by allowable use; the award terms decide what "
-    "qualifies."
+    "Spend by allowable use for one account over a period, as the ledger "
+    "holds it, for the household's own use. It is not a report on any "
+    "official form, it carries no form number, and the award terms — not "
+    "this ledger — decide what qualifies."
 )
 
 #: `_MONTH`'s own shape, called rather than copied — one validator for
@@ -98,36 +106,59 @@ def _period(period_start: str, period_end: str) -> tuple[str, str]:
 def _aggregate(
     canonical: Canonical, sidecar: Sidecar, label: str, start: str, end: str,
 ) -> tuple[dict[str, tuple[int, Decimal]], int]:
-    """`{use: (count, total)}` over `label`'s outflows whose ISO month falls
-    in `[start, end]`, plus how many such outflows carry no `use` tag yet
-    (`needs_use`). Excludes `do_not_use` and either leg of a paired
+    """`{use: (count, total)}` over `label`'s rows whose ISO month falls in
+    `[start, end]`, plus how many **outflows** in that window carry no `use`
+    tag yet (`needs_use`). Excludes `do_not_use` and either leg of a paired
     transfer, the same exclusions every household aggregate applies —
-    neither is spend against an allowable use."""
+    neither is spend against an allowable use.
+
+    **A use's total is net of what came back**, the ruling
+    `budget.envelopes` already states for a category: a refund on a
+    restricted account — an inflow carrying a `use` tag — subtracts from
+    that use's total, because what was spent under a use is what went out
+    less what came back, and a funder reading a gross figure would be read
+    a number the account never spent. `count` counts **outflows** only (a
+    refund is not a second piece of spending), and a use whose only row in
+    the period is a refund gets no row at all, exactly as a category whose
+    only row is a refund gets no envelope.
+
+    An **untagged inflow is not a gap**: the grant money arriving is not an
+    outflow waiting on an allowable use, so it never reaches `needs_use`.
+    """
     if not accounts.label_exists(sidecar, label):
         raise ValueError(accounts.unknown_label(label))
     excluded = overlay.excluded_fingerprints(sidecar) | transfers.paired_fingerprints(sidecar)
     by_use: dict[str, tuple[int, Decimal]] = {}
+    spending_uses: set[str] = set()
     needs_use = 0
     for item_id, txn_date, amount, _description in dated_transactions(canonical, label):
-        if item_id in excluded or amount >= 0:
+        if item_id in excluded:
             continue
         text = str(txn_date)
         if len(text) < 7 or not (start <= text[:7] <= end):
             continue
         use = overlay.tags_of(sidecar, item_id).get("use")
         if use is None:
-            needs_use += 1
+            if amount < 0:
+                needs_use += 1
             continue
         count, total = by_use.get(use, (0, Decimal("0")))
-        by_use[use] = (count + 1, total + Decimal(str(-amount)))
-    return by_use, needs_use
+        if amount < 0:
+            spending_uses.add(use)
+            count += 1
+        # `-amount` is positive for an outflow and negative for a refund,
+        # and each row becomes a `Decimal` of its own rather than summing
+        # floats — `budget.envelopes`'s own arithmetic, one level down.
+        by_use[use] = (count, total + Decimal(str(-amount)))
+    return {use: totals for use, totals in by_use.items() if use in spending_uses}, needs_use
 
 
 def export_rows(
     canonical: Canonical, sidecar: Sidecar, label: str, period_start: str, period_end: str,
 ) -> tuple[list[UseRow], int]:
     """The real rows and the `needs_use` gap for `label` over the period —
-    what the CLI's `grant report` export composes. Sorted by use word."""
+    what the CLI's `grant report` export composes. Sorted by use word; each
+    `total` is net of refunds tagged with the same use (`_aggregate`)."""
     start, end = _period(period_start, period_end)
     by_use, needs_use = _aggregate(canonical, sidecar, label, start, end)
     rows = [

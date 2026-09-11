@@ -246,13 +246,21 @@ def test_use_with_no_allowable_uses_on_file_is_refused(store):
     assert "grant-chk" in str(exc.value)
 
 
-def test_use_outside_the_declared_set_is_refused_by_name(store):
+def test_use_outside_the_declared_set_is_refused_without_echoing_anything(store):
+    """I-15: the refusal names the field and the account label (a key), and
+    echoes neither the word refused nor the words on file — `use` and
+    `allowable_uses` are both L3, and error text is exactly where an L3
+    value must not turn up. It points at the door that does show them."""
     accounts.add_account(store, "grant-chk", kind="checking", number="1", restricted=True)
     overlay.set_allowable_uses(store, "grant-chk", ["software", "travel"])
     fp = _txn("grant-chk", "checking", date="2026-09-01", amount="-10.00")
     with pytest.raises(ValueError) as exc:
         overlay.tag(store, fp, use="rent")
-    assert "rent" in str(exc.value)
+    message = str(exc.value)
+    assert "grant-chk" in message
+    assert "allowable uses" in message
+    for leak in ("rent", "software", "travel"):
+        assert leak not in message
     assert overlay.tags_of(store, fp).get("use") is None
 
 
@@ -374,16 +382,48 @@ def test_debts_and_rows_exclude_business_accounts_by_default(store):
     assert len(schedules.rows(store, include_business=True)) == 1
 
 
-def test_export_notice_names_the_exclusion_or_the_inclusion(store):
-    accounts.add_account(store, "visa-chase", kind="credit_card", number="1")
-    receipt = schedules.export(store, confirm=lambda w: True)
-    doc = json.loads(receipt.artifact.read_text("utf-8"))["content"]
-    assert doc["NOTICE"] == f"{schedules.NOTICE} {schedules.BUSINESS_NOTICE}"
+def _exported_notice(store, **kwargs) -> str:
+    receipt = schedules.export(store, confirm=lambda w: True, **kwargs)
+    return json.loads(receipt.artifact.read_text("utf-8"))["content"]["NOTICE"]
 
-    receipt2 = schedules.export(store, confirm=lambda w: True, include_business=True)
-    doc2 = json.loads(receipt2.artifact.read_text("utf-8"))["content"]
-    assert "included" in doc2["NOTICE"]
-    assert doc2["NOTICE"] != doc["NOTICE"]
+
+def test_the_export_notice_states_which_of_the_three_states_this_export_is_in(store):
+    """A notice is a statement of fact, so it may not be a constant.
+
+    The first draft of this bite appended `BUSINESS_NOTICE`
+    ("business-owned accounts are excluded") to every export unconditionally,
+    to keep two exports byte-identical — which told a household holding no
+    business account at all that accounts it does not have had been left out
+    of its own schedule. Each of the three sentences is true in exactly one
+    state, and this pins which."""
+    accounts.add_account(store, "visa-chase", kind="credit_card", number="1")
+    assert accounts.business_labels(store) == []
+    none_on_file = _exported_notice(store)
+    assert none_on_file == f"{schedules.NOTICE} {schedules.BUSINESS_NONE_NOTICE}"
+    # With none on file the flag changes nothing, and the sentence stays the
+    # true one: there is still nothing that was either kept out or pulled in.
+    assert _exported_notice(store, include_business=True) == none_on_file
+
+    accounts.add_account(store, "biz-card", kind="credit_card", number="2", owner="business")
+    excluded = _exported_notice(store)
+    included = _exported_notice(store, include_business=True)
+    assert excluded == f"{schedules.NOTICE} {schedules.BUSINESS_NOTICE}"
+    assert included == f"{schedules.NOTICE} {schedules.BUSINESS_INCLUDED_NOTICE}"
+    assert len({none_on_file, excluded, included}) == 3
+
+
+def test_every_sentence_the_export_can_append_is_carved_out_of_the_i44_guard(store):
+    """Each of the three is a `NOTICE`-shaped sentence the guard would
+    otherwise scan; `schedules.BUSINESS_SENTENCES` is what the carve-out is
+    anchored to, so the two may not drift apart."""
+    from tests.test_i44_no_drafting import PERMITTED_NOTICES
+
+    accounts.add_account(store, "visa-chase", kind="credit_card", number="1")
+    accounts.add_account(store, "biz-card", kind="credit_card", number="2", owner="business")
+    for kwargs in ({}, {"include_business": True}):
+        appended = _exported_notice(store, **kwargs)[len(schedules.NOTICE) + 1:]
+        assert appended in schedules.BUSINESS_SENTENCES
+        assert appended in PERMITTED_NOTICES
 
 
 def _freeze_clock(monkeypatch, *modules) -> None:
@@ -413,29 +453,46 @@ def _freeze_clock(monkeypatch, *modules) -> None:
         monkeypatch.setattr(module, "datetime", _Frozen)
 
 
-def test_household_export_is_byte_identical_with_or_without_a_business_account(
+def test_the_household_rows_are_byte_identical_with_or_without_a_business_account(
     store, monkeypatch, tmp_path,
 ):
-    """The default (`include_business=False`) export of the same household
-    liabilities does not change when a business account is added — it is
-    excluded from the rows either way, and `NOTICE` states the standing
-    policy rather than a fact about this particular export."""
+    """The plan's byte-identical property, over the **rows**: the default
+    (`include_business=False`) export of the same household liabilities does
+    not change when a business account is added, because a business-owned
+    instance never enters a household row. The clock is frozen so
+    `composed_at` cannot hide a difference or invent one.
+
+    The `NOTICE` differs between those two exports, and each is true: with
+    nothing on file nothing was excluded, with one on file something was.
+    Pinned together here so a future bite cannot buy back one byte of
+    sameness with a sentence that is false for half its readers."""
     import homestead_ledger.schedules as schedules_mod
 
     _freeze_clock(monkeypatch, schedules_mod)
     accounts.add_account(store, "visa-chase", kind="credit_card", number="1", balance_as_of="500.00")
     without = schedules.export(store, confirm=lambda w: True, out_dir=tmp_path / "a")
-    body_without = without.artifact.read_text("utf-8")
+    doc_without = json.loads(without.artifact.read_text("utf-8"))["content"]
 
     accounts.add_account(store, "biz-card", kind="credit_card", number="2", owner="business")
     with_biz = schedules.export(store, confirm=lambda w: True, out_dir=tmp_path / "b")
-    body_with_biz = with_biz.artifact.read_text("utf-8")
-    assert body_without == body_with_biz
+    doc_with_biz = json.loads(with_biz.artifact.read_text("utf-8"))["content"]
+
+    assert doc_without["rows"] == doc_with_biz["rows"]
+    assert doc_without["count"] == doc_with_biz["count"] == 1
+    assert doc_without["composed_at"] == doc_with_biz["composed_at"]  # the clock is frozen
+    # Everything but the one sentence that reports the household's state.
+    assert {k: v for k, v in doc_without.items() if k != "NOTICE"} == {
+        k: v for k, v in doc_with_biz.items() if k != "NOTICE"
+    }
+    assert doc_without["NOTICE"].endswith(schedules.BUSINESS_NONE_NOTICE)
+    assert doc_with_biz["NOTICE"].endswith(schedules.BUSINESS_NOTICE)
 
     included = schedules.export(
         store, confirm=lambda w: True, out_dir=tmp_path / "c", include_business=True,
     )
-    assert included.artifact.read_text("utf-8") != body_without
+    doc_included = json.loads(included.artifact.read_text("utf-8"))["content"]
+    assert doc_included["count"] == 2  # the flag, and only the flag, adds a row
+    assert doc_included["NOTICE"].endswith(schedules.BUSINESS_INCLUDED_NOTICE)
 
 
 # ── grant_report.py: spend by allowable use ─────────────────────────────────
@@ -726,3 +783,216 @@ def test_cli_transaction_list_annotates_commingling(capsys):
     run_cli(["transaction", "list", "--account", "chk-cli"])
     out = capsys.readouterr().out
     assert "commingling" in out
+
+
+# ── auditor's pins (G8 audit) ──────────────────────────────────────────────
+#
+# Each of these guards a claim the bite makes that nothing else held:
+# a use total net of refunds, an L5 number that never renders on any of the
+# new surfaces, the per-call scope flag, the server's masked report and its
+# missing export door, and the two commingling edges.
+
+
+def test_a_refund_on_a_restricted_account_reduces_that_uses_total(store, grant_account):
+    """`budget.envelopes`'s refund ruling, one level down: what was spent
+    under an allowable use is what went out less what came back. A gross
+    figure would report to a funder a number the account never spent."""
+    _tag(store, grant_account, date="2026-01-05", amount="-120.00", description="a", use="software")
+    _tag(store, grant_account, date="2026-01-20", amount="40.00", description="b", use="software")
+    rows, needs_use = grant_report.export_rows(
+        Canonical(), store, grant_account, "2026-01", "2026-01",
+    )
+    assert [(r.use, r.count, r.total) for r in rows] == [("software", 1, "80.00")]
+    assert needs_use == 0  # the refund is not an outflow waiting on a use
+
+
+def test_a_use_whose_only_row_in_the_period_is_a_refund_gets_no_row(store, grant_account):
+    """The same edge `budget.envelopes` states for a category: a refund with
+    nothing to refund is not spending, so it composes no row of its own."""
+    _tag(store, grant_account, date="2026-01-20", amount="40.00", description="b", use="travel")
+    rows, _needs = grant_report.export_rows(
+        Canonical(), store, grant_account, "2026-01", "2026-01",
+    )
+    assert rows == []
+
+
+def test_an_untagged_inflow_on_a_restricted_account_is_not_a_needs_use_gap(store, grant_account):
+    """The grant arriving is not an outflow waiting on an allowable use —
+    counting it would show a household a gap it cannot close (there is no
+    use to file the award itself under), on both surfaces that count."""
+    _txn(grant_account, "checking", date="2026-01-02", amount="285000.00", description="award")
+    _rows, needs_use = grant_report.export_rows(
+        Canonical(), store, grant_account, "2026-01", "2026-01",
+    )
+    assert needs_use == 0
+    _envelopes, gaps = budget.envelopes(Canonical(), store, "2026-01")
+    assert gaps.needs_use == 0
+
+
+def test_a_use_on_a_non_restricted_account_is_allowed_and_counts_toward_no_gap(store):
+    """A use is a category-like fact about a transaction, so tagging one on
+    an ordinary household account is not refused (the account's own declared
+    set still governs *which* word). `needs_use` counts restricted accounts
+    only: an untagged outflow on a household account is not a gap, or every
+    household transaction would be one."""
+    accounts.add_account(store, "chk-main", kind="checking", number="1")
+    overlay.set_allowable_uses(store, "chk-main", ["software"])
+    fp = _txn("chk-main", "checking", date="2026-01-07", amount="-10.00")
+    overlay.tag(store, fp, use="software")
+    assert overlay.tags_of(store, fp)["use"] == "software"
+    _txn("chk-main", "checking", date="2026-01-08", amount="-11.00", description="untagged")
+    _envelopes, gaps = budget.envelopes(Canonical(), store, "2026-01")
+    assert gaps.needs_use == 0
+
+
+def test_the_export_document_carries_these_keys_and_no_others(store, grant_account):
+    """References and totals only: no description, no fingerprint, no
+    account number — pinned as an exact key set, so a later bite adding one
+    has to come past this test."""
+    fp = _tag(
+        store, grant_account, date="2026-01-05", amount="-20.00",
+        description="Vendor Invoice 5512", use="software",
+    )
+    document = grant_report._document(Canonical(), store, grant_account, "2026-01", "2026-01")
+    assert set(document) == {
+        "schema", "composed_at", "label", "period", "rows", "needs_use", "NOTICE",
+    }
+    assert set(document["rows"][0]) == {"use", "count", "total"}
+    body = json.dumps(document)
+    assert "Vendor Invoice" not in body
+    assert fp not in body
+
+
+_PLANTED_NUMBER = "60056789"
+
+
+def test_a_business_accounts_number_never_renders_on_any_new_surface(store, capsys):
+    """I-43: the number is one L5 record and renders nowhere. Planted on a
+    business account and grepped across every surface this bite added — the
+    grant report's export document, the `grant report` CLI, `budget show`,
+    the schedule in both modes, and both logs."""
+    accounts.add_account(
+        store, "biz-grant", kind="checking", number=_PLANTED_NUMBER,
+        owner="business", restricted=True,
+    )
+    overlay.set_allowable_uses(store, "biz-grant", ["software"])
+    _tag(store, "biz-grant", date="2026-01-05", amount="-20.00", description="a", use="software")
+    receipt = grant_report.export(
+        Canonical(), store, "biz-grant", "2026-01", "2026-01", confirm=lambda w: True,
+    )
+    seen = [receipt.artifact.read_text("utf-8")]
+    capsys.readouterr()
+    run_cli(["budget", "show", "--month", "2026-01", "--include-business"])
+    run_cli(["schedules", "show", "--include-business"])
+    run_cli(["account", "list"])
+    seen.append(capsys.readouterr().out)
+    for name in ("integrity.jsonl", "visible.jsonl"):
+        log = paths.logs_dir() / name
+        if log.exists():
+            seen.append(log.read_text("utf-8"))
+    for text in seen:
+        assert _PLANTED_NUMBER not in text
+    # and it really is on file, one record, so the grep above means something
+    assert accounts.detail(store, "biz-grant")["number"] == ("L5", None)
+
+
+def test_the_export_writes_one_integrity_row_of_references_only(store, grant_account):
+    """One export, one row on the chain — and the row names the matter, the
+    item type and the label, never a use word, a total or a description."""
+    _tag(
+        store, grant_account, date="2026-01-05", amount="-4242.42",
+        description="Vendor Invoice", use="software",
+    )
+    integrity = paths.logs_dir() / "integrity.jsonl"
+    before = integrity.read_text("utf-8").splitlines() if integrity.exists() else []
+    grant_report.export(
+        Canonical(), store, grant_account, "2026-01", "2026-01", confirm=lambda w: True,
+    )
+    after = integrity.read_text("utf-8").splitlines()
+    assert len(after) == len(before) + 1
+    row = after[-1]
+    assert grant_account in row and "export" in row
+    for leak in ("4242.42", "software", "Vendor Invoice"):
+        assert leak not in row
+
+
+def test_include_business_is_an_argument_and_never_a_stored_default(store):
+    """The flag is asked per call. A stored one would be a standing
+    permission — the household would widen every later aggregate by having
+    widened one, with nothing on screen saying so."""
+    accounts.add_account(store, "biz-chk", kind="checking", number="1", owner="business")
+    _txn("biz-chk", "checking", date="2026-01-05", amount="-50.00", description="AWS")
+    canonical = Canonical()
+    _rows, widened = budget.envelopes(canonical, store, "2026-01", include_business=True)
+    assert widened.uncategorised == 1
+    _rows, narrow = budget.envelopes(canonical, store, "2026-01")
+    assert narrow.uncategorised == 0          # the previous call left nothing behind
+    assert accounts.household_labels(store) == []
+    # and nothing on file records the choice
+    fields = {field for (_, field, _), _record in store.records(accounts.MATTER)}
+    assert "include_business" not in fields
+
+
+def test_a_pair_between_two_business_accounts_is_not_commingling(store):
+    accounts.add_account(store, "biz-a", kind="checking", number="1", owner="business")
+    accounts.add_account(store, "biz-b", kind="checking", number="2", owner="business")
+    fp_out = _txn("biz-a", "checking", date="2026-09-01", amount="-40.00")
+    fp_in = _txn("biz-b", "checking", date="2026-09-01", amount="40.00")
+    transfers.pair(store, fp_out, fp_in)
+    assert transfers.is_commingled(store, fp_out) is False
+    assert transfers.commingling_count(store) == 0
+
+
+def test_an_owner_change_after_pairing_does_not_rewrite_the_pair(store):
+    """The tag is computed once, at pairing time, and recorded; a later
+    owner change does not rewrite history. `is_commingled` reads the record
+    rather than recomputing from today's owners — otherwise the same pair
+    would answer differently before and after an edit nobody made to it,
+    and a household's own past would move under it."""
+    accounts.add_account(store, "chk-a", kind="checking", number="1")
+    accounts.add_account(store, "chk-b", kind="checking", number="2")
+    fp_out = _txn("chk-a", "checking", date="2026-09-01", amount="-11.00")
+    fp_in = _txn("chk-b", "checking", date="2026-09-01", amount="11.00")
+    transfers.pair(store, fp_out, fp_in)
+    assert transfers.is_commingled(store, fp_out) is False
+
+    accounts.set_owner(store, "chk-b", "business")
+    assert accounts.owner_of(store, "chk-b") == "business"
+    assert transfers.is_commingled(store, fp_out) is False
+    assert transfers.commingling_count(store) == 0
+
+
+def test_a_not_computed_here_word_is_refused_as_a_budget_limit_category(store):
+    """The refusal reaches the budget door too, by the one message — a
+    category and a limit share `overlay._category`'s validation."""
+    for word in overlay.NOT_COMPUTED_HERE:
+        with pytest.raises(ValueError) as raised:
+            budget.set_limit(store, word, "2026-01", "100.00")
+        assert "accountant" in str(raised.value)
+
+
+def test_the_cli_refuses_a_malformed_or_backwards_period(capsys):
+    run_cli(["account", "add", "grant-cli", "--kind", "checking", "--number", "1", "--restricted"])
+    capsys.readouterr()
+    assert run_cli(["grant", "report", "grant-cli", "--period", "2026-01"]) == 2
+    assert run_cli(["grant", "report", "grant-cli", "--period", "2026-03..2026-01"]) == 1
+    assert "before its start month" in capsys.readouterr().err
+
+
+def test_account_allowable_uses_without_set_lists_what_is_on_file(capsys):
+    """The read-back door the refusal points at — without it an operator
+    refused by `--use` has nowhere to look, since the message may not carry
+    the list itself."""
+    run_cli(["account", "add", "grant-cli", "--kind", "checking", "--number", "1", "--restricted"])
+    capsys.readouterr()
+    assert run_cli(["account", "allowable-uses", "grant-cli"]) == 0
+    assert "no allowable uses on file" in capsys.readouterr().out
+
+    run_cli(["account", "allowable-uses", "grant-cli", "--set", "travel,software"])
+    capsys.readouterr()
+    assert run_cli(["account", "allowable-uses", "grant-cli"]) == 0
+    out = capsys.readouterr().out
+    assert "software" in out and "travel" in out and "[L3]" in out
+
+    assert run_cli(["account", "allowable-uses", "no-such-label"]) == 1
+    assert "unknown account" in capsys.readouterr().err

@@ -295,7 +295,7 @@ usage: homestead-ledger account add <label> --kind KIND --number NUMBER
        homestead-ledger account list
        homestead-ledger account show <label>
        homestead-ledger account set-owner <label> household|business
-       homestead-ledger account allowable-uses <label> --set a,b,c [--replace]
+       homestead-ledger account allowable-uses <label> [--set a,b,c [--replace]]
   e.g.: homestead-ledger account add chk-main --kind checking --number 9821
         homestead-ledger account add grant-main --kind checking --number 5551 --restricted
   <label> is the household's own short name for one real account — never a
@@ -304,8 +304,10 @@ usage: homestead-ledger account add <label> --kind KIND --number NUMBER
   --owner defaults to household; an instance with no owner on file is the
   household's own. --restricted marks a grant account whose spend must map
   to a closed list of allowable uses — set once here, never cleared.
-  allowable-uses enters that closed list from the award letter's own terms;
-  `transaction tag --use <name>` then validates against it.
+  allowable-uses enters that closed list from the award letter's own terms
+  with --set, and lists what is on file without it; `transaction tag --use
+  <name>` then validates against it, refusing by name without echoing the
+  list (I-15 — a use word is L3).
 """
 
 
@@ -403,6 +405,25 @@ def _cmd_account(argv: list[str]) -> int:
         replace = "--replace" in rest
         rest = [a for a in rest if a != "--replace"]
         rest, set_raw = _flag(rest, "--set")
+        if not rest and set_raw is None:
+            # No `--set`: read the list back. `tag --use` refuses without
+            # echoing what is on file (I-15 — a use word is L3), so this is
+            # the door that shows the operator their own award terms.
+            if not accounts.label_exists(sidecar, label):
+                print(f"  refused: {accounts.unknown_label(label)}", file=sys.stderr)
+                return 1
+            found = sorted(overlay.allowable_uses_of(sidecar, label))
+            if not found:
+                print(
+                    f"  no allowable uses on file for {label} — "
+                    f"`account allowable-uses {label} --set a,b,c` enters "
+                    "them from the award letter's own terms"
+                )
+                return 0
+            print(f"  [L3]  {label}: {len(found)} allowable use(s) on file")
+            for word in found:
+                print(f"    {word}")
+            return 0
         if rest or not set_raw:
             print(_ACCOUNT_USAGE, end="", file=sys.stderr)
             return 2

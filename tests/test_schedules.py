@@ -278,9 +278,10 @@ def test_export_writes_one_artifact_one_integrity_row_one_visible_line(store):
     assert doc["schema"] == schedules.SCHEMA
     assert doc["count"] == 1
     assert doc["rows"][0]["balance_as_of"] == "1200.00"
-    # G8-business-books: the default export always appends the standing
-    # business-exclusion sentence, regardless of whether one is on file.
-    assert doc["NOTICE"] == f"{schedules.NOTICE} {schedules.BUSINESS_NOTICE}"
+    # G8-business-books: the appended sentence is a statement of fact about
+    # this export — this household holds no business-owned account, so the
+    # true sentence is that none is on file, not that some were excluded.
+    assert doc["NOTICE"] == f"{schedules.NOTICE} {schedules.BUSINESS_NONE_NOTICE}"
 
     after_integrity = len(integrity_path.read_text("utf-8").splitlines())
     assert after_integrity == before_integrity + 1

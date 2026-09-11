@@ -342,7 +342,10 @@ of allowable uses entered from the award letter, and `grant report <label>
 missing one counted as a gap rather than turned away. A transfer whose two
 legs cross the household/business line is marked `commingling` and listed
 by reference, never refused, so a founder covering a business cost
-personally still shows up on the books. This package tracks none of
+personally still shows up on the books. An export's own `NOTICE` says which
+of the three states it was composed in — no business account on file, one
+on file and left out, or one on file and pulled in by the flag — because a
+notice that is constant is a notice that is false for somebody. This package tracks none of
 payroll, tax, 409A elections, or cap-table math — each is refused by name,
 pointing at the accountant.
 

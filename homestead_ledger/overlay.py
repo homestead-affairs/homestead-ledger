@@ -268,9 +268,11 @@ def tag(
     (`set_allowable_uses`) — `label` is read off the same fingerprint
     resolution this call already does, never a second lookup a caller could
     disagree with. No set on file for the account, or a word outside it, is
-    refused **by name** (never echoing which account or what else is
-    allowed beyond the closed words themselves — the words are the
-    operator's own, already typed into the award letter, not a secret).
+    refused **by name**: the message names the field and the account label
+    (a key), and echoes neither the word refused nor the list on file —
+    both are `L3`, and I-15 keeps an L3 value out of error text however
+    ordinary the word looks. `account allowable-uses <label>` is where the
+    list is read back.
     Unlike `do_not_use` there is no "set once" restriction here: a `use` may
     be replaced the same way `category` can, through the ordinary
     `RecordExists`/`--replace` gate.
@@ -331,10 +333,16 @@ def tag(
                 "the award letter's own terms"
             )
         if text not in allowed:
+            # I-15: the refusal names the field and the account (a key the
+            # operator typed), and echoes neither the word it refused nor
+            # the words on file — `allowable_uses`/`use` are both L3, and
+            # an error message is exactly where an L3 value must not
+            # appear. `account allowable-uses <label>` is the door that
+            # reads the list back, on a surface entitled to show it.
             raise ValueError(
-                f"{text!r} is not one of {label!r}'s allowable uses on file "
-                f"({sorted(allowed)}) — enter it with `account "
-                "allowable-uses` first, or use one already declared"
+                f"that use is not one of {label!r}'s allowable uses on "
+                f"file — `account allowable-uses {label}` lists what is, "
+                "and `--set` enters a word from the award letter's own terms"
             )
         values["use"] = Classified(FIELDS["use"], text, pack.SCHEMA["use"]["derived"])
 

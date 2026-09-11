@@ -58,7 +58,11 @@ from homestead.keep.rungs import Classified, Purpose, Rung, Surface, compose, se
 from homestead_ledger import accounts, registry
 from homestead_ledger.store import Sidecar
 
-__all__ = ["SCHEMA", "NOTICE", "BUSINESS_NOTICE", "DebtRow", "debts", "rows", "export"]
+__all__ = [
+    "SCHEMA", "NOTICE", "BUSINESS_NOTICE", "BUSINESS_NONE_NOTICE",
+    "BUSINESS_INCLUDED_NOTICE", "BUSINESS_SENTENCES",
+    "DebtRow", "debts", "rows", "export",
+]
 
 #: The export document's schema identifier — versioned so a future shape
 #: change does not silently reinterpret an old file.
@@ -82,22 +86,37 @@ NOTICE = (
     "ordinary obligation here, not a claim."
 )
 
-#: **G8-business-books.** Appended to `NOTICE` on every export, unconditionally
-#: — not only when a business account happens to be on file. Two households,
-#: one with a business account and one without, get the *same* sentence in
-#: the same mode, which is what makes the byte-identical test hold
-#: (`tests/test_business_books.py`): the sentence states the household's
-#: standing scope, not a fact about this particular export's rows. The other
-#: sentence (`_BUSINESS_INCLUDED`) takes over instead when `--include-
-#: business` widened that scope.
+#: **G8-business-books: one of three sentences, and the true one.**
+#: Appended to `NOTICE` when the household actually holds a business-owned
+#: account and this export left it out.
+#:
+#: **A notice is a statement of fact, so it may not be constant.** An
+#: earlier draft appended this sentence unconditionally, to make two
+#: exports byte-identical whether or not a business account was on file —
+#: which told a household that holds no business account at all that
+#: accounts it does not have were excluded from its own schedule. The
+#: byte-identical property the plan asks for is over the **rows** (a
+#: business account changes no household row), and it still holds; the
+#: notice tells the truth about *this* export instead
+#: (`tests/test_business_books.py`).
 BUSINESS_NOTICE = "Business-owned accounts are excluded from this schedule."
 
-#: The other half of the pair above — `export(..., include_business=True)`'s
-#: own sentence, never combined with `BUSINESS_NOTICE` in one document.
-_BUSINESS_INCLUDED = (
+#: The sentence for a household with no business-owned account on file at
+#: all — in either mode, since with none on file the two modes compose the
+#: same schedule from the same rows and nothing was left out of it.
+BUSINESS_NONE_NOTICE = "No business-owned accounts are on file."
+
+#: `export(..., include_business=True)`'s own sentence, when there is in
+#: fact a business-owned account for the flag to have pulled in. Never
+#: combined with either sentence above in one document.
+BUSINESS_INCLUDED_NOTICE = (
     "Business-owned accounts are included in this schedule at the "
     "operator's own request (--include-business)."
 )
+
+#: Every sentence this module can append to `NOTICE` — what
+#: `tests/test_i44_no_drafting.py`'s carve-out is anchored to, by value.
+BUSINESS_SENTENCES = (BUSINESS_NOTICE, BUSINESS_NONE_NOTICE, BUSINESS_INCLUDED_NOTICE)
 
 
 @dataclass(frozen=True)
@@ -255,14 +274,25 @@ def _document(
     `composed_at` timestamp in the document and the rows behind it can
     never come from two different reads of the store.
 
-    **G8-business-books: the byte-identical export.** The appended sentence
-    depends only on `include_business`, never on whether a business account
-    actually exists — the same household exported twice in the same mode,
-    once with no business account on file and once with one (excluded
-    either way unless `include_business=True`), produces the same `NOTICE`
-    text and the same rows, hence the same document but for the timestamp.
+    **G8-business-books: the byte-identical export, and a true notice.**
+    The *rows* depend only on `include_business`: adding a business-owned
+    account changes no household row, so the same household exported twice
+    in the default mode — once with no business account on file and once
+    with one — composes the identical row list, which is the byte-identical
+    property the plan asks for (`tests/test_business_books.py`). The
+    appended **sentence** is a statement of fact about this export, so it
+    is not constant: with no business account on file there is nothing to
+    have excluded (`BUSINESS_NONE_NOTICE`), with one on file and the
+    default scope there is (`BUSINESS_NOTICE`), and with one on file and
+    the scope widened it is in the rows (`BUSINESS_INCLUDED_NOTICE`).
     """
-    full_notice = f"{NOTICE} {_BUSINESS_INCLUDED if include_business else BUSINESS_NOTICE}"
+    if not accounts.business_labels(store):
+        sentence = BUSINESS_NONE_NOTICE
+    elif include_business:
+        sentence = BUSINESS_INCLUDED_NOTICE
+    else:
+        sentence = BUSINESS_NOTICE
+    full_notice = f"{NOTICE} {sentence}"
     debt_rows = debts(store, include_business=include_business)
     document = {
         "schema": SCHEMA,
