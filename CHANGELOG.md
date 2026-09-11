@@ -5,7 +5,12 @@
 
 ### Added
 
-* business-books controls on the page — owner, restricted, allowable uses, include-business ([91e1395](https://github.com/homestead-affairs/homestead-ledger/commit/91e13956ca4ec4830fd374aeb3c2af80905bf2fc))
+* business-books controls on the page — owner and restricted on the account form, allowable uses, include-business switch ([9c08232](https://github.com/homestead-affairs/homestead-ledger/commit/9c08232bd354951375e2a0009b4bc5b5e52a6729))
+
+
+### Fixed
+
+* bound the allowable-uses list, and show the use select for any list on file ([247635c](https://github.com/homestead-affairs/homestead-ledger/commit/247635cddcab161604b5b6e5aab2007e5baba8dc))
 
 ## [0.11.1](https://github.com/homestead-affairs/homestead-ledger/compare/v0.11.0...v0.11.1) (2026-09-11)
 
