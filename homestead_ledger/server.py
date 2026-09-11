@@ -40,6 +40,7 @@ operator's door and blocks until Ctrl+C.
 from __future__ import annotations
 
 from homestead_ledger.cadence import CADENCES
+from homestead_ledger.schedules import NOTICE as _SCHEDULES_NOTICE
 
 __all__ = ["build_server", "serve"]
 
@@ -316,6 +317,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
   <h2>Sync a consented scope to the fleet</h2>
   <div class="card">
     <div class="why">Choose exactly what leaves, by matter — there is no "all". A number never crosses (I-13), and anything tagged do-not-use never crosses either. Preview first; the Send click is the confirm.</div>
+    <div class="why" id="syncnotice">__NOTICE__</div>
     <div id="syncmatters" class="rf"></div>
     <div class="rf">
       <label class="chk"><input type="checkbox" id="synctable-sidecar" checked> sidecar</label>
@@ -859,6 +861,14 @@ loadAccounts();loadObligations();loadAccountsForPaid();
 #: Substituted once, at import: the `<select>`'s options come from
 #: `cadence.CADENCES`, never a copy of it inline in the markup above.
 _PAGE = _PAGE.replace("__CADENCE_OPTIONS__", _CADENCE_OPTIONS)
+# The Sync tab shows `schedules.NOTICE` **verbatim** — substituted rather than
+# retyped, so the sentence on the page and the one the CLI prints are one
+# string (`tests/test_server.py::test_the_sync_tab_carries_the_notice_verbatim`).
+# It also keeps the literal out of this file, which
+# `tests/test_i44_no_drafting.py`'s grep guard scans: the carve-out is anchored
+# to that exact value, wherever it is assigned, and a copy here would be a
+# second place it could drift from.
+_PAGE = _PAGE.replace("__NOTICE__", _SCHEDULES_NOTICE)
 
 
 # ── server ────────────────────────────────────────────────────────────────
@@ -884,6 +894,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
     from homestead.keep import paths
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.egress import EgressRefused
+    from homestead.keep.logs import IntegritySealError
     from homestead.keep.rungs import Rung
     from homestead.keep.store import InvalidKey, RecordExists
 
@@ -899,10 +910,17 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
     from homestead_ledger.store import Canonical, Sidecar
 
     _now = clock if clock is not None else time.monotonic
-    #: Held `Envelope`s, keyed by `envelope_id`, ten minutes, single-use —
-    #: `_post_sync_send` pops the entry before delivering, so a second call
-    #: for the same id always finds it already gone.
+    #: Held previews, keyed by `envelope_id`: the frozen `Envelope`, when the
+    #: hold expires, and the destination resolved **at preview time**. Ten
+    #: minutes, single-use — `_post_sync_send` pops the entry before
+    #: delivering, so a second call for the same id always finds it already
+    #: gone — and at most `_SYNC_PREVIEW_MAX`, oldest evicted first, so a
+    #: page left clicking Preview cannot grow this without bound. Held in
+    #: this process only: a restart drops every outstanding preview, which
+    #: is the safe direction (an unspent preview is refused by name and the
+    #: operator previews again; nothing is delivered on a restart).
     _SYNC_PREVIEW_TTL = 600.0
+    _SYNC_PREVIEW_MAX = 8
     _sync_previews: dict[str, tuple] = {}
 
     root = paths.home()
@@ -1508,12 +1526,23 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
             counts = {"sidecar": 0, "canonical": 0}
             for row in envelope.rows:
                 counts[row["table"]] = counts.get(row["table"], 0) + 1
-            _sync_previews[envelope.envelope_id] = (envelope, _now() + _SYNC_PREVIEW_TTL)
+            # Resolved once, here, and held with the envelope. Resolving
+            # again at send time would let a `fleet.url` written between the
+            # two clicks turn the file drop shown below into a network POST
+            # nobody was asked about.
+            dest_url, dest_dir = sync.resolve_destination()
+            while len(_sync_previews) >= _SYNC_PREVIEW_MAX:
+                _sync_previews.pop(next(iter(_sync_previews)))
+            _sync_previews[envelope.envelope_id] = (
+                envelope, _now() + _SYNC_PREVIEW_TTL, dest_url, dest_dir,
+            )
             self._json({
                 "envelope_id": envelope.envelope_id, "counts": counts,
                 "ceiling": scope.ceiling.value, "matters": list(scope.matters),
                 "tables": list(scope.tables), "head": envelope.head,
-                "destination_preview": sync.destination_preview(),
+                "destination_preview": (
+                    dest_url if dest_url is not None else str(dest_dir)
+                ),
             })
 
         def _post_sync_send(self, body):
@@ -1529,15 +1558,29 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                     {"ok": False, "error": "unknown or already-spent envelope_id — preview again"},
                     404,
                 )
-            envelope, expires_at = entry
+            envelope, expires_at, dest_url, dest_dir = entry
             if _now() > expires_at:
                 return self._json(
                     {"ok": False, "error": "this preview expired — preview again"}, 404,
                 )
             try:
-                receipt = sync.send(envelope, confirm=lambda wire: True)
+                # `lambda wire: True` would be a permission, not a confirm:
+                # it approves whatever `deliver()` happens to be carrying.
+                # The click stands for *this* envelope, so the callback holds
+                # the Wire it is shown against the envelope the operator
+                # previewed and declines anything else (I-37).
+                receipt = sync.send(
+                    envelope, url=dest_url, drop_dir=dest_dir,
+                    confirm=lambda wire: sync.wire_matches(envelope, wire),
+                )
             except (EgressRefused, sync.AlreadyDelivered) as exc:
                 return self._json({"ok": False, "error": str(exc)}, 409)
+            except IntegritySealError as exc:
+                # A sealed ledger with no key (or without the `sealed`
+                # extra) cannot be read to say whether this envelope already
+                # went — refused by name (I-11), never a traceback, and
+                # nothing was delivered.
+                return self._json({"ok": False, "error": str(exc)}, 503)
             self._json({
                 "ok": True, "envelope_id": receipt.envelope_id,
                 "destination": receipt.destination, "rows": receipt.rows,

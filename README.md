@@ -347,7 +347,9 @@ dropped under the household's own exports directory — is a place to send
 to, never a permission to send: a declined confirmation writes and ledgers
 nothing whether or not one is configured, an account's bank-issued number
 never crosses at any ceiling, and a transaction tagged do-not-use never
-crosses either.
+crosses either — not as its own rows, not as its overlay tags, and not as
+the transfer pairing that names it. A scope that matches no record at all is
+refused by name rather than delivered as an envelope of nothing.
 
 ## The method
 

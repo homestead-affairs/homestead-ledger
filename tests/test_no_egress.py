@@ -63,3 +63,38 @@ def test_no_dynamic_exec(mod: Path):
                 and node.func.id in DYNAMIC):
             bad.append(node.func.id)
     assert not bad, f"{mod.name} uses dynamic exec/import: {sorted(set(bad))}"
+
+
+# ── the scan, fired against a planted leak ─────────────────────────────────
+
+
+def test_the_import_scan_fires_on_a_direct_urlopen_planted_in_sync_py(tmp_path):
+    """A scan that has never fired has not been shown to check anything.
+    `sync.py` is this package's one module *about* egress — it composes what
+    leaves and hands it to `homestead.keep.egress.send`, which is where the
+    per-call confirm lives — so the leak worth planting is the shortcut past
+    that seam: a `urllib.request.urlopen` of its own. The real module,
+    copied and edited, not a two-line fixture."""
+    source = (PKG / "sync.py").read_text(encoding="utf-8")
+    assert not NET & _toplevel_and_nested_imports(ast.parse(source))
+
+    planted = tmp_path / "sync.py"
+    planted.write_text(
+        source.replace(
+            "def send(",
+            "def _shortcut(url, body):\n"
+            "    import urllib.request\n"
+            "    return urllib.request.urlopen(url, body)\n\n\n"
+            "def send(",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    hits = NET & _toplevel_and_nested_imports(ast.parse(planted.read_text("utf-8")))
+    assert hits == {"urllib"}, "a direct urlopen in sync.py must not be invisible"
+
+
+def test_the_import_scan_covers_sync_py_at_all():
+    """The scan is parametrized over `_modules()`; `sync.py` has to be in
+    it. A guard that skips the module it matters most for is no guard."""
+    assert (PKG / "sync.py") in _modules()

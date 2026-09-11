@@ -86,6 +86,7 @@ def ui(tmp_path, monkeypatch):
 
     try:
         client = _Client()
+        client.home = tmp_path
         client.add_account = lambda label="chk-t", kind="checking", number="9821", **extra: client.json(
             "/api/account", {"label": label, "kind": kind, "number": number, **extra},
         )
@@ -1186,3 +1187,160 @@ def test_post_sync_send_still_works_just_before_the_hold_expires(sync_ui):
     status, data = sync_ui.json("/api/sync/send", {"envelope_id": envelope_id})
     assert status == 200
     assert data["ok"] is True
+
+
+# ── the Send click is a confirm, not a permission ──────────────────────────
+
+
+def test_the_send_click_confirms_this_envelope_and_declines_any_other(ui, monkeypatch):
+    """Plants what a `lambda wire: True` callback would have approved:
+    `deliver()` is made to offer the confirm a `Wire` for a *different*
+    envelope — a re-composed or swapped delivery. The click stands for the
+    envelope the operator previewed, so the handler's confirm holds the Wire
+    against it and the send is refused (I-37)."""
+    from homestead.keep.egress import EgressRefused, Wire
+
+    from homestead_ledger import sync as sync_mod
+
+    ui.add_account(label="chk-main", institution="Test Bank")
+    _, preview = ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    offered = []
+
+    def fake_deliver(envelope, *, confirm, url=None, drop_dir=None, **kw):
+        wire = Wire(method="FILE", url="/somewhere/deadbeef.json", body="1 bytes",
+                    content_type="text/plain")
+        offered.append(confirm(wire))
+        raise EgressRefused("declined at the preview")
+
+    monkeypatch.setattr(sync_mod, "_engine_deliver", fake_deliver)
+    status, data = ui.json("/api/sync/send", {"envelope_id": preview["envelope_id"]})
+    assert status == 409 and data["ok"] is False
+    assert offered == [False], "the click approved a wire it had not been shown"
+
+
+def test_a_fleet_url_written_between_preview_and_send_does_not_redirect(ui, monkeypatch):
+    """The destination shown at Preview is the destination Send uses. Before
+    this, `send()` re-resolved, so a `fleet.url` written between the two
+    clicks turned the previewed file drop into a network POST nobody was
+    asked about (the shape the L5-sync audit found on the law side,
+    2026-09-11)."""
+    import homestead.keep.egress as engine_egress
+
+    monkeypatch.delenv("HOMESTEAD_FLEET_URL", raising=False)
+    ui.add_account(label="chk-main", institution="Test Bank")
+    _, preview = ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    assert preview["destination_preview"].endswith("/exports/sync")
+
+    (ui.home / "fleet.url").write_text("https://late.invalid/ingest\n", "utf-8")
+
+    def _boom(*a, **k):
+        raise AssertionError("a previewed file drop dialled out instead")
+
+    monkeypatch.setattr(engine_egress, "send", _boom)
+    monkeypatch.setattr(engine_egress, "_default_transport", _boom)
+    status, data = ui.json("/api/sync/send", {"envelope_id": preview["envelope_id"]})
+    assert status == 200 and data["ok"] is True
+    assert "late.invalid" not in data["destination"]
+    assert data["destination"].endswith(f"{preview['envelope_id']}.json")
+    assert (ui.home / "exports" / "sync" / f"{preview['envelope_id']}.json").exists()
+
+
+def test_the_preview_hold_is_bounded_and_drops_the_oldest(ui):
+    """A page left clicking Preview must not grow the hold without bound.
+    Nine previews, eight kept: the first is gone and the newest still
+    sends."""
+    ids = []
+    for n in range(9):
+        ui.add_account(label=f"chk-{n}", institution=f"Bank {n}")
+        status, preview = ui.json("/api/sync/preview", {
+            "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+        })
+        assert status == 200
+        ids.append(preview["envelope_id"])
+    assert len(set(ids)) == 9
+
+    status, data = ui.json("/api/sync/send", {"envelope_id": ids[0]})
+    assert status == 404 and data["ok"] is False
+    status, data = ui.json("/api/sync/send", {"envelope_id": ids[-1]})
+    assert status == 200 and data["ok"] is True
+
+
+def test_a_store_write_between_preview_and_send_does_not_change_what_leaves(ui):
+    """The held preview is the engine's frozen `Envelope`, not a promise to
+    re-compose: an account added after Preview is not in what Send delivers,
+    and the delivered bytes still hash to the id the operator was shown."""
+    ui.add_account(label="chk-main", institution="Test Bank")
+    _, preview = ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    held = preview["counts"]["sidecar"]
+
+    ui.add_account(label="sav-later", kind="savings", number="7", institution="Later Bank")
+
+    status, data = ui.json("/api/sync/send", {"envelope_id": preview["envelope_id"]})
+    assert status == 200 and data["rows"] == held
+    dropped = json.loads(
+        (ui.home / "exports" / "sync" / f"{preview['envelope_id']}.json").read_text("utf-8")
+    )
+    assert dropped["count"] == held
+    assert not any(row["item_id"] == "sav-later" for row in dropped["rows"])
+    assert "Later Bank" not in json.dumps(dropped)
+
+
+def test_the_sync_tab_carries_the_notice_verbatim(ui):
+    """I-44's carve-out is anchored to `schedules.NOTICE`'s exact sentence,
+    so the Sync tab shows that value, not a retyped copy of it."""
+    from homestead_ledger.schedules import NOTICE
+
+    status, body = ui.get("/")
+    assert status == 200
+    assert NOTICE in body.decode("utf-8")
+
+
+def test_a_sealed_ledger_refuses_the_send_by_name_never_a_traceback(ui, monkeypatch):
+    """A sealed `IntegrityLog` with no key cannot be read to say whether
+    this envelope already went, so the engine refuses by name before
+    delivering. The browser gets a 503 saying so, not a dropped connection
+    (I-11)."""
+    from homestead.keep.logs import IntegrityLog, IntegritySealError
+
+    ui.add_account(label="chk-main", institution="Test Bank")
+    _, preview = ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    logs = ui.home / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "integrity.jsonl").write_text('{"sealed": 1}\n', "utf-8")
+
+    def _sealed(self, *, decrypt=True):
+        raise IntegritySealError("this log is sealed; the key is absent")
+
+    monkeypatch.setattr(IntegrityLog, "_entries", _sealed)
+    status, data = ui.json("/api/sync/send", {"envelope_id": preview["envelope_id"]})
+    assert status == 503 and data["ok"] is False and "sealed" in data["error"]
+    assert not (ui.home / "exports" / "sync").exists()
+
+
+def test_post_sync_preview_refuses_a_scope_that_composes_nothing(ui):
+    """Never a zero-row delivery: the refusal comes back at Preview, so the
+    Send button is never offered for an envelope of nothing."""
+    ui.add_account(label="chk-main")
+    status, data = ui.json("/api/sync/preview", {
+        "matters": ["budget"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    assert status == 400 and data["ok"] is False
+    assert "nothing to sync" in data["error"]
+
+
+def test_post_sync_preview_refuses_an_unknown_item_type_by_name(ui):
+    ui.add_account(label="chk-main", institution="Test Bank")
+    status, data = ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "types": ["instutition"], "tables": ["sidecar"],
+        "ceiling": "L4",
+    })
+    assert status == 400 and data["ok"] is False
+    assert "unknown item type" in data["error"]

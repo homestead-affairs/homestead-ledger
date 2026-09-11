@@ -886,6 +886,7 @@ def _cmd_sync(argv: list[str]) -> int:
     """sync --matters a,b --ceiling L3 [...] — send a consented scope to the fleet."""
     from homestead.keep.egress import EgressRefused
     from homestead.keep.household import household_id
+    from homestead.keep.logs import IntegritySealError
     from homestead.keep.rungs import Rung
 
     from homestead_ledger import sync as sync_mod
@@ -939,6 +940,9 @@ def _cmd_sync(argv: list[str]) -> int:
         return 1
 
     household = household_id()  # mints once, only reached with --init-household or an id already on file
+    # Resolved once, here, and handed to send() unchanged — never resolved a
+    # second time after the operator has been shown where this goes.
+    dest_url, dest_dir = sync_mod.resolve_destination(url=url)
     counts: dict[str, int] = {}
     for row in envelope.rows:
         counts[row["table"]] = counts.get(row["table"], 0) + 1
@@ -947,7 +951,7 @@ def _cmd_sync(argv: list[str]) -> int:
     for table in sorted(tables):
         print(f"  {table}: {counts.get(table, 0)} row(s)")
     print(f"  ceiling: {ceiling.value}")
-    print(f"  destination: {url or sync_mod.destination_preview()}")
+    print(f"  destination: {dest_url if dest_url is not None else dest_dir}")
     print(f"  {NOTICE}")
 
     if not sys.stdin.isatty():
@@ -959,17 +963,30 @@ def _cmd_sync(argv: list[str]) -> int:
         return 1
 
     def confirm(wire) -> bool:
+        # The yes is read *after* the whole Wire is printed, and the Wire is
+        # held against the envelope composed above first: a confirm that
+        # says yes to whatever it is handed is a permission, not a confirm.
+        if not sync_mod.wire_matches(envelope, wire):
+            print(
+                "  refused: the delivery offered is not the envelope "
+                f"previewed above ({envelope.envelope_id}) — nothing sent",
+                file=sys.stderr,
+            )
+            return False
         print("  about to sync the household's own record to its fleet:")
-        print(f"  {wire.method} {wire.url}")
-        print("  " + "-" * 60)
-        print(wire.body)
-        print("  " + "-" * 60)
+        print(wire.preview())
         answer = input("  send? [y/N] ").strip().lower()
         return answer in ("y", "yes")
 
     try:
-        receipt = sync_mod.send(envelope, url=url, confirm=confirm)
+        receipt = sync_mod.send(envelope, url=dest_url, drop_dir=dest_dir, confirm=confirm)
     except (EgressRefused, sync_mod.AlreadyDelivered) as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return 1
+    except IntegritySealError as exc:
+        # A sealed ledger with no key (or without the `sealed` extra) cannot
+        # be read to say whether this envelope already went — refused by
+        # name (I-11), never a traceback, and nothing was delivered.
         print(f"  refused: {exc}", file=sys.stderr)
         return 1
 
