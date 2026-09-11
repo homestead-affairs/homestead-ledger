@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.11.1...v0.12.0) (2026-09-11)
+
+
+### Added
+
+* business-books controls on the page — owner, restricted, allowable uses, include-business ([91e1395](https://github.com/homestead-affairs/homestead-ledger/commit/91e13956ca4ec4830fd374aeb3c2af80905bf2fc))
+
 ## [0.11.1](https://github.com/homestead-affairs/homestead-ledger/compare/v0.11.0...v0.11.1) (2026-09-11)
 
 
