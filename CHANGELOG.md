@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.9.0...v0.10.0) (2026-09-11)
+
+
+### Added
+
+* sync a consented scope of the books to the fleet — CLI and Sync tab ([e8101e6](https://github.com/homestead-affairs/homestead-ledger/commit/e8101e69195d337f13c611a3f694a9b66d0158c5))
+
+
+### Fixed
+
+* the Send click confirms this envelope, and nothing crosses by reference ([88d4a45](https://github.com/homestead-affairs/homestead-ledger/commit/88d4a45bceea21bf7dab8d788629db185b989b91))
+
 ## [0.9.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.8.0...v0.9.0) (2026-09-11)
 
 
