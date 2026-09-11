@@ -83,7 +83,14 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "account to its bank-issued identifier — it is, which is L5 outright "
         "regardless of the earlier steps' answers. L5 has no override "
         "anywhere (I-13): served on no surface, in any form, the same "
-        "posture custody gives an SSN.",
+        "posture custody gives an SSN."
+        " ~~Written once per transaction.~~ Since 2026-09-11 (bite "
+        "G2b-account-instances, provisional I-43) books.py writes three "
+        "fields and never this one: the number lives on the account "
+        "instance (packs/accounts.py's number). The declaration stays "
+        "because rows imported before that change are still on disk — "
+        "there is no migration — and this is where the repo says what "
+        "rung such a row carries.",
     ),
 }
 

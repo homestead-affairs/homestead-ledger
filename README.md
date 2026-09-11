@@ -94,7 +94,12 @@ is its bank- or issuer-assigned identifier, sealed **L5** and never shown
 again on any surface — the CLI, the browser, or an export — once it is
 stored. Optional fields (`--institution`, `--opened`, `--balance-as-of`,
 `--rate`, `--limit`, `--payment-due-day`, `--min-payment`) are written only
-when given; `account list` shows every label with its kind and institution,
+when given; the browser's number field is ordinary text with
+`autocomplete="off"` — never a password field: it is typed once and never
+shown again, so masking it would hide the one look the operator gets at a
+value nothing can check afterwards, while `autocomplete` off is what keeps
+the browser from storing it and offering it back on some other form.
+`account list` shows every label with its kind and institution,
 `account show <label>` opens one (the number always reads `(sealed)`), and
 `--replace` is how a second `add` under the same label is meant.
 
@@ -104,9 +109,17 @@ looked up from the instance, never retyped. `--account-number` and `--kind`
 are retired from `transaction add` and `--import`: an unrecognized flag is
 refused by name, pointing at `account add`, rather than silently ignored.
 There is **no migration** for rows a household already imported before this
-change wrote their own `account_number` record per transaction — those rows
-keep it; only the transactions imported from here on rely on the instance's
-one number instead.
+change. Those rows keep their own `account_number` record — and they are
+filed under the account *kind* as their matter (`checking`), because that is
+what `account` meant then. A label may never equal a kind name, so no
+instance can ever be registered that reaches them: they stay on disk,
+unread, and `transaction list --account checking` says so by name rather
+than reporting an empty account. Re-importing the same statement under a
+registered label writes the rows again under the label — the same
+fingerprint, a different matter — so the old rows and the new ones sit side
+by side. v1's books are synthetic-only, and a migration that guessed which
+real account a kind-named matter meant would be the household's own record
+edited by the tool that is supposed to mirror it.
 
 ## Marking an obligation paid
 

@@ -294,6 +294,94 @@ def test_the_account_number_record_is_not_written_by_import_transaction():
     assert adapter.read(CANONICAL, key(label, "account_number", item_id)) is None
 
 
+# ── "no migration", pinned as the behaviour it actually is ────────────────
+
+def _legacy_row(kind: str, item_id: str, number: str) -> None:
+    """One transaction as the books held it *before* this bite: four fields,
+    including the per-transaction `account_number`, filed under the account
+    **kind** as its matter — which is what `Transaction.account` was.
+    Written through the raw adapter because no current code path can produce
+    this shape any more, and that is exactly the point."""
+    import json
+
+    from homestead.keep.store import CANONICAL, key
+
+    from homestead_ledger.store import _adapter
+
+    adapter = _adapter()
+    for field, rung, payload, derived in (
+        ("date", "L2", "2026-08-01", None),
+        ("amount", "L4", "-84.23", "a debit is on file"),
+        ("description", "L3", "Whole Foods Market", "a payee is on file"),
+        ("account_number", "L5", number, None),
+    ):
+        adapter.insert(
+            CANONICAL, key(kind, field, item_id),
+            json.dumps({"rung": rung, "payload": payload, "derived": derived}),
+        )
+
+
+def test_a_pre_instance_row_keeps_its_own_number_record_and_no_surface_reaches_it(capsys):
+    """The README's "there is no migration" note, pinned as behaviour — and
+    as the *whole* of it, which is more than "those rows keep their
+    `account_number` record".
+
+    A row from before this bite is filed under the account **kind** as its
+    matter (`checking`), because that is what `Transaction.account` was. A
+    label may never equal a kind name (`_label`, I-43), so no instance can
+    ever be registered that reaches those rows: they stay on disk, unread,
+    and every surface says so by name rather than pretending the account is
+    empty. Nothing rewrites them either — v1's books are synthetic-only, and
+    a migration that guessed which real account a kind-named matter meant
+    would be the household's own record edited by the tool that mirrors it.
+    """
+    from homestead_ledger.cli import run_cli
+    from homestead_ledger.store import Canonical
+
+    item_id = "ab" * 32
+    _legacy_row("checking", item_id, _PLANTED_NUMBER)
+
+    # still on disk, untouched, with its L5 rung intact
+    legacy = dict(Canonical().records("checking"))
+    assert ("checking", "account_number", item_id) in legacy
+    assert legacy[("checking", "account_number", item_id)].rung is Rung.L5
+
+    # and unreachable: no instance, and none can be made
+    assert accounts.instances(Sidecar()) == []
+    capsys.readouterr()
+    assert run_cli(["transaction", "list", "--account", "checking"]) == 2
+    err = capsys.readouterr().err
+    assert "kind" in err and _PLANTED_NUMBER not in err
+    with pytest.raises(InvalidKey):
+        accounts.add_account(Sidecar(), "checking", kind="checking", number=_PLANTED_NUMBER)
+
+
+def test_re_importing_a_pre_instance_row_under_a_label_does_not_dedup():
+    """The other half of "no migration", and the one that costs something: a
+    re-import under a registered label lands as a **new** row. The item id
+    (the content fingerprint) is identical — the number is still in it — but
+    the matter is the label now, not the kind, so the old row and the new one
+    sit side by side. `transaction list` over the label shows one of them;
+    the other is the unreachable row above."""
+    from homestead_ledger.books import Transaction, import_transaction
+    from homestead_ledger.store import Canonical
+
+    from homestead_ledger.fingerprint import fingerprint
+
+    item_id = fingerprint(date="2026-08-01", amount="-84.23",
+                          description="Whole Foods Market", account=_PLANTED_NUMBER)
+    _legacy_row("checking", item_id, _PLANTED_NUMBER)
+
+    label = _plant("chk-again")
+    new_id = import_transaction(Transaction(
+        account=label, kind="checking", date="2026-08-01", amount="-84.23",
+        description="Whole Foods Market",
+    ))
+    assert new_id == item_id                      # same transaction, same fingerprint
+    assert len(Canonical().records(label)) == 3   # and it was written, not skipped
+    assert len(Canonical().records("checking")) == 4   # the old row is still there
+
+
 # ── the cover (I-31) ─────────────────────────────────────────────────────
 
 def test_cover_shows_nothing_with_fewer_than_two_instances():

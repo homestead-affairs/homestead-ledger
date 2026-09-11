@@ -109,6 +109,35 @@ def test_the_page_serves_and_carries_both_forms(ui):
     assert "/api/store" not in page
 
 
+def test_the_account_number_field_is_not_offered_to_the_browsers_autofill(ui):
+    """The one input on this page that takes an **L5** value. The browser
+    will remember an ordinary text field and offer it back on some other
+    form — an L5 value copied into a store this repo does not control and
+    cannot seal (I-13's "no override anywhere" is about surfaces *this* code
+    composes; the autofill store is a surface it hands the value to).
+    `autocomplete="off"` is the whole of the ask.
+
+    Deliberately **not** `type="password"`: the number is typed once and is
+    never shown again anywhere after that (`account show` reads `(sealed)`
+    forever), so masking would hide the only look the operator gets at a
+    value nothing downstream can check — and a mistyped number silently
+    breaks the transaction fingerprint instead of being visibly wrong. The
+    JS clears the field on a successful post, which is what actually keeps
+    it off the screen.
+    """
+    import re as _re
+
+    status, body = ui.get("/")
+    page = body.decode()
+    m = _re.search(r'<input id="anumber"[^>]*>', page)
+    assert m is not None
+    field = m.group(0)
+    assert 'autocomplete="off"' in field, field
+    assert 'type="password"' not in field, field
+    # and the post clears it rather than leaving the number in the DOM
+    assert "'alabel','anumber','ainstitution'" in page
+
+
 def test_obligation_round_trip_through_the_gate(ui):
     status, data = ui.json("/api/obligation", {"id": "rent", "name": "Sunrise", "amount": "1450",
                                                "due_date": "2099-10-01", "cadence": "monthly"})

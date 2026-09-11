@@ -99,6 +99,14 @@ _SETTLED_RUNGS = {
     "date": Rung.L2, "description": Rung.L3, "amount": Rung.L4, "account_number": Rung.L5,
 }
 
+#: Of the four, the three `books.import_transaction` actually writes since
+#: bite G2b (provisional I-43): the bank-issued number stopped being a
+#: per-transaction record and moved to the account instance. `account_number`
+#: stays declared here — rows imported before that change are still on disk,
+#: with no migration, and these packs are where the repo says what rung such
+#: a row carries.
+_WRITTEN = tuple(f for f in _SETTLED_RUNGS if f != "account_number")
+
 
 def test_every_account_pack_declares_the_four_transaction_fields_at_the_settled_rungs():
     for kind in registry.all_accounts():
@@ -106,6 +114,28 @@ def test_every_account_pack_declares_the_four_transaction_fields_at_the_settled_
         for field, rung in _SETTLED_RUNGS.items():
             assert field in schema, f"{kind} is missing {field!r}"
             assert schema[field]["rung"] is rung, f"{kind}.{field} is not {rung}"
+
+
+def test_the_settled_rungs_and_what_books_writes_say_the_same_thing():
+    """I-43, held from both ends at once. `_SETTLED_RUNGS` is a list typed
+    here; `books._FIELD_ORDER` is what actually reaches disk. Nothing tied
+    them together, so this file could have gone on asserting four fields
+    while `books.py` wrote three, or five, and neither side would notice.
+
+    The claim: every field `books.py` writes is declared, at its settled
+    rung, by every registered pack — and `account_number` is declared and
+    **not** written, which is what I-43 means by "one record". Re-adding the
+    per-transaction write fails here rather than in a household's books.
+    """
+    from homestead_ledger.books import _FIELD_ORDER
+
+    assert set(_FIELD_ORDER) == set(_WRITTEN)
+    assert "account_number" not in _FIELD_ORDER
+    for kind in registry.all_accounts():
+        schema = registry.account(kind).schema
+        for field in _FIELD_ORDER:
+            assert field in schema, f"{kind} is missing the written field {field!r}"
+            assert schema[field]["rung"] is _SETTLED_RUNGS[field]
 
 
 def test_liability_packs_declare_liability_and_asset_packs_do_not():
@@ -226,7 +256,22 @@ def test_loans_extra_fields_are_l4_and_not_written_by_the_four_settled_fields():
     """`principal`/`interest` are declared, at L4, but are not among the
     four fields every account pack shares — `books.py`'s `_FIELD_ORDER`
     never writes them (see `loan.py`'s own docstring)."""
+    from homestead_ledger.books import _FIELD_ORDER
+
     for extra in ("principal", "interest"):
         assert extra in loan.SCHEMA
         assert loan.FIELDS[extra] is Rung.L4
         assert extra not in _SETTLED_RUNGS
+        assert extra not in _FIELD_ORDER
+
+
+def test_every_account_number_declaration_says_it_is_no_longer_written():
+    """A declared field nothing writes is drift unless the declaration says
+    why it is still there. Each pack's `account_number` `why` carries the
+    dated note — struck through, never deleted (house style) — so a reader
+    who finds the field does not go looking for the write that stopped."""
+    for kind in registry.all_accounts():
+        why = registry.account(kind).schema["account_number"]["why"]
+        assert "I-43" in why, f"{kind}'s account_number does not cite I-43"
+        assert "~~" in why, f"{kind}'s account_number strikes nothing through"
+        assert "no migration" in why, kind

@@ -192,7 +192,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
     <div class="rf">
       <input id="alabel" placeholder="Label (chk-main, visa-chase)" style="max-width:220px">
       <select id="akind" style="max-width:160px"></select>
-      <input id="anumber" placeholder="Account number (L5, never shown)" style="max-width:260px">
+      <input id="anumber" placeholder="Account number (L5, never shown)" style="max-width:260px" autocomplete="off" spellcheck="false">
     </div>
     <div class="rf">
       <input id="ainstitution" placeholder="Institution (optional)" style="max-width:220px">
