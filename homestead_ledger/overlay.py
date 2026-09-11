@@ -95,6 +95,15 @@ _CATEGORY = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 #: a name's length; `note` is a sentence or two about one row.
 _TEXT_LIMITS = {"confirmed_merchant": 120, "note": 2000}
 
+#: How many words an allowable-uses list may hold. `_use` already bounds each
+#: word (`_CATEGORY`, 40 characters); nothing bounded how many of them arrive,
+#: so the browser door's 1 MiB body cap was the only ceiling — tens of
+#: thousands of words in one record, and a "closed list" that big is not a
+#: closed list at all. An award letter names a handful of buckets; 32 is far
+#: above any real one and far below a paste. The refusal names the cap and
+#: the count, never a word (I-15: `allowable_uses` is L3).
+_MAX_ALLOWABLE_USES = 32
+
 #: The shortest prefix `tag` will resolve to a whole fingerprint. `cli.py`'s
 #: `transaction list` shows twelve characters and the browser row carries the
 #: whole thing in `data-fp`, so eight is already shorter than anything a
@@ -429,14 +438,25 @@ def set_allowable_uses(
 
     Refuses, before writing anything: a label with no account instance on
     file (`accounts.unknown_label`), an empty list (a closed set with
-    nothing in it validates nothing), or any word that fails `_use`'s shape
-    or is one of `NOT_COMPUTED_HERE`. Words are de-duplicated and stored
-    sorted, so the set on file never depends on the order they were typed
-    in. The occupied-key refusal is the store's, not a check's (I-9).
+    nothing in it validates nothing), more than `_MAX_ALLOWABLE_USES` words
+    (a list that long is a paste, not a closed set — counted before any
+    word is looked at, so the refusal never depends on which word came
+    first), or any word that fails `_use`'s shape or is one of
+    `NOT_COMPUTED_HERE`. Words are de-duplicated and stored sorted, so the
+    set on file never depends on the order they were typed in. The
+    occupied-key refusal is the store's, not a check's (I-9).
     """
     if not accounts.label_exists(store, label):
         raise ValueError(accounts.unknown_label(label))
-    words = sorted({_use(u) for u in uses})
+    given = list(uses)
+    if len(given) > _MAX_ALLOWABLE_USES:
+        raise ValueError(
+            f"an allowable-uses list holds at most {_MAX_ALLOWABLE_USES} "
+            f"words; {len(given)} were given — an award letter names a "
+            "handful of buckets, and a list this long is a paste rather "
+            "than the closed set a transaction is checked against"
+        )
+    words = sorted({_use(u) for u in given})
     if not words:
         raise ValueError(
             "allowable-uses needs at least one word — a closed list from "

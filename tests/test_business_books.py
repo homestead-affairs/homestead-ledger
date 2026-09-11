@@ -235,6 +235,40 @@ def test_allowable_uses_of_an_unset_account_is_empty(store):
     assert overlay.allowable_uses_of(store, "grant-chk") == frozenset()
 
 
+def test_set_allowable_uses_caps_how_long_the_closed_list_may_be(store):
+    """G9c audit. Each word was already bounded (`_CATEGORY`, 40 characters);
+    nothing bounded how many arrived, so the browser door's 1 MiB body cap
+    was the only ceiling — one record holding tens of thousands of words,
+    and a "closed list" that long is not a closed set a transaction can be
+    checked against. Planted one word past the cap, and the one under it
+    must still be accepted or the cap is an outage rather than a bound."""
+    accounts.add_account(store, "grant-chk", kind="checking", number="1")
+    over = [f"use-{i}" for i in range(overlay._MAX_ALLOWABLE_USES + 1)]
+    with pytest.raises(ValueError) as exc:
+        overlay.set_allowable_uses(store, "grant-chk", over)
+    assert str(overlay._MAX_ALLOWABLE_USES) in str(exc.value)
+    assert str(len(over)) in str(exc.value)
+    # I-15: the refusal counts, it never echoes a word from the list
+    assert not any(word in str(exc.value) for word in over)
+    assert overlay.allowable_uses_of(store, "grant-chk") == frozenset()
+
+    at_the_cap = over[:-1]
+    overlay.set_allowable_uses(store, "grant-chk", at_the_cap)
+    assert overlay.allowable_uses_of(store, "grant-chk") == frozenset(at_the_cap)
+
+
+def test_the_allowable_uses_cap_is_counted_before_any_word_is_looked_at(store):
+    """A list that is both too long and full of nonsense is refused for its
+    length, not for whichever word happened to sort first — so the refusal
+    a household reads does not depend on the order they typed."""
+    accounts.add_account(store, "grant-chk", kind="checking", number="1")
+    with pytest.raises(ValueError) as exc:
+        overlay.set_allowable_uses(
+            store, "grant-chk", ["NOT A USE"] * (overlay._MAX_ALLOWABLE_USES + 1),
+        )
+    assert "at most" in str(exc.value) and "NOT A USE" not in str(exc.value)
+
+
 # ── overlay.tag(use=...): validated against the account's own closed set ──
 
 
