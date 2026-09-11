@@ -262,7 +262,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
       <label class="chk"><input type="checkbox" id="greplace"> replace existing tag(s)</label>
       <button class="btn bg" onclick="storeTag()">Tag</button>
     </div>
-    <div class="why">Category L3, raised automatically wherever it names a protected matter (medical, legal, &hellip;) &mdash; the advisory only ever raises this, never lowers it. Note L4. Confirmed merchant L3. Do-not-use L2. The allowable-use select above shows only when the transaction's own account is restricted, from that account's closed list.</div>
+    <div class="why">Category L3, raised automatically wherever it names a protected matter (medical, legal, &hellip;) &mdash; the advisory only ever raises this, never lowers it. Note L4. Confirmed merchant L3. Do-not-use L2. The allowable-use select above shows once the transaction's own account has a closed list on file &mdash; or is marked restricted &mdash; and offers only words from that list.</div>
     <div id="gmsg"></div>
   </div>
 
@@ -600,12 +600,22 @@ function currentAccount() {
   return document.getElementById('taccount').value.trim();
 }
 
-// The tag form's own allowable-use select: shown only when the account the
-// transaction list is currently open on is restricted, populated from that
-// account's closed list — never a household-typed word, and never posted
-// unless the household actually picks one (an empty selection reaches the
-// door as "not given", the same posture `gcategory`/`gmerchant` already take
-// when left blank).
+// The tag form's own allowable-use select: shown when the account the
+// transaction list is currently open on is restricted **or already has a
+// closed list on file**, populated from that list — never a household-typed
+// word, and never posted unless the household actually picks one (an empty
+// selection reaches the door as "not given", the same posture
+// `gcategory`/`gmerchant` already take when left blank).
+//
+// Restricted is not the condition `overlay.tag` itself uses: it accepts a
+// `use` for any account with a list on file, restricted or not, because a
+// list may be entered from the award letter before anybody thinks to set
+// the flag. Keying the select on `restricted` alone would hide a word the
+// door would have taken — the page refusing what the books allow.
+//
+// Every option here is a DOM node with its text in `textContent`, the
+// placeholder included: one way to build an option on this page, so the
+// structural scan that reads this function covers all of it.
 function refreshUseSelect() {
   var row=document.getElementById('guserow');
   var sel=document.getElementById('guse');
@@ -613,10 +623,14 @@ function refreshUseSelect() {
   if(!account){row.style.display='none';sel.innerHTML='';return;}
   fetch('/api/account/allowable-uses?label='+encodeURIComponent(account))
   .then(function(r){return r.json()}).then(function(data){
-    if(!data.restricted){row.style.display='none';sel.innerHTML='';return;}
+    var uses=data.uses||[];
+    if(!data.restricted && !uses.length){row.style.display='none';sel.innerHTML='';return;}
     row.style.display='';
-    sel.innerHTML='<option value="">(no use)</option>';
-    (data.uses||[]).forEach(function(u){
+    sel.innerHTML='';
+    var none=document.createElement('option');
+    none.value=''; none.textContent='(no use)';
+    sel.appendChild(none);
+    uses.forEach(function(u){
       var opt=document.createElement('option');
       opt.value=u; opt.textContent=u;
       sel.appendChild(opt);

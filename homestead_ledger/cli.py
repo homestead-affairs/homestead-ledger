@@ -305,7 +305,8 @@ usage: homestead-ledger account add <label> --kind KIND --number NUMBER
   household's own. --restricted marks a grant account whose spend must map
   to a closed list of allowable uses — set once here, never cleared.
   allowable-uses enters that closed list from the award letter's own terms
-  with --set, and lists what is on file without it; `transaction tag --use
+  with --set (at most 32 words), and lists what is on file without it;
+  `transaction tag --use
   <name>` then validates against it, refusing by name without echoing the
   list (I-15 — a use word is L3).
 """

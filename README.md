@@ -382,7 +382,8 @@ A household that also runs a business can mark an account instance
 recurring pass, the liability schedule, the resting cover — counts the
 household's own accounts only, unless `--include-business` widens the
 scope. A restricted (grant) account's spend is tagged against a closed list
-of allowable uses entered from the award letter, and `grant report <label>
+of allowable uses entered from the award letter (at most 32 words — a
+list longer than that is a paste, not a closed set), and `grant report <label>
 --period YYYY-MM..YYYY-MM` totals spend by that use, with any outflow still
 missing one counted as a gap rather than turned away. A transfer whose two
 legs cross the household/business line is marked `commingling` and listed
@@ -394,8 +395,8 @@ notice that is constant is a notice that is false for somebody. This package tra
 payroll, tax, 409A elections, or cap-table math — each is refused by name,
 pointing at the accountant. The browser page carries all of this: the
 account form's own `owner`/`restricted` fields and its allowable-uses
-mini-form, an allowable-use select on the tag form once an account is
-restricted, and a header switch that folds business-owned accounts into
+mini-form, an allowable-use select on the tag form once an account has a
+closed list on file, and a header switch that folds business-owned accounts into
 the Budget, Schedules and Subscriptions tabs per call, with a note beside
 each naming which scope it is showing.
 
