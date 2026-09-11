@@ -399,3 +399,67 @@ def test_an_id_is_never_spliced_into_javascript(ui):
         "id": "a'-alert(1)-'b", "name": "x", "amount": "1",
         "due_date": "2099-10-01", "cadence": "monthly"})
     assert status == 400
+
+
+class _Sock:
+    """A socket that hands out the chunks it was given, honouring the size
+    asked for, then whatever `then` is — `b""` for a peer that closed, or an
+    exception to raise."""
+
+    def __init__(self, chunks, then=b""):
+        self.chunks = list(chunks)
+        self.then = then
+        self.timeout = None
+        self.asked = []
+
+    def settimeout(self, t):
+        self.timeout = t
+
+    def recv(self, n):
+        self.asked.append(n)
+        if self.chunks:
+            head, rest = self.chunks[0][:n], self.chunks[0][n:]
+            if rest:
+                self.chunks[0] = rest
+            else:
+                self.chunks.pop(0)
+            return head
+        if isinstance(self.then, BaseException):
+            raise self.then
+        return self.then
+
+
+def test_a_refused_body_is_drained_before_the_socket_closes():
+    """Closing a socket with unread bytes in its receive buffer turns the
+    close into a reset, and on Windows a reset discards the 400 the client
+    has not read yet (`WinError 10053`, seen on the law module's release PR
+    for its bad-Content-Length test).  The drain reads what arrived, waits
+    only `DRAIN_TIMEOUT_SECONDS` for more, is bounded by the cap, and
+    swallows the socket's own errors — the answer is already sent."""
+    sock = _Sock([b"{}", b"more"])
+    assert server._drain(sock) == 6
+    assert sock.timeout == server.DRAIN_TIMEOUT_SECONDS
+    sock = _Sock([b"{}"], then=TimeoutError())
+    assert server._drain(sock) == 2
+    sock = _Sock([b"x" * 65536] * 40)
+    assert server._drain(sock, limit=100_000) == 100_000
+    assert max(sock.asked) <= 65536 and sum(sock.asked) >= 100_000
+    sock = _Sock([], then=OSError())
+    assert server._drain(sock) == 0
+
+
+def test_a_refused_content_length_reaches_the_drain(ui, monkeypatch):
+    """The refusal path must actually call the drain on the live connection —
+    the unit test above proves what draining does, this proves it happens,
+    once, after the answer is on the wire (the client read a 400)."""
+    calls = []
+    real = server._drain
+
+    def _spy(sock, **kw):
+        calls.append(sock)
+        return real(sock, **kw)
+
+    monkeypatch.setattr(server, "_drain", _spy)
+    status, rest = ui.raw("POST", "/api/obligation", body="{}", content_length="abc")
+    assert status == 400 and json.loads(rest)["error"]
+    assert len(calls) == 1 and hasattr(calls[0], "recv")
