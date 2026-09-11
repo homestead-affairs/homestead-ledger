@@ -67,6 +67,7 @@ BUILD_PLAN = APP / "docs" / "build-plan.md"
 TRANSFERS = PKG / "transfers.py"
 SYNC = PKG / "sync.py"
 CHANGELOG = APP / "CHANGELOG.md"
+PYPROJECT = APP / "pyproject.toml"
 
 #: Package-scaffolding files: no capability of their own, so the module-status
 #: table (below) does not name them and does not need to. Basename-matched, so
@@ -194,7 +195,7 @@ def test_these_five_guards_fire_on_a_planted_reintroduction(tmp_path):
     assert not _contains_live(README, STALE_README_STATUS)
     assert not _contains_live(BUILD_PLAN, STALE_BUILD_PLAN_SUITE_COUNT)
     assert not _contains_live(SYNC, STALE_SYNC_FLEET_CONTRACT)
-    assert _contains(README, "homestead-affairs>=0.11.0,<1.0")
+    assert _contains(README, f"homestead-affairs>={_declared_engine_floor()},<1.0")
     assert _contains(README, "X7-drift correction")
     assert _contains(BUILD_PLAN, "X7-drift correction")
     assert _contains(
@@ -367,3 +368,30 @@ def test_the_since_version_guard_fires_on_a_planted_phantom_release():
         "the guard must name exactly the phantom release; got "
         f"{_unreleased_since_versions(planted)}"
     )
+
+
+# ── the floor three files quote is the one pyproject.toml declares ──────────
+#
+# The first draft of this sweep wrote the floor into README.md, into
+# `sync.py`'s corrected paragraph and into `accounts.py`'s corrected comment
+# as a literal (`0.11.0`), and into this file's own assertion as a second
+# literal — which is the drift it was written to stop, one level up: the
+# sibling `G7b-floor-0.13` bite raised the floor to 0.13.0 the same day and
+# every one of those literals was stale before the branch merged. So the
+# floor is read from `pyproject.toml` — the one place the number is a fact
+# rather than a quotation — and the prose is held to it.
+
+_FLOOR_RE = re.compile(r'"homestead-affairs>=(\d+\.\d+\.\d+),<1\.0"')
+
+
+def _declared_engine_floor(pyproject: Path | None = None) -> str:
+    """The engine floor `pyproject.toml`'s `dependencies` actually declares.
+
+    Read with a regex rather than `tomllib`, deliberately: the dependency
+    line is the *literal* the prose quotes, and a parse that normalised the
+    specifier (dropping the `,<1.0`, reordering it) would let the prose and
+    the metadata disagree in exactly the way that is being guarded.
+    """
+    match = _FLOOR_RE.search((pyproject or PYPROJECT).read_text(encoding="utf-8"))
+    assert match, "pyproject.toml declares no homestead-affairs floor to read"
+    return match.group(1)

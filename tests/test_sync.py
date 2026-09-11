@@ -20,7 +20,7 @@ from homestead_ledger import accounts, books, cli, overlay, schedules, sync, tra
 from homestead_ledger.cli import run_cli
 from homestead_ledger.store import Sidecar
 
-# ── the floor this bite raises: 0.11.0, where homestead.keep.sync landed ────
+# ── the floor this bite raises: 0.13.0, where the fleet took structured values ─
 
 
 def test_the_engine_floor_carries_sync_core():
@@ -28,10 +28,22 @@ def test_the_engine_floor_carries_sync_core():
     built on (E4-sync-core) — a floor below 0.11.0 would install an engine
     with no `keep/sync.py` at all, and this bite would fail at import
     rather than at `pip install`. `pyproject.toml`'s own floor is
-    `homestead-affairs>=0.11.0,<1.0` (see the dependency line's comment)."""
+    `homestead-affairs>=0.13.0,<1.0` (see the dependency line's comment)."""
     from homestead.keep.sync import Envelope, SyncScope
 
     assert SyncScope is not None and Envelope is not None
+
+
+def test_the_engine_floor_carries_fleet_structured_values():
+    """`homestead.keep.fleet_cli.MAX_VALUE_DEPTH` and `decode_value` are
+    E7b's own additions (2026-09-11) — a floor below 0.13.0 would install an
+    engine whose `fleet_cli` still refuses any mapping `value` by name, and
+    this bite's `test_the_fleet_accepts_a_structured_pair_value` would fail
+    at import rather than at `pip install`. `pyproject.toml`'s own floor is
+    `homestead-affairs>=0.13.0,<1.0` (G7b-floor-0.13)."""
+    from homestead.keep.fleet_cli import MAX_VALUE_DEPTH, decode_value
+
+    assert MAX_VALUE_DEPTH > 0 and decode_value is not None
 
 
 pytestmark = pytest.mark.usefixtures("_home")
@@ -687,15 +699,34 @@ def test_the_fleet_reads_and_validates_a_produced_envelope_before_it_dials(store
     assert all(row["table"] != "sidecar" for row in canonical_rows)
 
 
-def test_the_fleet_refuses_a_structured_pair_value_by_name(store):
-    """Pinned, not papered over: a `transfers` `pair` is served as a mapping
-    (it is `L2`), and the fleet's `value` column is `TEXT`, so
-    `_validate_rows` refuses the row — and with it the *whole* envelope
-    (I-11). An envelope whose scope names `transfers` therefore composes and
-    drops to a file here and is refused at `homestead-fleet ingest`, loudly
-    and before a row is written. Settling that is the engine's contract to
-    change (a `TEXT` column versus a structured served value), not a
-    module's to work around; this test is where it is recorded."""
+def test_the_fleet_accepts_a_structured_pair_value(store):
+    """Settled by the engine's E7b (2026-09-11; the floor is raised to
+    0.13.0 here, G7b-floor-0.13). What this test asserted while the refusal
+    stood — as `test_the_fleet_refuses_a_structured_pair_value_by_name`,
+    struck through rather than deleted, because the reason it was written
+    is the reason it now passes:
+
+    > ~~Pinned, not papered over: a `transfers` `pair` is served as a
+    > mapping (it is `L2`), and the fleet's `value` column is `TEXT`, so
+    > `_validate_rows` refuses the row — and with it the *whole* envelope
+    > (I-11). An envelope whose scope names `transfers` therefore composes
+    > and drops to a file here and is refused at `homestead-fleet ingest`,
+    > loudly and before a row is written. Settling that is the engine's
+    > contract to change (a `TEXT` column versus a structured served
+    > value), not a module's to work around; this test is where it is
+    > recorded.~~
+
+    E7b settled it the other way round from the guess above: the column
+    stays `TEXT`, and what goes in it is the value's canonical JSON text,
+    named by a `value_format` column (`json` from E7b on, `raw` for rows
+    written before, so no legacy row is re-typed). So `_validate_rows` no
+    longer raises its old "not storable text" refusal on a mapping, and an
+    envelope whose scope names `transfers` composes, freezes and validates
+    clean.
+
+    What is left past validation is the fleet's own dial, which this module
+    never holds a DSN for:
+    `test_the_fleet_ingest_of_a_structured_pair_fails_only_at_the_dial`."""
     from homestead.keep import fleet_cli
     from homestead.keep.sync import Envelope
 
@@ -709,8 +740,84 @@ def test_the_fleet_refuses_a_structured_pair_value_by_name(store):
     envelope = sync.preview(scope, sidecar=store)
     assert not isinstance(envelope.rows[0]["value"], str)
 
-    with pytest.raises(fleet_cli.IngestRefused, match="not storable text"):
-        fleet_cli._validate_rows(Envelope.from_bytes(envelope.to_bytes()))
+    parsed = Envelope.from_bytes(envelope.to_bytes())
+    fleet_cli._validate_rows(parsed)   # must not raise
+
+
+def test_the_fleet_ingest_of_a_structured_pair_fails_only_at_the_dial(store, tmp_path, capsys):
+    """`homestead-fleet ingest` on a real transfer-pair envelope, given a
+    dummy DSN, refuses at `_connect()` — never inside `_validate_rows`. The
+    loopback port is one this process never listens on (I-30 is the
+    household side's rule; this is the fleet operator's own CLI, whose
+    whole job is to dial), so the connection is refused immediately rather
+    than timing out."""
+    pytest.importorskip("psycopg", reason="the 'fleet' extra is not installed")
+    from homestead.keep import fleet_cli
+
+    accounts.add_account(store, "chk-main", kind="checking", number="1")
+    accounts.add_account(store, "sav-main", kind="savings", number="2")
+    fp_out = _import("chk-main", "2026-01-01", "-40.00", "to savings")
+    fp_in = _import("sav-main", "2026-01-02", "40.00", "from checking")
+    transfers.pair(store, fp_out, fp_in)
+
+    scope = sync.scope_from(["transfers"], None, Rung.L2, ["sidecar"], sidecar=store)
+    envelope = sync.preview(scope, sidecar=store)
+    path = tmp_path / "envelope.json"
+    path.write_bytes(envelope.to_bytes())
+
+    rc = fleet_cli.main([
+        "ingest", str(path),
+        "--dsn", "host=127.0.0.1 port=1 connect_timeout=2",
+        "--yes",
+    ])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "OperationalError" in err
+    assert "not storable text" not in err
+    assert "refused by name" not in err
+
+
+def test_a_transfer_pair_crosses_end_to_end_as_a_structured_value(store):
+    """End to end, at the ceiling a `transfers` `pair` actually lives on
+    (`L2`): the composed envelope carries the pair's `value` as a mapping,
+    not a string; the engine's own `canonical_value_text` — what the fleet
+    now stores instead of refusing the row — renders that mapping as the
+    exact bytes already sitting inside the envelope (one canonical
+    encoding, not two that could drift, per `store.canonical_value_text`'s
+    own docstring); and `decode_value` on that text, told `value_format=
+    "json"` the way a fleet row's own column tells it, hands back the same
+    mapping the household composed, unchanged. The row's own `rung` and
+    `disposition` are asserted too — `L2` and `render` are exactly what
+    `fleet_cli._validate_rows` requires before it ever looks at the
+    value."""
+    from homestead.keep.store import canonical_value_text
+    from homestead.keep.fleet_cli import decode_value
+
+    accounts.add_account(store, "chk-main", kind="checking", number="1")
+    accounts.add_account(store, "sav-main", kind="savings", number="2")
+    fp_out = _import("chk-main", "2026-01-01", "-40.00", "to savings")
+    fp_in = _import("sav-main", "2026-01-02", "40.00", "from checking")
+    transfers.pair(store, fp_out, fp_in)
+
+    scope = sync.scope_from(["transfers"], None, Rung.L2, ["sidecar"], sidecar=store)
+    envelope = sync.preview(scope, sidecar=store)
+    wire_bytes = envelope.to_bytes()
+
+    pair_rows = [r for r in envelope.rows if r["item_type"] == "pair"]
+    assert len(pair_rows) == 1
+    row = pair_rows[0]
+    # The two halves of the row that decide whether the fleet may store it
+    # at all, asserted rather than assumed: `_validate_rows` accepts only
+    # `render` at a readable rung, so a pair that ever composed as `mask`
+    # or above `L2` would be refused at ingest with this test still green.
+    assert row["rung"] == "L2"
+    assert row["disposition"] == "render"
+    value = row["value"]
+    assert isinstance(value, dict)
+
+    text = canonical_value_text(value)
+    assert text.encode("utf-8") in wire_bytes
+    assert decode_value(text, value_format="json").value == value
 
 
 # ── the CLI: the yes is read after the Wire is printed, and there is no --yes ─

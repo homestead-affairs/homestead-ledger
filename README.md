@@ -7,10 +7,14 @@ it, so its store is embedded **SQLite** — a linked library, not a server (the
 face's 2026-08-04 "no listening socket" decision holds; SQLite binds no port).
 The record layer is the engine's: `store.py` is a thin binding —
 `homestead.keep.store`'s adapter contract on a SQLite backing, in the ledger
-database. It **pins the engine from PyPI** — currently `homestead-affairs>=0.11.0,<1.0`
-(see `pyproject.toml`'s own dependency comment for why that number and not a
-lower one; the distribution name is `homestead-affairs`, `import homestead` is
-unchanged) — and shares the
+database. It **pins the engine from PyPI** — ~~`homestead-affairs>=0.1.0,<1.0`~~
+currently `homestead-affairs>=0.13.0,<1.0` (the distribution name is
+`homestead-affairs`, `import homestead` is unchanged; the floor is raised by
+whichever bite first needs a symbol — 0.3.0 for G2a, 0.11.0 for G5-sync,
+0.13.0 for E7b's structured fleet values via G7b-floor-0.13. See
+`pyproject.toml`'s own dependency comment, which is the one place this number
+is meant to be read from: `tests/test_docs_drift.py` holds this line to it.)
+— and shares the
 `~/.homestead` root with homestead-law, because a household's affairs are one
 thing.
 
@@ -409,7 +413,10 @@ nothing whether or not one is configured, an account's bank-issued number
 never crosses at any ceiling, and a transaction tagged do-not-use never
 crosses either — not as its own rows, not as its overlay tags, and not as
 the transfer pairing that names it. A scope that matches no record at all is
-refused by name rather than delivered as an envelope of nothing.
+refused by name rather than delivered as an envelope of nothing. A transfer
+pairing itself — an `L2` mapping, not a bare string — crosses to the fleet
+as a structured value since engine 0.13.0, which stores it as canonical
+JSON text rather than refusing the row.
 
 ## The method
 

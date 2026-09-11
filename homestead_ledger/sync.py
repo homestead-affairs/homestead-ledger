@@ -65,11 +65,14 @@ single row is written, and it is the honest state of the seam today.~~
 `value` column `TEXT` rather than moving to `JSONB` — a mapping now crosses
 as canonical JSON text, distinguished from a legacy plain-text row by a new
 `value_format` column (`raw` before this change, `json` after), shipped in
-engine 0.13.0. This package's own follow-up, `G7b-floor-0.13`, raises the
-floor to 0.13.0 and flips the pinned test above from a refusal to a pass,
-syncing a transfer pair end to end — see that test and
-`docs/PLAN-affairs-face.md` for whether it has landed as of any given
-reading.)
+engine 0.13.0. This package's own follow-up, `G7b-floor-0.13`, has landed
+with it: `pyproject.toml`'s floor is `homestead-affairs>=0.13.0`, and the
+pin above is now
+`tests/test_sync.py::test_the_fleet_accepts_a_structured_pair_value`, with
+`test_a_transfer_pair_crosses_end_to_end_as_a_structured_value` carrying a
+pair the whole way. `tests/test_docs_drift.py` holds this paragraph's floor
+to the one `pyproject.toml` declares, so a later raise cannot leave this
+sentence behind.)
 
 No `.payload` reach anywhere (I-16): every row here came out of
 `compose()`, itself built from `serve()`'s `Served.value` alone, and the
