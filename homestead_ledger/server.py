@@ -871,9 +871,14 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             ]})
 
         def _get_transfer_suggestions(self):
+            # References only: two fingerprints and whether the match is the
+            # only one that fits. No amount and no date crosses this door
+            # (I-15) — a suggestion is a proposal to look at two rows, not a
+            # second way to read what they say.
             found = transfers.suggest(sidecar)
             self._json({"pairs": [
-                {"fp_out": fp_out, "fp_in": fp_in} for fp_out, fp_in in found
+                {"fp_out": fp_out, "fp_in": fp_in, "ambiguous": ambiguous}
+                for fp_out, fp_in, ambiguous in found
             ]})
 
         # ── POST ──────────────────────────────────────────────────────

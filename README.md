@@ -205,11 +205,17 @@ monthly savings sweep a subscription. `transaction transfer <fp_out> <fp_in>
 records that the two are one transfer: `fp_out` (the outflow) and `fp_in`
 (the inflow) must both already be on the books, on two **different**
 accounts, equal and opposite in amount, and posted within **5 days** of each
-other — refused by name otherwise, and never by repeating an amount.
+other (5 days apart is inside the window; 6 is not) — refused by name
+otherwise, and never by repeating an amount. The **first** fingerprint is
+the outgoing leg, the account the money left: the other order is refused by
+name rather than quietly swapped, so the record says what actually happened.
 `transaction transfer --suggest` (`GET /api/transaction/transfers/suggest`)
 proposes candidate pairs that fit those rules without writing anything; you
-still confirm each one with `transaction transfer`. A fingerprint already
-part of a pair, on either side, is refused unless `--replace`.
+still confirm each one with `transaction transfer`. When more than one row
+fits, every candidate is listed and marked **ambiguous** — nothing is ever
+paired for you. A fingerprint already part of a pair, on either side, is
+refused unless `--replace`, which retires the old pairing entirely (its
+other leg is unpaired again) before writing the new one.
 
 Paired transactions are **excluded from every household aggregate** —
 `recurring.detect_recurring`'s subscription pass, and any running balance a

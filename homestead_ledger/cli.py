@@ -396,7 +396,10 @@ usage: homestead-ledger transaction add <date> <amount> <description> --account 
   transfer pairs an outgoing fingerprint with an incoming one — equal and
   opposite amounts, on two different accounts, within 5 days of each other —
   and excludes both from recurring detection and every household aggregate.
-  --suggest proposes candidate pairs without writing anything.
+  <fp_out> is the outgoing leg (the account the money left); the other order
+  is refused, not quietly swapped.
+  --suggest proposes candidate pairs without writing anything; a candidate
+  more than one row fits is listed once per candidate and marked ambiguous.
 """
 
 
@@ -404,7 +407,11 @@ _TRANSFER_USAGE = """\
 usage: homestead-ledger transaction transfer <fp_out> <fp_in> [--replace]
        homestead-ledger transaction transfer --suggest
   <fp_out>/<fp_in> are full transaction fingerprints (`transaction list`
-  shows the first 12 characters of each).
+  shows the first 12 characters of each). <fp_out> is the outgoing leg — the
+  account the money left — so the record says what actually happened; the
+  other order is refused by name, never swapped for you.
+  --replace retires every pairing either leg is already part of, then writes
+  this one. --suggest takes no other argument.
 """
 
 
@@ -418,13 +425,20 @@ def _cmd_transaction_transfer(rest: list[str]) -> int:
     _boot()
     sidecar = Sidecar()
     if "--suggest" in rest:
+        # `--suggest` proposes over the whole books; a fingerprint or a
+        # `--replace` alongside it describes a write this branch does not do,
+        # and accepting one would read as though it had been honoured.
+        if len(rest) != 1:
+            print(_TRANSFER_USAGE, end="", file=sys.stderr)
+            return 2
         found = transfers.suggest(sidecar)
         if not found:
             print("  no candidate transfers found")
             return 0
         print(f"  {len(found)} candidate pair(s) — nothing written:")
-        for fp_out, fp_in in found:
-            print(f"  {fp_out[:12]}…  ->  {fp_in[:12]}…")
+        for fp_out, fp_in, ambiguous in found:
+            mark = "  (ambiguous — more than one row fits; pick one)" if ambiguous else ""
+            print(f"  {fp_out[:12]}…  ->  {fp_in[:12]}…{mark}")
         return 0
 
     replace = "--replace" in rest
@@ -440,7 +454,7 @@ def _cmd_transaction_transfer(rest: list[str]) -> int:
         return 1
     print(f"  paired: {ref[2][:12]}…  ->  {fp_in[:12]}…")
     if replaced is not None:
-        print("  (replaced the previous pairing for this fingerprint)")
+        print("  (replaced a previous pairing — either leg's old pair is retired)")
     return 0
 
 

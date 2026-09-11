@@ -12,6 +12,15 @@ by editing either row: `pair()` writes one **sidecar** record
 naming the incoming leg's fingerprint and both accounts' labels. Nothing
 here ever touches `CANONICAL` (mirror, not judge stays books.py's alone).
 
+**The first fingerprint is the outgoing one, and that is checked.** A pair
+record says money went *from* one account *to* another. An operator who
+types the two fingerprints the other way round would otherwise get a record
+that names the receiving account as the source — true of nothing — so
+`pair()` refuses a first fingerprint whose amount is not negative and says
+which way round the pair goes, rather than quietly normalizing it: the
+operator asked for something that is not so, and a tool that silently
+reinterprets that has taught them nothing.
+
 **What this module does not own.** It does not decide what an aggregate
 does with a pairing — `paired_fingerprints()` is the one seam this module
 exposes for that, and a caller (an aggregate, or a future orchestrator) is
@@ -19,31 +28,28 @@ expected to union it with whatever else it excludes (`overlay.py`'s
 `do_not_use`, on the sibling bite that grows alongside this one) rather than
 this module reaching into that concern or that one reaching into this one.
 
-**The boundary reach.** `amount` is `L4` on every account pack and derives
-on `S1_LIST` (`"a debit is on file"`, never the number) — so whether two
-legs are equal-and-opposite cannot be read through the ordinary gate the way
-`date` (`L2`) can. `_compatible()` is the one place beyond `books.py`/
-`balance.py` this package reads a real `.payload` (an addition to
-`tests/test_invariants_chokepoint.py`'s allow-list, with its own scope test
-holding it to exactly two rows and two fields — see that module). It hands
-back only a bool and a day count, never the amounts or the dates, so every
-refusal built from it can name the two fingerprints and never an amount
-(I-15).
+**The boundary reach lives next door.** Reading whether two legs are
+equal-and-opposite needs a real `amount` payload, and that read — with the
+two others this module needs — is `transfers_boundary.py`, which is the file
+on `tests/test_invariants_chokepoint.py`'s allow-list. This module is not:
+it is held by the scan exactly like a surface, so the pairing logic, the
+refusals and everything they grow into stay on the ordinary side of the one
+door. See that module's docstring for why the smallest unit is the file.
 """
 from __future__ import annotations
 
-from datetime import date
-from decimal import Decimal, InvalidOperation
+from collections import Counter
+from typing import NamedTuple
 
 from homestead.keep.logs import Event, VisibleLog
 from homestead.keep.rungs import Classified, Disposition, Rung, Surface, serve
 
-from homestead_ledger import accounts
+from homestead_ledger import accounts, transfers_boundary as boundary
 from homestead_ledger.packs import transfers as pack
 from homestead_ledger.store import Canonical, RecordExists, Ref, Replaced, Sidecar, key
 
 __all__ = [
-    "MATTER", "FIELDS", "WINDOW_DAYS",
+    "MATTER", "FIELDS", "WINDOW_DAYS", "Suggestion",
     "pair", "suggest", "paired_fingerprints", "counterpart_of", "other_label",
     "exclude_from",
 ]
@@ -58,8 +64,29 @@ _PAIR = "pair"
 #: How many days apart a transfer's two legs may post and still count as one
 #: movement — decision 9's own number, not a per-call knob on `pair()`
 #: (`suggest()` alone takes a `window_days` override, for exploring a wider
-#: net without changing what `pair()` itself will accept).
+#: net without changing what `pair()` itself will accept). The window is
+#: **inclusive of both endpoints**: `abs(days_apart) <= WINDOW_DAYS`.
 WINDOW_DAYS = 5
+
+#: A pair record whose `counterpart` names nothing is a **retired** pairing —
+#: the two legs it used to join are unpaired again, and every reader below
+#: skips it. `homestead.keep.store`'s adapter seam is `read`/`read_matter`/
+#: `insert`/`write`: there is no delete, by design (a record is never removed,
+#: only superseded), so `--replace` says "this pairing is over" the only way
+#: the store offers — by writing a record that names no counterpart and no
+#: accounts. A retired key is re-usable: `pair()` treats it as free.
+_RETIRED = ""
+
+
+class Suggestion(NamedTuple):
+    """One candidate pair `suggest()` proposes. `ambiguous` is true when the
+    outgoing leg fits more than one incoming leg, or its one candidate fits
+    more than one outgoing leg — every candidate of an ambiguous match is
+    listed and marked, and none of them is ever paired automatically."""
+
+    fp_out: str
+    fp_in: str
+    ambiguous: bool
 
 
 def _locate(canonical: Canonical, sidecar: Sidecar, fp: str) -> str | None:
@@ -77,40 +104,10 @@ def _locate(canonical: Canonical, sidecar: Sidecar, fp: str) -> str | None:
     return None
 
 
-def _compatible(
-    canonical: Canonical, label_out: str, fp_out: str, label_in: str, fp_in: str,
-) -> tuple[bool, int]:
-    """Whether two transactions could be one transfer's two legs.
-
-    Reads exactly the `amount` and `date` payload of exactly the two rows
-    named — one `get()` per field per row, four in all, nothing else on
-    either account — and returns only whether the amounts are
-    equal-and-opposite and how many days apart the two dates fall. See the
-    module docstring on why this, and only this, function reaches a raw
-    payload; `tests/test_transfers.py` holds this exact read footprint
-    against a spy on `Canonical.get`.
-    """
-    try:
-        amount_out = canonical.get(label_out, "amount", fp_out).payload
-        date_out = canonical.get(label_out, "date", fp_out).payload
-        amount_in = canonical.get(label_in, "amount", fp_in).payload
-        date_in = canonical.get(label_in, "date", fp_in).payload
-    except KeyError:
-        # A torn transaction (see books.py's own documented limitation) is
-        # not a pairable one — refused the same way an incompatible pair is,
-        # never distinguished by a message that would need to say why.
-        return False, 0
-    try:
-        equal_and_opposite = (
-            Decimal(amount_out) + Decimal(amount_in) == 0 and Decimal(amount_out) != 0
-        )
-    except InvalidOperation:
-        equal_and_opposite = False
-    try:
-        delta = abs((date.fromisoformat(date_in) - date.fromisoformat(date_out)).days)
-    except ValueError:
-        delta = 10**6  # an unparseable date never falls inside any window
-    return equal_and_opposite, delta
+def _retire(store: Sidecar, out_fp: str) -> Replaced | None:
+    """Mark the pairing keyed by `out_fp` as over — see `_RETIRED`."""
+    record = Classified(Rung.L2, {"counterpart": _RETIRED, "from": _RETIRED, "to": _RETIRED})
+    return store.put(MATTER, _PAIR, out_fp, record, overwrite=True)
 
 
 def pair(
@@ -124,11 +121,20 @@ def pair(
 
     * either fingerprint not found on the books (`_locate`);
     * both on the same account label — a transfer's two legs are two
-      *different* accounts;
+      *different* accounts, and the same fingerprint twice is that case;
+    * either row unreadable — a torn import, a `null` payload, a pre-ISO
+      date (`transaction list --gaps`): refused by name, never guessed (I-11);
     * not equal-and-opposite in amount, or more than `WINDOW_DAYS` apart
-      (`_compatible`, the one boundary reach this module makes);
+      (inclusive of both endpoints);
+    * `fp_out` not the outgoing leg (see the module docstring);
     * either fingerprint already part of a pair, on either side, unless
       `replace=True`.
+
+    With `replace=True`, **every** pairing either fingerprint is part of is
+    retired first, whichever key it is filed under, so an incoming leg
+    re-pointed at a new outgoing leg leaves its old partner genuinely
+    unpaired rather than half-joined to two pairs at once (which would make
+    `counterpart_of`/`other_label` answer by dict order).
 
     On success, logs `Event.RECORD_ADDED` with the reference `(MATTER,
     fp_out)` only — never the counterpart, a label, or an amount (I-15).
@@ -137,7 +143,10 @@ def pair(
     (I-9)**, the same posture `accounts.add_account`/`obligations.
     add_obligation` document for their own first field: the write is
     `overwrite=False` unless `replace`, so the adapter's own atomic insert
-    is the gate a racing second `pair()` call cannot slip past.
+    is the gate a racing second `pair()` call cannot slip past. (The one
+    exception is a *retired* key, which has to be written over to be
+    re-used; a racing pair() on that same key is a window this single-
+    operator tool accepts, as the precondition scan below already does.)
     """
     out_fp = str(fp_out).strip()
     in_fp = str(fp_in).strip()
@@ -157,21 +166,36 @@ def pair(
             "transfer's two legs must be on two different accounts"
         )
 
-    equal_and_opposite, days_apart = _compatible(canonical, label_out, out_fp, label_in, in_fp)
-    if not equal_and_opposite:
+    fit = boundary.compatibility(canonical, label_out, out_fp, label_in, in_fp)
+    if not fit.readable:
+        raise ValueError(
+            f"{out_fp!r} and {in_fp!r}: one of these two rows has no readable "
+            "amount and date on file — a pairing is refused rather than "
+            "guessed at (`transaction list --gaps` shows a row whose date "
+            "will not parse)"
+        )
+    if not fit.equal_and_opposite:
         raise ValueError(
             f"{out_fp!r} and {in_fp!r} are not a matching pair — a transfer "
             "needs equal-and-opposite amounts on two different accounts"
         )
-    if days_apart > WINDOW_DAYS:
+    if not fit.outgoing_first:
         raise ValueError(
-            f"{out_fp!r} and {in_fp!r} post {days_apart} day(s) apart — a "
+            f"{out_fp!r} is the incoming leg of this pair — the first "
+            "fingerprint must be the outgoing side, the account the money "
+            "left, so the record's from/to say what actually happened. Swap "
+            "the two."
+        )
+    if fit.days_apart is not None and fit.days_apart > WINDOW_DAYS:
+        raise ValueError(
+            f"{out_fp!r} and {in_fp!r} post {fit.days_apart} day(s) apart — a "
             f"transfer's two legs must fall within {WINDOW_DAYS} days of "
             "each other"
         )
 
+    pairs = _pairs(store)
     if not replace:
-        already = paired_fingerprints(store)
+        already = _fingerprints(pairs)
         clashing = out_fp if out_fp in already else (in_fp if in_fp in already else None)
         if clashing is not None:
             raise RecordExists(
@@ -182,8 +206,18 @@ def pair(
 
     record = Classified(Rung.L2, {"counterpart": in_fp, "from": label_out, "to": label_in})
     ref = key(MATTER, _PAIR, out_fp)
+    replaced: Replaced | None = None
     if replace:
-        replaced = store.put(MATTER, _PAIR, out_fp, record, overwrite=True)
+        for stale_fp, value in pairs.items():
+            if stale_fp == out_fp:
+                continue          # about to be written over by this call anyway
+            if stale_fp in (out_fp, in_fp) or value.get("counterpart") in (out_fp, in_fp):
+                replaced = _retire(store, stale_fp) or replaced
+        replaced = store.put(MATTER, _PAIR, out_fp, record, overwrite=True) or replaced
+    elif out_fp in _retired(store):
+        # The key is on file but names no pairing: re-using it is not a
+        # clobber, so it is not the occupied-key refusal's business.
+        store.put(MATTER, _PAIR, out_fp, record, overwrite=True)
     else:
         try:
             store.put(MATTER, _PAIR, out_fp, record, overwrite=False)
@@ -193,7 +227,6 @@ def pair(
                 "never silently overwrites (I-9): pass --replace (the CLI) "
                 'or "replace": true (the UI) to replace it.'
             ) from None
-        replaced = None
     # Event.RECORD_ADDED, referencing only the matter and the outgoing
     # fingerprint (the same economy `obligations.mark_paid` gives its own
     # `ITEM_RESOLVED` — a reference, never the counterpart or a label, and
@@ -202,13 +235,13 @@ def pair(
     return ref, replaced
 
 
-def _pairs(store: Sidecar) -> dict[str, dict]:
-    """Every pair on file, keyed by its outgoing fingerprint, each value
-    already read through the gate (`serve()` — never `.payload` here: `pair`
-    is `L2`, so `Served.value` on `S1_LIST` *is* the payload for a rung this
-    far below the ceiling, and reading it that way is the door
-    `accounts.py`/`obligations.py` already use for their own L2 records —
-    not a second boundary)."""
+def _served_pairs(store: Sidecar) -> dict[str, dict]:
+    """Every pair record on file, retired ones included, keyed by its
+    outgoing fingerprint and each value already read through the gate
+    (`serve()` — never `.payload` here: `pair` is `L2`, so `Served.value` on
+    `S1_LIST` *is* the payload for a rung this far below the ceiling, and
+    reading it that way is the door `accounts.py`/`obligations.py` already
+    use for their own L2 records — not a second boundary)."""
     out: dict[str, dict] = {}
     for (_, field, item_id), record in store.records(MATTER):
         if field != _PAIR:
@@ -221,18 +254,43 @@ def _pairs(store: Sidecar) -> dict[str, dict]:
     return out
 
 
-def paired_fingerprints(store: Sidecar) -> frozenset[str]:
-    """Every fingerprint on either side of a pair — the seam an aggregate
-    (`recurring.detect_recurring`, a running balance) unions with whatever
-    else it excludes (`overlay.py`'s `do_not_use`) before it sums or scans;
-    this module defines no exclusion mechanism of its own beyond this set."""
-    pairs = _pairs(store)
+def _is_live(value: dict) -> bool:
+    """A pairing names a counterpart; a retired record (`_RETIRED`) does not."""
+    counterpart = value.get("counterpart")
+    return isinstance(counterpart, str) and counterpart != _RETIRED
+
+
+def _pairs(store: Sidecar) -> dict[str, dict]:
+    """Every *live* pairing, keyed by its outgoing fingerprint."""
+    return {
+        item_id: value for item_id, value in _served_pairs(store).items()
+        if _is_live(value)
+    }
+
+
+def _retired(store: Sidecar) -> frozenset[str]:
+    """Every key holding a retired pairing — a key `pair()` may write over."""
+    return frozenset(
+        item_id for item_id, value in _served_pairs(store).items() if not _is_live(value)
+    )
+
+
+def _fingerprints(pairs: dict[str, dict]) -> frozenset[str]:
     out: set[str] = set(pairs)
     for value in pairs.values():
         counterpart = value.get("counterpart")
         if isinstance(counterpart, str):
             out.add(counterpart)
     return frozenset(out)
+
+
+def paired_fingerprints(store: Sidecar) -> frozenset[str]:
+    """Every fingerprint on either side of a live pair — the seam an
+    aggregate (`recurring.detect_recurring`, a running balance) unions with
+    whatever else it excludes (`overlay.py`'s `do_not_use`) before it sums or
+    scans; this module defines no exclusion mechanism of its own beyond this
+    set."""
+    return _fingerprints(_pairs(store))
 
 
 def counterpart_of(store: Sidecar, fp: str) -> str | None:
@@ -264,62 +322,52 @@ def other_label(store: Sidecar, fp: str) -> str | None:
     return None
 
 
-def suggest(store: Sidecar, *, window_days: int = WINDOW_DAYS) -> list[tuple[str, str]]:
+def suggest(store: Sidecar, *, window_days: int = WINDOW_DAYS) -> list[Suggestion]:
     """Candidate transfer pairs among transactions not already paired —
     equal-and-opposite amounts, on two different accounts, posted within
     `window_days` of each other. Proposes; **writes nothing** — an operator
     (or a caller acting on their behalf) still calls `pair()` to record one.
 
-    Deterministic: candidates are matched oldest-first and each fingerprint
-    is used in at most one proposed pair, so the same books always suggest
-    the same pairs in the same order.
+    **Ambiguity is reported, never resolved.** A candidate is unambiguous
+    only when the two legs fit each other and nothing else: one compatible
+    inflow for that outflow, and one compatible outflow for that inflow.
+    Anything else lists *every* candidate, each marked `ambiguous`, so the
+    operator sees that there is a choice to make instead of a guess this
+    module made for them — two `-40.00` sweeps landing in two accounts the
+    same day are exactly a case where picking one would be wrong half the
+    time, and silently wrong every time.
+
+    Deterministic and order-independent: candidates are found by fit rather
+    than by a first-come claim, and are listed oldest outflow first.
     """
     canonical = Canonical()
     excluded = paired_fingerprints(store)
-    outflows: list[tuple[str, str, Decimal, date]] = []
-    inflows: list[tuple[str, str, Decimal, date]] = []
+    outflows: list[tuple[str, boundary.SignedRow]] = []
+    inflows: list[tuple[str, boundary.SignedRow]] = []
     for label in accounts.instances(store):
-        amounts: dict[str, str] = {}
-        dates: dict[str, str] = {}
-        for ref, record in canonical.records(label):
-            _, field, item_id = ref
-            if item_id in excluded:
-                continue
-            if field == "amount":
-                amounts[item_id] = record.payload
-            elif field == "date":
-                dates[item_id] = record.payload
-        for item_id, raw_amount in amounts.items():
-            raw_date = dates.get(item_id)
-            if raw_date is None:
-                continue
-            try:
-                amount = Decimal(raw_amount)
-                when = date.fromisoformat(raw_date)
-            except (InvalidOperation, ValueError):
-                continue
-            entry = (label, item_id, amount, when)
-            if amount < 0:
-                outflows.append(entry)
-            elif amount > 0:
-                inflows.append(entry)
+        for row in boundary.signed_rows(canonical, label, skip=excluded):
+            (outflows if row.amount < 0 else inflows).append((label, row))
+    outflows.sort(key=lambda e: (e[1].day, e[1].item_id))
+    inflows.sort(key=lambda e: (e[1].day, e[1].item_id))
 
-    used: set[str] = set()
-    found: list[tuple[str, str]] = []
-    for label_out, fp_out, amount_out, date_out in sorted(outflows, key=lambda e: (e[3], e[1])):
-        if fp_out in used:
+    def _fits(out: tuple[str, boundary.SignedRow], inn: tuple[str, boundary.SignedRow]) -> bool:
+        return (
+            out[0] != inn[0]
+            and out[1].amount + inn[1].amount == 0
+            and abs((inn[1].day - out[1].day).days) <= window_days
+        )
+
+    candidates = [[inn for inn in inflows if _fits(out, inn)] for out in outflows]
+    fits_per_inflow: Counter[str] = Counter()
+    for matches in candidates:
+        fits_per_inflow.update(inn[1].item_id for inn in matches)
+
+    found: list[Suggestion] = []
+    for (_, out), matches in zip(outflows, candidates):
+        if not matches:
             continue
-        for label_in, fp_in, amount_in, date_in in sorted(inflows, key=lambda e: (e[3], e[1])):
-            if fp_in in used or label_in == label_out:
-                continue
-            if amount_out + amount_in != 0:
-                continue
-            if abs((date_in - date_out).days) > window_days:
-                continue
-            found.append((fp_out, fp_in))
-            used.add(fp_out)
-            used.add(fp_in)
-            break
+        ambiguous = len(matches) > 1 or fits_per_inflow[matches[0][1].item_id] > 1
+        found.extend(Suggestion(out.item_id, inn.item_id, ambiguous) for _, inn in matches)
     return found
 
 
@@ -333,27 +381,38 @@ def exclude_from(
     balance, when one is drawn) applies **at the caller**, never inside
     `balance.py` itself, which stays every transaction, paired or not.
 
-    Matched by content rather than by fingerprint: `transaction_tuples`
-    carries no item id, but a transaction is already unique by `(date,
-    amount, description)` within one account — its own fingerprint folds in
-    the account number too, so two rows sharing those three fields on the
-    same account would already have collided at import and never both
-    exist. This is the one other place besides `_compatible` that this
-    module reads a raw `date`/`amount`/`description` payload, over exactly
-    the fingerprints `paired_fingerprints` names for this account.
+    **One paired row drops one tuple, not every tuple that looks like it.**
+    `transaction_tuples` carries no item id, so the match has to be by
+    content — and two *different* transactions can share one `(date, amount,
+    description)` triple even though their fingerprints differ, because the
+    fingerprint is over the exact strings (`-100.00` and `-100.0` are two
+    rows; `float()` makes them one tuple). Dropping by content alone would
+    take the unpaired one with it and hide a real charge from the recurring
+    detector. So the drop is counted: as many tuples go as there are paired
+    fingerprints on this account with that content, and the rest stay. Which
+    of two identical tuples survives does not matter — they are identical to
+    every caller of this function.
+
+    **When the overlay bite lands this counting goes away.** `overlay.py`
+    (branch `claude/ledger-overlay`, the sibling of this one) adds
+    `balance.dated_transactions`, which is `transaction_tuples` with the item
+    id still attached. Once both are on `main`, the honest filter is by
+    fingerprint on that call — `paired_fingerprints(sidecar) |
+    overlay.excluded_fingerprints(sidecar)`, the union this module's seam was
+    always for — and the content match here can go. Until then there is no
+    id at this seam to filter on, and counting is what keeps a genuine
+    duplicate visible.
     """
-    excluded_fps = {
-        fp for fp in paired_fingerprints(sidecar) if canonical.has(label, "date", fp)
-    }
-    if not excluded_fps:
+    paired = paired_fingerprints(sidecar)
+    if not paired:
         return list(tuples)
-    drop: set[tuple[str, float, str]] = set()
-    for fp in excluded_fps:
-        try:
-            when = canonical.get(label, "date", fp).payload
-            amount = float(canonical.get(label, "amount", fp).payload)
-            description = canonical.get(label, "description", fp).payload
-        except (KeyError, TypeError, ValueError):
+    budget = Counter(boundary.content_rows(canonical, label, paired))
+    if not budget:
+        return list(tuples)
+    kept: list[tuple[str, float, str]] = []
+    for item in tuples:
+        if budget[item] > 0:
+            budget[item] -= 1
             continue
-        drop.add((when, amount, description))
-    return [t for t in tuples if t not in drop]
+        kept.append(item)
+    return kept

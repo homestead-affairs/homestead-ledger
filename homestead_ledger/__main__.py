@@ -127,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             server,
             store,
             transfers,
+            transfers_boundary,
         )
         from homestead_ledger.app import cover, demo, view, window  # noqa: F401
         from homestead_ledger.packs import (  # noqa: F401
