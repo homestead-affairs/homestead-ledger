@@ -196,9 +196,30 @@ def _scans_a_word_list(node: ast.AST, constants: frozenset[str]) -> bool:
     return False
 
 
+def _decorator_name(dec: ast.AST) -> str:
+    """A decorator's own terminal name: `pytest.fixture` -> "fixture",
+    `pytest.mark.usefixtures(...)` -> "usefixtures"."""
+    if isinstance(dec, ast.Call):
+        dec = dec.func
+    if isinstance(dec, ast.Attribute):
+        return dec.attr
+    if isinstance(dec, ast.Name):
+        return dec.id
+    return ""
+
+
 def _is_fixture(node: ast.FunctionDef) -> bool:
-    """`@pytest.fixture` — setup, not a scan, whatever it reads."""
-    return any("fixture" in ast.dump(dec) for dec in node.decorator_list)
+    """`@pytest.fixture` — setup, not a scan, whatever it reads.
+
+    Matched on the decorator's *own terminal name*, not on the word
+    "fixture" appearing anywhere in its dump. `@pytest.mark.usefixtures(...)`
+    contains that word and is not a fixture at all: read as one, it silently
+    exempted the whole decorated test from both halves of this file, so a
+    scan written inline under `@pytest.mark.usefixtures("_home")` — the
+    commonest decorator in this suite — could never be reported (audit,
+    2026-09-11).
+    """
+    return any(_decorator_name(dec) == "fixture" for dec in node.decorator_list)
 
 
 def _is_scan_helper(
@@ -836,6 +857,40 @@ def test_the_inline_scan_check_does_not_fire_on_a_fixture(tmp_path):
         "    assert household\n",
     )
     assert _inline_scan_tests(source, frozenset()) == []
+
+
+def test_a_usefixtures_marker_does_not_exempt_a_test_from_either_half(tmp_path):
+    """Planted: the exemption that was not one. `@pytest.mark.usefixtures`
+    carries the word "fixture", and a rule that looked for that word
+    anywhere in the decorator cleared every test wearing it — four modules
+    here set it, and any inline scan under it was invisible. The marker must
+    not exempt; a real `@pytest.fixture` beside it still must."""
+    marked = _write(
+        tmp_path,
+        "test_planted_usefixtures.py",
+        "import pytest\n"
+        "from pathlib import Path\n"
+        "\n"
+        "@pytest.mark.usefixtures('_home')\n"
+        "def test_no_banned_word():\n"
+        "    text = Path('x').read_text(encoding='utf-8')\n"
+        "    assert 'banned' not in text\n",
+    )
+    assert _inline_scan_tests(marked, frozenset()) == ["test_no_banned_word"], (
+        "a usefixtures marker is not a fixture and must not exempt the test"
+    )
+
+    real = _write(
+        tmp_path,
+        "test_planted_real_fixture.py",
+        "import pytest\n"
+        "from pathlib import Path\n"
+        "\n"
+        "@pytest.fixture(autouse=True)\n"
+        "def staged():\n"
+        "    return 'banned' in Path('x').read_text(encoding='utf-8')\n",
+    )
+    assert _scan_helpers(real) == [], "a real @pytest.fixture is still setup"
 
 
 def test_the_inline_scan_check_clears_a_test_that_delegates_to_a_known_helper(tmp_path):
