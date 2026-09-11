@@ -81,6 +81,20 @@ def test_i44_ast_guard_fires_on_a_planted_filing_purpose(tmp_path):
     assert _drafting_or_filing_reaches(ast.parse(planted.read_text()))
 
 
+def test_i44_ast_guard_fires_on_a_drafting_purpose_planted_in_schedules_py(tmp_path):
+    """The real module, copied and edited — the shape the leak would
+    actually arrive in: `schedules.export()` already names a `Purpose`, so
+    the one-character change from `EXPORT` to `DRAFTING` is the whole of it.
+    A guard shown to fire only on a two-line fixture has not been shown to
+    fire on the file it exists to watch."""
+    planted = tmp_path / "schedules.py"
+    source = (PKG / "schedules.py").read_text("utf-8")
+    assert "Purpose.EXPORT" in source
+    planted.write_text(source.replace("Purpose.EXPORT", "Purpose.DRAFTING"), "utf-8")
+    assert _drafting_or_filing_reaches(ast.parse(planted.read_text("utf-8")))
+    assert not _drafting_or_filing_reaches(ast.parse(source))
+
+
 def test_i44_ast_guard_is_quiet_on_the_one_declared_purpose(tmp_path):
     """`Purpose.EXPORT` must not itself trip the guard."""
     honest = tmp_path / "honest.py"
@@ -95,11 +109,15 @@ def test_i44_ast_guard_is_quiet_on_the_one_declared_purpose(tmp_path):
 # ── guard 2: no official-form / "you should" language ───────────────────────
 
 FORBIDDEN_PHRASES = (
+    "Schedule A/B",
     "Schedule D",
     "Schedule E/F",
+    "Schedule J",
     "Form 106",
     "Form B",
+    "Official Form",
     "official form",
+    "means test",
     "file with the court",
     "you should",
 )
@@ -118,6 +136,13 @@ def _without_the_notice(text: str) -> str:
     run in the *source* text — for that shape this blanks the source
     lines of the `NOTICE = (...)` assignment instead, by line number,
     before the plain replace runs.
+
+    **The carve-out is anchored to the sentence, not to the name.** An
+    assignment is blanked only when its literal value is *exactly*
+    `schedules.NOTICE`. Blanking every constant called `NOTICE` would hand
+    any future module — G8's business-books export is already planned to
+    carry a notice of its own — a name that turns the scan off for whatever
+    it says.
     """
     out = text
     try:
@@ -127,11 +152,18 @@ def _without_the_notice(text: str) -> str:
     if tree is not None:
         lines = out.splitlines(keepends=True)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and any(
+            if not isinstance(node, ast.Assign) or not any(
                 isinstance(t, ast.Name) and t.id == "NOTICE" for t in node.targets
             ):
-                for i in range(node.lineno - 1, node.end_lineno):
-                    lines[i] = "\n"
+                continue
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, SyntaxError, TypeError):
+                continue
+            if value != NOTICE:
+                continue
+            for i in range(node.lineno - 1, node.end_lineno):
+                lines[i] = "\n"
         out = "".join(lines)
     return out.replace(NOTICE, "")
 
@@ -178,6 +210,40 @@ def test_i44_grep_guard_fires_on_each_planted_phrase(tmp_path):
         planted = tmp_path / f"leak_{i}.py"
         planted.write_text(f'MSG = "this concerns {phrase} in some way"\n', "utf-8")
         assert _phrase_hits(planted.read_text()), f"the guard missed {phrase!r}"
+
+
+def test_i44_grep_guard_fires_on_a_forbidden_phrase_hidden_in_a_notice(tmp_path):
+    """The carve-out quotes one sentence; it does not exempt a *name*.
+
+    Before this was anchored, any `NOTICE = …` assignment in the package had
+    its whole source span blanked before the scan ran, so a module could
+    carry court-filing language inside a constant with that name and the
+    guard would never see it — and a second module with a notice of its own
+    is already planned (G8's business-books export). Planted here so the
+    anchoring is shown to hold rather than asserted."""
+    planted = tmp_path / "leak_notice.py"
+    planted.write_text(
+        'NOTICE = (\n'
+        '    "you should file with the court using Form 106 before the "\n'
+        '    "hearing"\n'
+        ')\n',
+        "utf-8",
+    )
+    assert sorted(_phrase_hits(planted.read_text())) == [
+        "Form 106", "file with the court", "you should",
+    ]
+
+
+def test_i44_stripping_the_notice_leaves_a_second_occurrence_standing(tmp_path):
+    """The strip removes the quoted sentence, not the phrase. A *second*
+    "official form" somewhere else in the README — the shape a later
+    paragraph drifting into court-form language would take — still fires."""
+    readme_like = (
+        "Every export carries this notice, verbatim:\n\n"
+        f"> {NOTICE}\n\n"
+        "Print the result onto the official form before the hearing.\n"
+    )
+    assert _phrase_hits(readme_like) == ["official form"]
 
 
 def test_i44_grep_guard_ignores_incidental_lowercase_lookalikes():

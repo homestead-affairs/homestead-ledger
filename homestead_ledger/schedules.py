@@ -15,28 +15,23 @@ stays an ordinary obligation** here (`obligations.py`'s own `L4` amount);
 the `NOTICE` on every export says so.
 
 Every read here is `serve()`'s `Served.value`, never `Classified.payload`
-or a reflective stand-in for it — this module composes rows for `cli.py`
-and `server.py` to draw from, the same relationship `accounts.py` and
-`obligations.py` already hold to them, and it keeps to their rule (I-16;
-the package-wide `.payload` ban already covers this file too, since it is
-neither `books.py` nor `balance.py`).
+or a reflective stand-in for it (I-16 — the package-wide `.payload` ban
+covers this file, which is neither `books.py` nor `balance.py`).
 
-**Two compositions, two surfaces.** `debts()` serves each field on
-`Surface.S4_EGRESS` with `Purpose.EXPORT` declared — the one cell in the
-engine's `_CEILING` table (`rungs._CEILING[Surface.S4_EGRESS] == (Rung.L2,
-Rung.L4)`, pinned in `tests/test_schedules.py`) where a declared purpose
-lifts the ceiling to `L4`, so `balance_as_of`/`rate`/`limit`/`min_payment`
-render as themselves rather than as "a balance is on file." `rows()` serves
-the same fields on `Surface.S1_LIST` with **no** purpose declared — those
-same `L4` fields **derive** there instead: what `schedules show` and `GET
-/api/schedules` draw from. `institution` (`L3`) renders on both.
-`number` (`L5`) never appears in either composition: it is not in
-`_OPTIONAL_FIELDS`, so no code path here ever hands it to `serve()` at all
+**Two compositions, two surfaces** (`debts()` and `rows()`, each documented
+on itself). `number` (`L5`) appears in neither: it is not in
+`_OPTIONAL_FIELDS`, and every field this module composes is read out of
+that one tuple, so no code path here can hand it to `serve()` at all
 (I-13, no override anywhere).
 
 **Never zero, never guessed.** A liability instance with no `balance_as_of`
 on file gets `None` for that field on every row — absent, not `"0.00"`
-(I-31's spirit, applied to a field rather than a count).
+(I-31's spirit, applied to a field rather than a count) — and in the
+exported document that field's **key is simply not there**, rather than a
+`null` a reader could take for a zero balance or an unknown one. A
+`DebtRow` keeps the `None`, this package's own in-band "not on file", and
+`GET /api/schedules` mirrors the row faithfully; the artifact that leaves
+the household does not.
 
 `export()` composes `debts()`'s rows into one JSON document and, after a
 per-call confirmation shows exactly what would be written, hands it to the
@@ -55,6 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from homestead.keep import paths
 from homestead.keep.egress import Wire
 from homestead.keep.export import ExportReceipt, ExportRefused, export_record
 from homestead.keep.rungs import Classified, Purpose, Rung, Surface, compose, serve
@@ -90,15 +86,19 @@ NOTICE = (
 @dataclass(frozen=True)
 class DebtRow:
     """One liability account instance, composed for a schedules pane or an
-    export. `institution`/`balance_as_of`/`rate`/`limit`/`min_payment` are
-    `None` when nothing is on file for them — never `"0.00"` and never a
-    guess — and, on `rows()` (S1_LIST), the `L4` four read as their derived
-    stand-in sentence rather than as `None`. `number` never appears here at
-    all (L5, I-13)."""
+    export. Every field but `label` and `kind` is `None` when nothing is on
+    file for it — never `"0.00"` and never a guess — and, on `rows()`
+    (S1_LIST), the `L4` four read as their derived stand-in sentence rather
+    than as `None`. `opened` is `L2` (the pack's own "household schedule"
+    reasoning) and so renders on both surfaces, like `kind`: the date a debt
+    was taken on is the ordinary companion of what is owed on it, and it
+    names no party and no amount. `number` never appears here at all
+    (L5, I-13)."""
 
     label: str
     kind: str
     institution: str | None
+    opened: str | None
     balance_as_of: str | None
     rate: str | None
     limit: str | None
@@ -110,8 +110,12 @@ class DebtRow:
 #: posture `accounts._ROW_FIELDS` takes) this module ever composes.
 #: `number` is deliberately absent: nothing below ever iterates this list to
 #: decide what to serve, so there is no code path that could hand `number`
-#: to `serve()` here at all.
-_OPTIONAL_FIELDS = ("institution", "balance_as_of", "rate", "limit", "min_payment")
+#: to `serve()` here at all. `payment_due_day` is left out for the same
+#: reason: a schedule says what is owed and to whom, not when this household
+#: happens to pay it — out of scope for this bite, not refused.
+_OPTIONAL_FIELDS = (
+    "institution", "opened", "balance_as_of", "rate", "limit", "min_payment",
+)
 
 
 def _by_label(store: Sidecar) -> dict[str, dict[str, Classified]]:
@@ -184,16 +188,29 @@ def rows(store: Sidecar) -> list[DebtRow]:
     return _compose(store, surface=Surface.S1_LIST, purpose=None)
 
 
-def _row_dict(row: DebtRow) -> dict[str, str | None]:
-    return {
-        "label": row.label,
-        "kind": row.kind,
-        "institution": row.institution,
-        "balance_as_of": row.balance_as_of,
-        "rate": row.rate,
-        "limit": row.limit,
-        "min_payment": row.min_payment,
-    }
+def _row_dict(row: DebtRow) -> dict[str, str]:
+    """One row of the exported document. `label` and `kind` are always
+    there; every other field appears **only when it is on file** — the key
+    is absent rather than `null`, so nothing downstream can read a missing
+    balance as a zero one or as a deliberately withheld one.
+
+    Written out field by field rather than by reflection (I-16: this module
+    reaches for nothing by computed name), with
+    `test_the_document_row_keys_cannot_drift_from_the_composition` holding
+    a populated row's keys equal to `("label", "kind", *_OPTIONAL_FIELDS)`
+    — so `number`, absent from that tuple, is absent here too."""
+    out: dict[str, str] = {"label": row.label, "kind": row.kind}
+    for field, value in (
+        ("institution", row.institution),
+        ("opened", row.opened),
+        ("balance_as_of", row.balance_as_of),
+        ("rate", row.rate),
+        ("limit", row.limit),
+        ("min_payment", row.min_payment),
+    ):
+        if value is not None:
+            out[field] = value
+    return out
 
 
 def _document(store: Sidecar) -> tuple[dict[str, object], list[DebtRow]]:
@@ -205,11 +222,8 @@ def _document(store: Sidecar) -> tuple[dict[str, object], list[DebtRow]]:
     debt_rows = debts(store)
     document = {
         "schema": SCHEMA,
-        # Microsecond precision, not seconds: two exports of an unchanged
-        # schedule inside the same test run (or the same interactive
-        # session) must still compose two distinct documents — see
-        # `export()`'s own docstring on why a second export is a new file
-        # rather than a refusal.
+        # Microseconds, not seconds: two exports of an unchanged schedule in
+        # one session must still compose two distinct documents.
         "composed_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "rows": [_row_dict(row) for row in debt_rows],
         "count": len(debt_rows),
@@ -235,9 +249,34 @@ def export(
     ever called**: nothing is written to `exports_dir()`, no
     `IntegrityLog` row, no `VisibleLog` line.
 
+    **`out_dir` must be an absolute directory under `paths.home()`**, and
+    both refusals name themselves. A *relative* path is refused here,
+    before anything is composed or shown, rather than resolving against
+    whatever the shell's working directory happened to be: the engine's
+    `IntegrityLog` row records the reference and the purpose, **not the
+    artifact's path**, so the only account of where a document went is the
+    one the receipt showed the operator — and `exports/` names a different
+    place from every directory. A path *outside the household root* is
+    refused by `paths.ensure`, which resolves symlinks and `..` before it
+    checks; that `ValueError` is translated into `ExportRefused` rather
+    than reaching a surface as a traceback, and **is not re-checked here**
+    — a second copy of a containment rule is a second answer to it, the
+    drift the engine closed by giving `export_record` and `logs._ref` one
+    shared validator. An export therefore lands inside the root and is
+    copied out from there, which is the operator's act, not this package's.
+
     On confirmation, the whole document becomes one `Classified` — its rung
-    is `compose()` over every row's own rung (`L2` when `debts()` is
-    empty), carrying `NOTICE` as its derived stand-in — and is handed to
+    is `compose()` over every row's own rung, never a constant, so a
+    schedule of instances carrying only a kind and an institution composes
+    `L3` and one carrying a balance composes `L4`. The one constant is the
+    **empty** schedule's `L2`, and it is the honest score rather than a
+    convenience: `compose()` of nothing is `L5`, which would deny at the
+    gate and refuse an export of nothing, and an empty document does still
+    say one true thing — "no liabilities are on file" — which is exactly
+    the step-1/step-2 answer `packs/accounts.py` gives `kind` and `opened`:
+    household metadata, no party, no protected category, no amount.
+
+    The composed item carries `NOTICE` as its derived stand-in, and goes to
     `export_record()` **once**, under `matter="schedules"`,
     `item_type="debts"`, `item_id="export"`: one artifact, one
     `IntegrityLog` row, one `VisibleLog` line for the whole schedule, not
@@ -246,13 +285,18 @@ def export(
     `Purpose.EXPORT` is what makes that second gate agree with the one
     `debts()` already cleared while composing the rows.
 
-    **A second export is not refused — it is a new file.**
-    `export_record` writes under `exports_dir()` with `O_EXCL`, keyed by a
-    timestamp it stamps itself, so two exports of an unchanged schedule
-    land as two documents rather than one clobbering the other: a
-    household confirming the same export again is still a fact worth
-    keeping, not an error.
+    **A second export is not refused — it is a new file.** `export_record`
+    creates with `O_EXCL` under a timestamp it stamps itself, so two
+    exports of an unchanged schedule land as two documents rather than one
+    clobbering the other: confirming the same export again, on a later day,
+    is still a fact worth keeping.
     """
+    if out_dir is not None and not Path(out_dir).is_absolute():
+        raise ExportRefused(
+            f"--out takes an absolute directory; {str(out_dir)!r} is "
+            "relative and would mean a different place from every working "
+            "directory. Nothing was composed and nothing was ledgered."
+        )
     document, debt_rows = _document(store)
     body = json.dumps(document, sort_keys=True, ensure_ascii=False)
     wire = Wire(method="FILE", url="schedules/debts", body=body)
@@ -263,6 +307,16 @@ def export(
         )
     rung = compose(*(row.rung for row in debt_rows)) if debt_rows else Rung.L2
     item = Classified(rung, document, NOTICE)
-    return export_record(
-        item, "schedules", "debts", "export", purpose=purpose, exports=out_dir,
-    )
+    try:
+        return export_record(
+            item, "schedules", "debts", "export", purpose=purpose, exports=out_dir,
+        )
+    except ValueError as exc:
+        # `paths.ensure` refusing a directory outside the household root —
+        # the engine's own containment rule, reported by name here instead
+        # of reaching a surface as a bare ValueError traceback (I-11).
+        raise ExportRefused(
+            f"--out must name a directory under {paths.home()}: {exc}. "
+            "Nothing was written and nothing was ledgered — copy the "
+            "exported document out of the household root yourself."
+        ) from exc

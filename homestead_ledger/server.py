@@ -806,8 +806,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # terminal, not from the browser.
             self._json({"rows": [
                 {"label": r.label, "kind": r.kind, "institution": r.institution,
-                 "balance_as_of": r.balance_as_of, "rate": r.rate,
-                 "limit": r.limit, "min_payment": r.min_payment,
+                 "opened": r.opened, "balance_as_of": r.balance_as_of,
+                 "rate": r.rate, "limit": r.limit, "min_payment": r.min_payment,
                  "rung": r.rung.value}
                 for r in schedules.rows(sidecar)
             ]})

@@ -567,7 +567,8 @@ usage: homestead-ledger schedules show
   `export` composes the same schedule into a JSON file — the amounts
   themselves, never the number — after showing exactly what will be
   written and asking for confirmation. --out DIR writes there instead of
-  the default exports directory.
+  the default exports directory; DIR must be an absolute path under
+  the household root (copy the file out from there yourself).
 """
 
 
@@ -609,6 +610,18 @@ def _cmd_schedules(argv: list[str]) -> int:
         from pathlib import Path
 
         rest, out = _flag(rest, "--out")
+        if rest:
+            # `export` takes no positional argument, so anything left after
+            # `--out` was consumed is a typo — including `--out` itself with
+            # no value after it, which `_flag` leaves in `rest`. The same
+            # reasoning `_stray_flags` states for `transaction add`: a flag
+            # that looks honoured and is not. Here it would quietly export
+            # to the default directory instead of the one that was asked
+            # for, which is a file in the wrong place and a ledger row
+            # saying an export happened.
+            print(f"  refused: unexpected argument(s) {rest}", file=sys.stderr)
+            print(_SCHEDULES_USAGE, end="", file=sys.stderr)
+            return 2
         out_dir = Path(out) if out else None
 
         def confirm(wire) -> bool:

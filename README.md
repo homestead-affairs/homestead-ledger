@@ -202,9 +202,16 @@ misstate a debt.
 `savings` never appear here, and the amount fields derive (`"a balance is
 on file"`), never the number. `homestead-ledger schedules export [--out
 DIR]` composes the same instances into one JSON document — the amounts
-themselves this time, never the number — shows exactly what will be
+themselves this time, plus the date each account was opened, never the
+number, and a field that is not on file is left out rather than written
+as a null somebody could read as a zero — shows exactly what will be
 written, and writes nothing until that is confirmed: a declined
-confirmation writes no file, and ledgers nothing either. It goes out
+confirmation writes no file, and ledgers nothing either. `DIR` must be
+an absolute path under the household root: a relative one means a
+different place from every working directory, and the engine will not
+create a directory outside the root at all — the document is written
+inside the root and you copy it out from there. Both are refused by
+name, with nothing written and nothing ledgered. It goes out
 through the engine's own `export.export_record` (one artifact, one
 `IntegrityLog` row, one `VisibleLog` line, all references and never
 content), the same machinery every export on this face uses rather than a

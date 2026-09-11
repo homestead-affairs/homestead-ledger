@@ -73,7 +73,7 @@ commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
   queue        queue — what's due
   schedules    schedules show — the liability schedule, amounts derived
                schedules export [--out DIR] — the same schedule to a JSON
-               file, interactively confirmed (never the account number)
+               file, interactively confirmed (never the number)
   ui           ui [--port N] — entry forms, intake, queue and subscriptions in the browser
 
 commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
