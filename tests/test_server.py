@@ -325,6 +325,72 @@ def _orphans(page: str) -> list[str]:
     return sorted(_sections(page) - _nav_targets(page))
 
 
+# ── the page's own JS, read structurally (X7-drift: factored and planted) ───
+#
+# Three tests below used to carry this extraction inline, each with its own
+# copy of the same regex and its own `assert m is not None`. Inline, a scan
+# is invisible to `tests/test_scans_fire.py` and can never be planted: the
+# failure mode it must not have is matching *nothing* and passing, which is
+# exactly what happens the day a function is renamed. So the extraction is
+# one helper that refuses by name, the option-building rule is a second, and
+# both are planted below.
+
+#: The one way an option may be built: a DOM node whose text is assigned to
+#: `textContent`. Concatenating a label into markup is how a merchant name or
+#: an account label becomes script, and the page must never do it.
+_OPTION_BUILT_AS_A_NODE = ("createElement('option')", "textContent")
+_OPTION_BUILT_AS_MARKUP = "innerHTML='<option"
+
+
+def _js_function_body(page: str, name: str) -> str:
+    """The body of the page's `function <name>() { ... }`, refused by name
+    when the page defines no such function.
+
+    The refusal is the point. Every caller's real assertion is about what is
+    *in* the body, so a scan that quietly returned `""` for a renamed or
+    deleted function would pass every one of them while checking nothing.
+    """
+    match = re.search(rf"function {re.escape(name)}\(\) \{{(.*?)\n\}}", page, re.S)
+    assert match is not None, (
+        f"the served page defines no function {name}() — the scans that read "
+        "its body are checking nothing until it is found"
+    )
+    return match.group(1)
+
+
+def _builds_options_as_dom_nodes(fn: str) -> bool:
+    """True if `fn` builds its `<option>`s as DOM nodes with `textContent`
+    and never by concatenating markup."""
+    return (
+        all(needle in fn for needle in _OPTION_BUILT_AS_A_NODE)
+        and _OPTION_BUILT_AS_MARKUP not in fn
+    )
+
+
+def test_the_js_body_scan_refuses_a_function_the_page_does_not_define():
+    """Planted: the page renamed out from under the scan. It must refuse by
+    name rather than hand back an empty body every later assertion passes
+    over."""
+    page = server._PAGE
+    assert _js_function_body(page, "loadTransactions"), "the real one is found"
+    with pytest.raises(AssertionError, match="loadNothingAtAll"):
+        _js_function_body(page, "loadNothingAtAll")
+
+
+def test_the_option_building_scan_catches_a_planted_markup_concatenation():
+    """Planted: the same function body with its DOM-node option building
+    replaced by the concatenation it forbids. The real bodies must clear it
+    and the plant must not, or the rule is a sentence rather than a check."""
+    real = _js_function_body(server._PAGE, "loadTransactions")
+    assert _builds_options_as_dom_nodes(real)
+
+    planted = real + "\n  sel.innerHTML='<option value=\\''+a.label+'\\'>';"
+    assert not _builds_options_as_dom_nodes(planted), "the plant did not apply"
+    assert not _builds_options_as_dom_nodes(
+        real.replace("createElement('option')", "makeSomethingElse()")
+    ), "a body that builds no option node at all must not clear the rule"
+
+
 def test_every_section_has_a_nav_button():
     """Every `<section id="t-X">` has a `show('X')` button. The bug this
     catches is not "Records is missing" — it is "a tab exists that nothing can
@@ -760,12 +826,9 @@ def test_the_mark_paid_form_takes_its_accounts_from_the_status_door(ui):
     status, body = ui.get("/")
     page = body.decode()
     assert '<select id="paccount"></select>' in page
-    m = re.search(r"function loadAccountsForPaid\(\) \{(.*?)\n\}", page, re.S)
-    assert m is not None
-    fn = m.group(1)
+    fn = _js_function_body(page, "loadAccountsForPaid")
     assert "/api/status" in fn
-    assert "createElement('option')" in fn and "textContent" in fn
-    assert "innerHTML='<option" not in fn
+    assert _builds_options_as_dom_nodes(fn)
     # the option's value is the label itself — what `mark_paid` is handed
     assert "opt.value=a.label" in fn
 
@@ -882,11 +945,8 @@ def test_the_tag_form_is_on_the_page_and_options_are_built_with_textcontent(ui):
     for field in ("gfp", "gcategory", "gmerchant", "gnote", "gdonotuse", "greplace"):
         assert f'id="{field}"' in page
     assert "/api/transaction/tag" in page and "data-fp" in page
-    m = re.search(r"function loadTransactions\(\) \{(.*?)\n\}", page, re.S)
-    assert m is not None
-    fn = m.group(1)
-    assert "createElement('option')" in fn and "textContent" in fn
-    assert "innerHTML='<option" not in fn
+    fn = _js_function_body(page, "loadTransactions")
+    assert _builds_options_as_dom_nodes(fn)
 
 
 def test_the_category_picker_offers_no_protected_word(ui):
@@ -940,9 +1000,7 @@ def test_the_category_picker_keeps_no_copy_of_the_derived_sentence(ui):
 
     status, body = ui.get("/")
     page = body.decode()
-    m = re.search(r"function loadTransactions\(\) \{(.*?)\n\}", page, re.S)
-    assert m is not None
-    fn = m.group(1)
+    fn = _js_function_body(page, "loadTransactions")
     assert pack.SCHEMA["category"]["derived"] not in fn
     assert "CATEGORY.test(r.category)" in fn
 
