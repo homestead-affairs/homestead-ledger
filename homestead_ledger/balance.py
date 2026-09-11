@@ -36,7 +36,10 @@ from datetime import date
 from homestead_ledger.books import owed
 from homestead_ledger.store import Canonical
 
-__all__ = ["BalancePoint", "is_iso_date", "running_balance", "transaction_tuples"]
+__all__ = [
+    "BalancePoint", "is_iso_date", "running_balance", "transaction_tuples",
+    "dated_transactions",
+]
 
 
 def is_iso_date(value: str) -> bool:
@@ -149,16 +152,20 @@ def running_balance(
     return points
 
 
-def transaction_tuples(canonical: Canonical, account: str) -> list[tuple[str, float, str]]:
-    """Every complete transaction in `account` as the plain `(date, amount,
-    description)` tuples `recurring.detect_recurring` takes — oldest first.
+def dated_transactions(
+    canonical: Canonical, account: str,
+) -> list[tuple[str, str, float, str]]:
+    """Every complete transaction in `account` as `(item_id, date, amount,
+    description)`, oldest first — `transaction_tuples`'s own read, with the
+    fingerprint kept alongside instead of folded away.
 
-    The recurring-charge pass needs the real amount and the real payee, so
-    this read sits here at the payload boundary beside `running_balance`,
-    and the detector stays a pure function over what it is handed. What the
-    detector returns (a merchant, a cadence, an amount) is the household's own
-    arithmetic over its own books — reflected, never authored — and a surface
-    still receives it only as that summary, never as a `Classified`.
+    A caller that needs to *exclude* one transaction (bite 4's
+    `overlay.excluded_fingerprints`: a household's own `do_not_use` mark) has
+    nothing to exclude *by* once the fingerprint is gone — this is the one
+    extra column that lets a caller filter by reference before handing the
+    rest to `recurring.detect_recurring` or summing a total. The filtering
+    itself happens at the caller (`server.py`, `cli.py`), the one that knows
+    what `overlay` is; this module still does not.
     """
     amounts: dict[str, str] = {}
     dates: dict[str, str] = {}
@@ -176,11 +183,19 @@ def transaction_tuples(canonical: Canonical, account: str) -> list[tuple[str, fl
         (i for i in amounts if i in dates and i in descriptions),
         key=lambda i: _sort_key(dates[i], i),
     )
-    out: list[tuple[str, float, str]] = []
+    out: list[tuple[str, str, float, str]] = []
     for item_id in complete:
         try:
             amount = float(amounts[item_id])
         except (TypeError, ValueError):
             continue   # an unreadable amount joins no pattern (I-8)
-        out.append((str(dates[item_id]), amount, str(descriptions[item_id])))
+        out.append((item_id, str(dates[item_id]), amount, str(descriptions[item_id])))
     return out
+
+
+def transaction_tuples(canonical: Canonical, account: str) -> list[tuple[str, float, str]]:
+    """`dated_transactions`, with the fingerprint folded away — the plain
+    `(date, amount, description)` tuples `recurring.detect_recurring` takes.
+    The detector stays a pure function over what it is handed; what it
+    returns is the household's own arithmetic, reflected, never authored."""
+    return [(date, amount, description) for _fp, date, amount, description in dated_transactions(canonical, account)]

@@ -331,3 +331,121 @@ def test_naming_a_kind_where_a_label_belongs_points_somewhere_that_works(capsys)
         assert "kind" in err
         assert f"--kind {kind}" in err          # the way out, not `account add <kind>`
         assert f"account add {kind} " not in err
+
+
+# ── bite 4: `transaction tag` — the household's own layer, by reference ────
+
+def _add_transaction(label, *, date="2026-08-01", amount="-84.23", description="Whole Foods Market"):
+    from homestead_ledger.books import Transaction, import_transaction
+    return import_transaction(Transaction(
+        account=label, kind="checking", date=date, amount=amount, description=description,
+    ))
+
+
+def test_transaction_tag_category_and_list_shows_it(capsys):
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+
+    assert run_cli(["transaction", "tag", fp, "--category", "groceries"]) == 0
+    out = capsys.readouterr().out
+    assert "tagged: overlay/" in out and "category" in out
+
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    assert "category: groceries" in capsys.readouterr().out
+
+
+def test_transaction_tag_protected_category_and_note_derive_never_the_content(capsys):
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+
+    assert run_cli(["transaction", "tag", fp, "--category", "medical-copay",
+                    "--note", "call the bank"]) == 0
+    capsys.readouterr()
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    out = capsys.readouterr().out
+    assert "a category is on file" in out and "a note is on file" in out
+    assert "medical-copay" not in out and "call the bank" not in out
+
+
+def test_transaction_tag_do_not_use_marks_by_reference(capsys):
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+
+    assert run_cli(["transaction", "tag", fp, "--do-not-use"]) == 0
+    capsys.readouterr()
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    out = capsys.readouterr().out
+    assert "do-not-use" in out
+    assert "-84.23" not in out and "84.23" not in out
+
+
+def test_transaction_tag_unknown_fingerprint_is_refused_by_name(capsys):
+    _add_account()
+    assert run_cli(["transaction", "tag", "0" * 64, "--category", "groceries"]) == 1
+    err = capsys.readouterr().err
+    assert "refused" in err and "no such transaction" in err
+
+
+def test_transaction_tag_twice_without_replace_is_refused(capsys):
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+    assert run_cli(["transaction", "tag", fp, "--category", "groceries"]) == 0
+    capsys.readouterr()
+    assert run_cli(["transaction", "tag", fp, "--category", "dining"]) == 1
+    err = capsys.readouterr().err
+    assert "already tagged" in err and "--replace" in err
+
+    assert run_cli(["transaction", "tag", fp, "--category", "dining", "--replace"]) == 0
+    assert "tagged" in capsys.readouterr().out
+
+
+def test_transaction_tag_with_nothing_given_is_refused(capsys):
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+    assert run_cli(["transaction", "tag", fp]) == 1
+    assert "refused" in capsys.readouterr().err
+
+
+def test_transaction_tag_refusal_never_echoes_the_row(capsys):
+    label = _add_account()
+    fp = _add_transaction(label, description="Very Secret Payee", amount="-999.99")
+    capsys.readouterr()
+    assert run_cli(["transaction", "tag", fp, "--category", "Not Valid"]) == 1
+    err = capsys.readouterr().err
+    assert "Very Secret Payee" not in err and "999.99" not in err
+
+
+def test_transaction_tag_takes_the_twelve_characters_the_list_prints(capsys):
+    """`transaction list` prints `item_id[:12]`, and the README tells the
+    operator to tag what the list shows — so the twelve characters have to be
+    enough, and the line printed back names the *resolved* fingerprint."""
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    assert fp[:12] in capsys.readouterr().out
+
+    assert run_cli(["transaction", "tag", fp[:12], "--category", "groceries"]) == 0
+    assert f"overlay/{fp[:12]}" in capsys.readouterr().out
+
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    assert "category: groceries" in capsys.readouterr().out
+
+
+def test_transaction_tag_do_not_use_cannot_be_cleared_from_the_cli(capsys):
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+    assert run_cli(["transaction", "tag", fp, "--do-not-use"]) == 0
+    capsys.readouterr()
+    # there is no --no-do-not-use; omitting the flag tags nothing else, and
+    # the refusal says so rather than reading as a clear
+    assert run_cli(["transaction", "tag", fp]) == 1
+    assert "refused" in capsys.readouterr().err
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    assert "do-not-use" in capsys.readouterr().out

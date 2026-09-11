@@ -487,7 +487,10 @@ def test_a_handler_that_fails_answers_with_a_type_not_a_record(ui, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("account 4111111111111111 balance -84.23")
 
-    monkeypatch.setattr(balance, "transaction_tuples", boom)
+    # Bite 4: `/api/subscriptions` reads through `balance.dated_transactions`
+    # now (so it can filter `do_not_use` fingerprints before detection) —
+    # the function that must raise visibly changed with it.
+    monkeypatch.setattr(balance, "dated_transactions", boom)
     status, data = ui.json("/api/subscriptions")
     assert status == 500
     assert data["ok"] is False
@@ -782,6 +785,181 @@ def test_the_mark_paid_form_takes_its_accounts_from_the_status_door(ui):
     assert status == 200 and data["ok"] is True
 
 
+# ── bite 4: tagging a transaction through the browser ───────────────────────
+
+def _post_transaction(ui, label, **overrides):
+    body = {"date": "2026-08-01", "amount": "-84.23", "description": "Whole Foods Market",
+            "account": label, **overrides}
+    status, data = ui.json("/api/transaction", body)
+    assert status == 200 and data["ok"] is True
+    return data["id"]
+
+
+def test_transaction_tag_round_trip_and_the_transaction_list_carries_it(ui):
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fp, "category": "groceries"})
+    assert status == 200 and data["ok"] is True and data["fields"] == ["category"]
+
+    status, data = ui.json("/api/transactions?account=chk-main")
+    assert status == 200
+    by_field = {r["field"]: r for r in data["rows"]}
+    assert by_field["date"]["category"] == "groceries"
+    assert by_field["date"]["do_not_use"] is False
+    assert by_field["date"]["note"] is None
+
+
+def test_transaction_tag_protected_category_and_note_never_leak_on_the_list(ui):
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+    ui.json("/api/transaction/tag", {"fingerprint": fp, "category": "medical-copay",
+                                     "note": "call the bank about this one"})
+
+    status, data = ui.json("/api/transactions?account=chk-main")
+    assert status == 200
+    blob = json.dumps(data)
+    assert "medical-copay" not in blob and "call the bank" not in blob
+    by_field = {r["field"]: r for r in data["rows"]}
+    assert by_field["date"]["category"] == "a category is on file"
+    assert by_field["date"]["note"] == "a note is on file"
+
+
+def test_transaction_tag_do_not_use_marks_by_reference_and_excludes_subscriptions(ui):
+    ui.add_account(label="chk-main")
+    for i, day in enumerate(("01", "02", "03")):
+        _post_transaction(ui, "chk-main", date=f"2026-0{6+i}-{day}",
+                          amount="-15.99", description="Netflix")
+    fps = [r["item_id"] for r in ui.json("/api/transactions?account=chk-main")[1]["rows"]
+           if r["field"] == "date"]
+
+    status, data = ui.json("/api/subscriptions")
+    assert status == 200 and data["subscriptions"] and data["subscriptions"][0]["merchant"] == "netflix"
+
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fps[-1], "do_not_use": True})
+    assert status == 200 and data["fields"] == ["do_not_use"]
+
+    status, data = ui.json("/api/transactions?account=chk-main")
+    by_id = {r["item_id"]: r for r in data["rows"] if r["field"] == "date"}
+    assert by_id[fps[-1]]["do_not_use"] is True
+    assert all(v["do_not_use"] is False for k, v in by_id.items() if k != fps[-1])
+
+    # two occurrences remain — below detect_recurring's monthly minimum
+    status, data = ui.json("/api/subscriptions")
+    assert status == 200 and data["subscriptions"] == []
+
+
+def test_transaction_tag_replace_only_true_boolean_matters(ui):
+    """The same I-9/checkbox discipline every other POST door already
+    carries: `replace`/`do_not_use` posted as the string `"false"` must not
+    read as `True`. An occupied field answers **409**, the same code
+    `/api/obligation` already gives, so a browser can tell "already there"
+    from "malformed" without reading the sentence."""
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+    ui.json("/api/transaction/tag", {"fingerprint": fp, "category": "groceries"})
+
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fp, "category": "dining",
+                                                     "replace": "false"})
+    assert status == 409 and data["ok"] is False
+    assert "already tagged" in data["error"]
+
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fp, "category": "dining",
+                                                     "replace": True})
+    assert status == 200 and data["ok"] is True
+
+
+def test_transaction_tag_unknown_fingerprint_refused_and_body_drained(ui):
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": "0" * 64, "category": "groceries"})
+    assert status == 400 and data["ok"] is False
+    assert "no such transaction" in data["error"]
+
+
+def test_the_tag_form_is_on_the_page_and_options_are_built_with_textcontent(ui):
+    status, body = ui.get("/")
+    page = body.decode()
+    for field in ("gfp", "gcategory", "gmerchant", "gnote", "gdonotuse", "greplace"):
+        assert f'id="{field}"' in page
+    assert "/api/transaction/tag" in page and "data-fp" in page
+    m = re.search(r"function loadTransactions\(\) \{(.*?)\n\}", page, re.S)
+    assert m is not None
+    fn = m.group(1)
+    assert "createElement('option')" in fn and "textContent" in fn
+    assert "innerHTML='<option" not in fn
+
+
+def test_the_category_picker_offers_no_protected_word(ui):
+    """The tag form's category suggestions are built from what the list
+    already rendered — a protected category's derived placeholder, never
+    the real word, so the picker cannot leak it."""
+    ui.add_account(label="chk-main")
+    fp1 = _post_transaction(ui, "chk-main")
+    fp2 = _post_transaction(ui, "chk-main", date="2026-08-02", description="Rite Aid")
+    ui.json("/api/transaction/tag", {"fingerprint": fp1, "category": "groceries"})
+    ui.json("/api/transaction/tag", {"fingerprint": fp2, "category": "medical-copay"})
+
+    status, data = ui.json("/api/transactions?account=chk-main")
+    categories = {r["category"] for r in data["rows"] if r["category"]}
+    assert categories == {"groceries", "a category is on file"}
+
+
+def test_an_unticked_do_not_use_box_is_not_a_clear(ui):
+    """An unticked checkbox posts `false`, and `overlay.tag` refuses a false
+    (there is no un-tag path). The door has to read that as "not given", or
+    every ordinary tag through the browser would be refused."""
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+    status, data = ui.json("/api/transaction/tag", {
+        "fingerprint": fp, "category": "groceries", "do_not_use": False})
+    assert status == 200 and data["ok"] is True and data["fields"] == ["category"]
+
+
+def test_markup_typed_as_a_category_is_400_and_never_reaches_the_page(ui):
+    """The door refuses the *shape* (400 — malformed, not 409 occupied)
+    before anything is stored, so there is no row for the list to render at
+    all; the list then escapes what it does render."""
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+    status, data = ui.json("/api/transaction/tag", {
+        "fingerprint": fp, "category": "<img src=x onerror=alert(1)>"})
+    assert status == 400 and data["ok"] is False
+
+    status, data = ui.json("/api/transactions?account=chk-main")
+    assert status == 200
+    assert "onerror" not in json.dumps(data)
+    assert all(r["category"] is None for r in data["rows"])
+
+
+def test_the_category_picker_keeps_no_copy_of_the_derived_sentence(ui):
+    """The picker filters by the shape the door validates, not by a literal
+    copy of the pack's derived sentence — a copy here would go stale the day
+    `packs/overlay.py` rewords it and start offering the placeholder as a
+    category."""
+    from homestead_ledger.packs import overlay as pack
+
+    status, body = ui.get("/")
+    page = body.decode()
+    m = re.search(r"function loadTransactions\(\) \{(.*?)\n\}", page, re.S)
+    assert m is not None
+    fn = m.group(1)
+    assert pack.SCHEMA["category"]["derived"] not in fn
+    assert "CATEGORY.test(r.category)" in fn
+
+
+def test_tagging_by_the_twelve_characters_the_list_shows(ui):
+    """The browser fills the box from `data-fp` (the whole fingerprint), but
+    a household that typed what it could see must not be told there is no
+    such transaction."""
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fp[:12],
+                                                    "category": "groceries"})
+    assert status == 200 and data["ok"] is True
+    status, data = ui.json("/api/transactions?account=chk-main")
+    by_id = {r["item_id"]: r for r in data["rows"] if r["field"] == "date"}
+    assert by_id[fp]["category"] == "groceries"
+
+
 def test_api_schedules_mirrors_rows_exactly_and_derives_the_amounts(ui):
     """The browser door is `schedules.rows()` and nothing else: every field
     of a `DebtRow` appears, the `L4` amounts as their derived stand-in
@@ -833,3 +1011,40 @@ def test_there_is_no_export_door_on_the_server(ui):
     source = inspect.getsource(server.build_server)
     post_block = source.split("def _route_post")[1].split("def _field")[0]
     assert "schedule" not in post_block
+
+
+def test_subscriptions_excludes_a_paired_leg_and_a_do_not_use_row_together(ui):
+    """`/api/subscriptions` has **one** exclusion set: G4-transfers' paired
+    fingerprints unioned with bite 4's `do_not_use` rows, filtered by
+    reference over `balance.dated_transactions`. Neither module knows the
+    other exists, so the door is the only place the union can be wrong —
+    and a test of either mechanism alone would not notice the other being
+    dropped on the floor here."""
+    ui.add_account(label="chk-main", kind="checking", number="1111")
+    ui.add_account(label="sav-main", kind="savings", number="2222")
+
+    for month in ("06", "07", "08"):
+        _post_transaction(ui, "chk-main", date=f"2026-{month}-01",
+                          amount="-15.99", description="Netflix")
+        out = _post_transaction(ui, "chk-main", date=f"2026-{month}-02",
+                                amount="-200.00", description="Sweep to savings")
+        inn = _post_transaction(ui, "sav-main", date=f"2026-{month}-02",
+                                amount="200.00", description="Sweep from checking")
+        status, data = ui.json("/api/transaction/transfer", {"fp_out": out, "fp_in": inn})
+        assert status == 200 and data["ok"] is True
+
+    # the sweep is three equal monthly movements and would read as a
+    # subscription; paired, it is not spending at all
+    status, data = ui.json("/api/subscriptions")
+    assert status == 200
+    assert {s["merchant"] for s in data["subscriptions"]} == {"netflix"}
+
+    # and the overlay's own exclusion still applies in the same pass
+    netflix = [r["item_id"] for r in ui.json("/api/transactions?account=chk-main")[1]["rows"]
+               if r["field"] == "description" and r["text"] == "Netflix"]
+    assert len(netflix) == 3
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": netflix[0],
+                                                    "do_not_use": True})
+    assert status == 200
+    status, data = ui.json("/api/subscriptions")
+    assert status == 200 and data["subscriptions"] == []

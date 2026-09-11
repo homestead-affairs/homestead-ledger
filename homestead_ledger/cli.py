@@ -384,9 +384,12 @@ def _cmd_account(argv: list[str]) -> int:
 _TRANSACTION_USAGE = """\
 usage: homestead-ledger transaction add <date> <amount> <description> --account <label>
        homestead-ledger transaction list --account <label> [--gaps]
+       homestead-ledger transaction tag <fingerprint> [--category C] [--note N]
+                                        [--merchant M] [--do-not-use] [--replace]
        homestead-ledger transaction transfer <fp_out> <fp_in> [--replace]
        homestead-ledger transaction transfer --suggest
   e.g.: homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account chk-main
+        homestead-ledger transaction tag a1b2c3d4e5f6 --category groceries  (a prefix is enough)
   (a whole statement: python -m homestead_ledger --import FILE.csv --account <label>)
   <label> is a registered account instance — `account add` first, `account
   list` to see what's on file. The account number and kind live on the
@@ -394,6 +397,12 @@ usage: homestead-ledger transaction add <date> <amount> <description> --account 
   --gaps lists rows whose stored date is not ISO (YYYY-MM-DD) — pre-existing
   rows from before fix: G2c-importer-dates will not dedup against a re-import
   in the new ISO form; there is no migration (v1 is synthetic-only)
+  `tag` names a fingerprint already on the books — the whole one, or the
+  twelve characters `transaction list` prints (a prefix naming two rows is
+  refused, never guessed). A category is a closed-shape word, raised
+  automatically wherever it names a protected matter (medical, legal, …);
+  --do-not-use excludes the transaction from recurring detection, budget
+  envelopes and every export, and is set here, never cleared.
   transfer pairs an outgoing fingerprint with an incoming one — equal and
   opposite amounts, on two different accounts, within 5 days of each other —
   and excludes both from recurring detection and every household aggregate.
@@ -402,6 +411,50 @@ usage: homestead-ledger transaction add <date> <amount> <description> --account 
   --suggest proposes candidate pairs without writing anything; a candidate
   more than one row fits is listed once per candidate and marked ambiguous.
 """
+
+
+def _cmd_transaction_tag(rest: list[str]) -> int:
+    """transaction tag <fingerprint> [--category C] [--note N] [--merchant M]
+    [--do-not-use] [--replace] — the household's own layer over one
+    transaction, never a rewrite of the row itself."""
+    from homestead.keep.store import RecordExists
+
+    from homestead_ledger import overlay
+    from homestead_ledger.store import Sidecar
+
+    replace = "--replace" in rest
+    do_not_use = "--do-not-use" in rest
+    rest = [a for a in rest if a not in ("--replace", "--do-not-use")]
+    rest, category = _flag(rest, "--category")
+    rest, note = _flag(rest, "--note")
+    rest, merchant = _flag(rest, "--merchant")
+    stray = _stray_flags(rest)
+    if stray or not rest:
+        print(_TRANSACTION_USAGE, end="", file=sys.stderr)
+        return 2
+    fingerprint = rest[0]
+    _boot()
+    sidecar = Sidecar()
+    try:
+        written = overlay.tag(
+            sidecar, fingerprint, category=category, note=note,
+            confirmed_merchant=merchant, do_not_use=do_not_use or None,
+            replace=replace,
+        )
+    except (ValueError, RecordExists) as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return 1
+    if not written:
+        print(
+            "  nothing to tag — pass --category/--note/--merchant/--do-not-use",
+            file=sys.stderr,
+        )
+        return 2
+    # The *resolved* fingerprint, read back off a written ref — a prefix the
+    # operator typed is not the key anything was written under.
+    resolved = next(iter(written.values()))[0][2]
+    print(f"  tagged: {overlay.MATTER}/{resolved[:12]}…  ({', '.join(sorted(written))})")
+    return 0
 
 
 _TRANSFER_USAGE = """\
@@ -460,12 +513,13 @@ def _cmd_transaction_transfer(rest: list[str]) -> int:
 
 
 def _cmd_transaction(argv: list[str]) -> int:
-    """transaction <add|list|transfer> — one transaction into the books, the
-    account listed, or two transactions paired as a transfer."""
+    """transaction <add|list|tag|transfer> — one transaction into the books,
+    the account listed, the household's own layer over one transaction, or
+    two transactions paired as a transfer."""
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import RecordExists
 
-    from homestead_ledger import accounts, balance, books, money, transfers
+    from homestead_ledger import accounts, balance, books, money, overlay, transfers
     from homestead_ledger.app.window import Window
     from homestead_ledger.store import Canonical, Sidecar
 
@@ -474,6 +528,8 @@ def _cmd_transaction(argv: list[str]) -> int:
         print(_TRANSACTION_USAGE, end="", file=sys.stderr)
         return 2
     sub, rest = args[0], args[1:]
+    if sub == "tag":
+        return _cmd_transaction_tag(rest)
     if sub == "transfer":
         # `transfer` names two fingerprints, not `--account <label>` — it
         # takes the branch before the account handling below ever looks for
@@ -585,14 +641,29 @@ def _cmd_transaction(argv: list[str]) -> int:
             print(f"  {account}: nothing on the books — `homestead-ledger transaction add …` or `--import`")
             return 0
         print(f"  {account}: {len(rows)} row(s) (each transaction is a date, a description and an amount)")
+        seen: list[str] = []
         for row in rows:
             _, field, item_id = row.ref
+            if item_id not in seen:
+                seen.append(item_id)
             other = transfers.other_label(sidecar, item_id)
-            tag = f"  (transfer → {other})" if other else ""
-            print(f"  [{row.rung.value}]  {item_id[:12]}  {field}: {row.text}{tag}")
+            marker = f"  (transfer → {other})" if other else ""
+            print(f"  [{row.rung.value}]  {item_id[:12]}  {field}: {row.text}{marker}")
+        # Bite 4: the overlay, shown by reference — a category renders or
+        # derives, a note (always L4) derives, `do_not_use` is a mark, never
+        # a value read off the field. Only a tagged transaction gets a line;
+        # an untagged one prints nothing new here.
+        excluded = overlay.excluded_fingerprints(sidecar)
+        for item_id in seen:
+            tags = overlay.tags_of(sidecar, item_id)
+            marks = [f"{field}: {text}" for field, text in tags.items()]
+            if item_id in excluded:
+                marks.append("do-not-use")
+            if marks:
+                print(f"  [{item_id[:12]}]  {' · '.join(marks)}")
         return 0
 
-    print(f"unknown subcommand {sub!r} — one of: add, list, transfer", file=sys.stderr)
+    print(f"unknown subcommand {sub!r} — one of: add, list, tag, transfer", file=sys.stderr)
     return 2
 
 
