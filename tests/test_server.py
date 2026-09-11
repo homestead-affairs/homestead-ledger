@@ -852,14 +852,17 @@ def test_transaction_tag_do_not_use_marks_by_reference_and_excludes_subscription
 def test_transaction_tag_replace_only_true_boolean_matters(ui):
     """The same I-9/checkbox discipline every other POST door already
     carries: `replace`/`do_not_use` posted as the string `"false"` must not
-    read as `True`."""
+    read as `True`. An occupied field answers **409**, the same code
+    `/api/obligation` already gives, so a browser can tell "already there"
+    from "malformed" without reading the sentence."""
     ui.add_account(label="chk-main")
     fp = _post_transaction(ui, "chk-main")
     ui.json("/api/transaction/tag", {"fingerprint": fp, "category": "groceries"})
 
     status, data = ui.json("/api/transaction/tag", {"fingerprint": fp, "category": "dining",
                                                      "replace": "false"})
-    assert status == 400 and data["ok"] is False
+    assert status == 409 and data["ok"] is False
+    assert "already tagged" in data["error"]
 
     status, data = ui.json("/api/transaction/tag", {"fingerprint": fp, "category": "dining",
                                                      "replace": True})
@@ -898,3 +901,113 @@ def test_the_category_picker_offers_no_protected_word(ui):
     status, data = ui.json("/api/transactions?account=chk-main")
     categories = {r["category"] for r in data["rows"] if r["category"]}
     assert categories == {"groceries", "a category is on file"}
+
+
+def test_an_unticked_do_not_use_box_is_not_a_clear(ui):
+    """An unticked checkbox posts `false`, and `overlay.tag` refuses a false
+    (there is no un-tag path). The door has to read that as "not given", or
+    every ordinary tag through the browser would be refused."""
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+    status, data = ui.json("/api/transaction/tag", {
+        "fingerprint": fp, "category": "groceries", "do_not_use": False})
+    assert status == 200 and data["ok"] is True and data["fields"] == ["category"]
+
+
+def test_markup_typed_as_a_category_is_400_and_never_reaches_the_page(ui):
+    """The door refuses the *shape* (400 — malformed, not 409 occupied)
+    before anything is stored, so there is no row for the list to render at
+    all; the list then escapes what it does render."""
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+    status, data = ui.json("/api/transaction/tag", {
+        "fingerprint": fp, "category": "<img src=x onerror=alert(1)>"})
+    assert status == 400 and data["ok"] is False
+
+    status, data = ui.json("/api/transactions?account=chk-main")
+    assert status == 200
+    assert "onerror" not in json.dumps(data)
+    assert all(r["category"] is None for r in data["rows"])
+
+
+def test_the_category_picker_keeps_no_copy_of_the_derived_sentence(ui):
+    """The picker filters by the shape the door validates, not by a literal
+    copy of the pack's derived sentence — a copy here would go stale the day
+    `packs/overlay.py` rewords it and start offering the placeholder as a
+    category."""
+    from homestead_ledger.packs import overlay as pack
+
+    status, body = ui.get("/")
+    page = body.decode()
+    m = re.search(r"function loadTransactions\(\) \{(.*?)\n\}", page, re.S)
+    assert m is not None
+    fn = m.group(1)
+    assert pack.SCHEMA["category"]["derived"] not in fn
+    assert "CATEGORY.test(r.category)" in fn
+
+
+def test_tagging_by_the_twelve_characters_the_list_shows(ui):
+    """The browser fills the box from `data-fp` (the whole fingerprint), but
+    a household that typed what it could see must not be told there is no
+    such transaction."""
+    ui.add_account(label="chk-main")
+    fp = _post_transaction(ui, "chk-main")
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fp[:12],
+                                                    "category": "groceries"})
+    assert status == 200 and data["ok"] is True
+    status, data = ui.json("/api/transactions?account=chk-main")
+    by_id = {r["item_id"]: r for r in data["rows"] if r["field"] == "date"}
+    assert by_id[fp]["category"] == "groceries"
+
+
+def test_api_schedules_mirrors_rows_exactly_and_derives_the_amounts(ui):
+    """The browser door is `schedules.rows()` and nothing else: every field
+    of a `DebtRow` appears, the `L4` amounts as their derived stand-in
+    (S1_LIST, no purpose — only the terminal export renders them), and the
+    account number nowhere. Asserted against the dataclass's own fields, so
+    a field added to the composition and forgotten here fails rather than
+    silently dropping out of the pane."""
+    from homestead_ledger import schedules
+
+    ui.add_account(label="chk-main", kind="checking", number="1111")
+    ui.add_account(label="visa-chase", kind="credit_card", number="4242-PLANTED",
+                   institution="Chase", opened="2019-03-01",
+                   balance_as_of="1200.00", rate="19.99", limit="5000.00",
+                   min_payment="35.00")
+
+    status, data = ui.json("/api/schedules")
+    assert status == 200
+    (row,) = data["rows"]                         # checking is not a liability
+    assert set(row) == set(schedules.DebtRow.__dataclass_fields__)
+    assert row["label"] == "visa-chase"
+    assert row["institution"] == "Chase"
+    assert row["opened"] == "2019-03-01"
+    assert row["balance_as_of"] == "a balance is on file"
+    assert row["min_payment"] == "a minimum payment is on file"
+    assert row["rung"] == "L4"
+    assert "4242-PLANTED" not in json.dumps(data)
+    assert "1200.00" not in json.dumps(data)
+
+
+def test_there_is_no_export_door_on_the_server(ui):
+    """An export is an operator act at the terminal, confirmed there. The
+    browser has a read door and no write one — neither a GET nor a POST
+    reaches an export, and `_route_post` names no schedules path at all, so
+    a door cannot be added without this failing."""
+    import inspect
+
+    for path in ("/api/schedules/export", "/api/schedule/export"):
+        status, _ = ui.get(path)
+        assert status == 404, path
+        conn = http.client.HTTPConnection(ui.host, ui.port, timeout=5)
+        conn.request("POST", path, body="{}",
+                     headers={"Content-Type": "application/json"})
+        assert conn.getresponse().status == 404, path
+        conn.close()
+
+    status, _ = ui.get("/api/schedules")
+    assert status == 200                                  # the read door is there
+
+    source = inspect.getsource(server.build_server)
+    post_block = source.split("def _route_post")[1].split("def _field")[0]
+    assert "schedule" not in post_block

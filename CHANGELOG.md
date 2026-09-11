@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.5.0...v0.6.0) (2026-09-11)
+
+
+### Added
+
+* compose and export the household's Chapter 13 debt schedule ([dc7a816](https://github.com/homestead-affairs/homestead-ledger/commit/dc7a816fb69c550f7a6a421c8e81be13c4fc0660))
+
+
+### Fixed
+
+* refuse an --out this export cannot honour, and anchor the I-44 carve-out ([1fa0b35](https://github.com/homestead-affairs/homestead-ledger/commit/1fa0b35cdb5945d0555ac49a8c9834d0a1e3de30))
+
 ## [0.5.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.4.0...v0.5.0) (2026-09-11)
 
 

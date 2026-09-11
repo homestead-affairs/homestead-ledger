@@ -73,6 +73,9 @@ commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
   queue        queue — what's due
   budget       budget set <category> <YYYY-MM> <amount> [--replace]
                budget show [--month YYYY-MM]
+  schedules    schedules show — the liability schedule, amounts derived
+               schedules export [--out DIR] — the same schedule to a JSON
+               file, interactively confirmed (never the number)
   ui           ui [--port N] — entry forms, intake, queue and subscriptions in the browser
 
 commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
@@ -83,7 +86,7 @@ commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
 
 _CLI_COMMANDS = {
     "account", "obligation", "transaction", "resolve", "reconcile", "put", "queue",
-    "budget", "verify", "ui",
+    "budget", "schedules", "verify", "ui",
 }
 
 
@@ -127,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             queue,
             recurring,
             registry,
+            schedules,
             server,
             store,
         )

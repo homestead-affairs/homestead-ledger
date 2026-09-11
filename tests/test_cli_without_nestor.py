@@ -418,3 +418,34 @@ def test_transaction_tag_refusal_never_echoes_the_row(capsys):
     assert run_cli(["transaction", "tag", fp, "--category", "Not Valid"]) == 1
     err = capsys.readouterr().err
     assert "Very Secret Payee" not in err and "999.99" not in err
+
+
+def test_transaction_tag_takes_the_twelve_characters_the_list_prints(capsys):
+    """`transaction list` prints `item_id[:12]`, and the README tells the
+    operator to tag what the list shows — so the twelve characters have to be
+    enough, and the line printed back names the *resolved* fingerprint."""
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    assert fp[:12] in capsys.readouterr().out
+
+    assert run_cli(["transaction", "tag", fp[:12], "--category", "groceries"]) == 0
+    assert f"overlay/{fp[:12]}" in capsys.readouterr().out
+
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    assert "category: groceries" in capsys.readouterr().out
+
+
+def test_transaction_tag_do_not_use_cannot_be_cleared_from_the_cli(capsys):
+    label = _add_account()
+    fp = _add_transaction(label)
+    capsys.readouterr()
+    assert run_cli(["transaction", "tag", fp, "--do-not-use"]) == 0
+    capsys.readouterr()
+    # there is no --no-do-not-use; omitting the flag tags nothing else, and
+    # the refusal says so rather than reading as a clear
+    assert run_cli(["transaction", "tag", fp]) == 1
+    assert "refused" in capsys.readouterr().err
+    assert run_cli(["transaction", "list", "--account", label]) == 0
+    assert "do-not-use" in capsys.readouterr().out

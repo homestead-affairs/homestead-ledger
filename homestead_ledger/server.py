@@ -561,10 +561,14 @@ function loadTransactions() {
     // Suggestions for the tag form's category field — real, rendered
     // categories only (never the derived placeholder), built with
     // `textContent` so a household-typed word needs no escaping.
+    // A rendered category matches the shape the door validates; a derived
+    // stand-in is a sentence, with spaces, and cannot. Testing the shape
+    // keeps no copy of the pack's derived wording here to drift from.
+    var CATEGORY=/^[a-z][a-z0-9-]{0,39}$/;
     var seen={}, list=document.getElementById('gcategories');
     list.innerHTML='';
     data.rows.forEach(function(r){
-      if(r.category&&r.category!=='a category is on file'&&!seen[r.category]){
+      if(r.category&&CATEGORY.test(r.category)&&!seen[r.category]){
         seen[r.category]=true;
         var opt=document.createElement('option');
         opt.textContent=r.category;
@@ -784,7 +788,10 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import InvalidKey, RecordExists
 
-    from homestead_ledger import accounts, balance, books, budget, money, nestor_seam, obligations, overlay, registry
+    from homestead_ledger import (
+        accounts, balance, books, budget, money, nestor_seam, obligations, overlay,
+        registry, schedules,
+    )
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
     from homestead_ledger.intake import extract
@@ -919,6 +926,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._get_transactions(qs)
             if p.path == "/api/queue":
                 return self._get_queue()
+            if p.path == "/api/schedules":
+                return self._get_schedules()
             if p.path == "/api/resolve":
                 return self._get_resolve(qs)
             if p.path == "/api/subscriptions":
@@ -935,6 +944,21 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 {"kind": i.kind, "id": i.ref[2], "rung": i.rung.value, "shown": i.shown,
                  "overdue": i.overdue, "days_until": i.days_until, "gap": i.gap}
                 for i in items
+            ]})
+
+        def _get_schedules(self):
+            # S1_LIST semantics (`schedules.rows`): the amount fields derive
+            # here — "a balance is on file" — never the number, and never
+            # the rendered value either; only the terminal export
+            # (`schedules export`, an operator act) renders those. There is
+            # deliberately no POST door here: an export is confirmed at the
+            # terminal, not from the browser.
+            self._json({"rows": [
+                {"label": r.label, "kind": r.kind, "institution": r.institution,
+                 "opened": r.opened, "balance_as_of": r.balance_as_of,
+                 "rate": r.rate, "limit": r.limit, "min_payment": r.min_payment,
+                 "rung": r.rung.value}
+                for r in schedules.rows(sidecar)
             ]})
 
         def _get_obligations(self):
@@ -970,9 +994,16 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # S1_LIST way — `do_not_use` is a reference (set membership),
             # never a value read off the field.
             excluded = overlay.excluded_fingerprints(sidecar)
+            # One overlay read per *transaction*, not per row: a transaction
+            # is three rows (date, amount, description) and the overlay is a
+            # fact about the transaction, so reading it three times asks the
+            # store for the same three records three times over.
+            tags_by_fp: dict[str, dict[str, str]] = {}
             out_rows = []
             for r in rows:
-                tags = overlay.tags_of(sidecar, r.ref[2])
+                tags = tags_by_fp.get(r.ref[2])
+                if tags is None:
+                    tags = tags_by_fp[r.ref[2]] = overlay.tags_of(sidecar, r.ref[2])
                 out_rows.append({
                     "item_id": r.ref[2], "field": r.ref[1], "rung": r.rung.value,
                     "text": r.text, "category": tags.get("category"),
@@ -1237,7 +1268,10 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             # JSON `true` and nothing else — the same I-9/checkbox reasoning
             # `_post_obligation`'s `replace` already carries.
             replace = body.get("replace") is True
-            do_not_use = body.get("do_not_use") is True
+            # `True` or nothing at all: an unticked checkbox posts `false`,
+            # and `overlay.tag` refuses a false (there is no un-tag path), so
+            # the door has to mean "not given" rather than "cleared".
+            do_not_use = True if body.get("do_not_use") is True else None
             try:
                 written = overlay.tag(
                     sidecar, fingerprint,
@@ -1247,7 +1281,11 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                     do_not_use=do_not_use,
                     replace=replace,
                 )
-            except (ValueError, RecordExists) as exc:
+            except RecordExists as exc:
+                # Occupied, not malformed — the same 409 `/api/obligation`
+                # already answers with, so a browser can tell the two apart.
+                return self._json({"ok": False, "error": str(exc)}, 409)
+            except ValueError as exc:
                 return self._json({"ok": False, "error": str(exc)}, 400)
             self._json({"ok": True, "fields": sorted(written)})
 

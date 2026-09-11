@@ -204,19 +204,25 @@ say things *about* one transaction without ever touching the row itself:
 Records tab). The fingerprint is what `transaction add`/`--import` already
 print and `transaction list` already shows by reference — a transaction must
 already be on the books before it can be tagged, and an unknown fingerprint
-is refused by name, never by echoing what a lookup happened to find.
+is refused by name, never by echoing what a lookup happened to find. The
+whole fingerprint or a prefix of it (the twelve characters `transaction list`
+prints) both work; a prefix that names two rows is refused rather than
+resolved to one of them, and the record is keyed by the whole fingerprint
+whatever was typed.
 
 - **`--category`** is a short, closed-shape word (lowercase letters, digits
   and hyphens — `groceries`, `medical-copay`): **L3**, so an ordinary one
   renders on the list. A category whose text *contains* a word from a closed,
-  hand-reviewed list — `medical`, `therapy`, `pharmacy`, `attorney`, `legal`,
-  `court`, `bankruptcy`, `child-support`, `union`, `church`, `donation`,
-  `political` — is written at **L4** instead, automatically: the list renders
-  "a category is on file" rather than the word itself, and the real word is
-  there only once the transaction's detail is opened. **This advisory only
-  ever raises a category's rung, never lowers one** — there is no path that
-  takes an already-flagged category back down, the same "argue up, never
-  down" rule the engine's own content-shape advisory follows.
+  hand-reviewed list — health and care, legal process, insolvency, family,
+  belief, association, political activity, immigration status; the list
+  itself is `PROTECTED_CATEGORY_WORDS` in `homestead_ledger/packs/overlay.py`
+  and is the one copy — is written at **L4** instead, automatically: the list
+  renders "a category is on file" rather than the word itself, and the real
+  word is there only once the transaction's detail is opened. Matching is
+  substring, not whole-word, so it over-classifies and never under-classifies.
+  **This advisory only ever raises a category's rung, never lowers one** —
+  there is no path that takes an already-flagged category back down, the same
+  "argue up, never down" rule the engine's own content-shape advisory follows.
 - **`--merchant`** confirms a resolved payee name (L3, renders).
 - **`--note`** is free text (L4 always — open text can name anything, so it
   is classified at the ceiling from the start, unlike `--category`'s floor):
@@ -227,7 +233,9 @@ is refused by name, never by echoing what a lookup happened to find.
   and export: a household's own transfer, a duplicate import, or a row that
   should never shape a pattern. It marks by reference on the list (a
   `do-not-use` flag), never a value read off the field. Transfers and the
-  budget pass are later consumers of this same exclusion.
+  budget pass are later consumers of this same exclusion. It is set, never
+  cleared: there is no un-tag path yet, and a `--do-not-use` passed as false
+  is refused rather than quietly ignored.
 
 Each of the four fields is its own record, independently gated (I-9): setting
 `--category` today does not occupy `--note` for next month, and re-tagging an
@@ -245,6 +253,41 @@ from the books and the limits on record every time it is asked, and nothing
 about it is stored on its own. A protected category's name derives on this
 list exactly as it does when tagging a transaction, and a transaction marked
 do-not-use never counts toward it.
+
+## Exporting your liabilities
+
+`homestead-ledger schedules show` lists every liability account instance —
+`credit_card`, `loan` — on the household's own screen: `checking` and
+`savings` never appear here, and the amount fields derive (`"a balance is
+on file"`), never the number. `homestead-ledger schedules export [--out
+DIR]` composes the same instances into one JSON document — the amounts
+themselves this time, plus the date each account was opened, never the
+number, and a field that is not on file is left out rather than written
+as a null somebody could read as a zero — shows exactly what will be
+written, and writes nothing until that is confirmed: a declined
+confirmation writes no file, and ledgers nothing either. `DIR` must be
+an absolute path under the household root: a relative one means a
+different place from every working directory, and the engine will not
+create a directory outside the root at all — the document is written
+inside the root and you copy it out from there. Both are refused by
+name, with nothing written and nothing ledgered. It goes out
+through the engine's own `export.export_record` (one artifact, one
+`IntegrityLog` row, one `VisibleLog` line, all references and never
+content), the same machinery every export on this face uses rather than a
+second one built here. `GET /api/schedules` in the browser reads the same
+derived-amount rows `schedules show` prints; there is **no export door on
+the server** — an export is an operator act at the terminal, confirmed
+there, never a click in the browser.
+
+Every export carries this notice, verbatim:
+
+> A list of the household's liabilities as the ledger holds them, for the household's own use. It is not a schedule on any official form, it carries no form number, and the Chapter 13 plan payment is an ordinary obligation here, not a claim.
+
+The Chapter 13 plan payment itself is an ordinary obligation
+(`obligation add rent …`-shaped, at the pack's own `L4`) — this module
+tracks what a household owes and nothing about a bankruptcy case, a
+claim, or a filing (provisional I-44: no drafting, no filing, no official
+form language anywhere in this package — `tests/test_i44_no_drafting.py`).
 
 ## The method
 
