@@ -57,7 +57,7 @@ from homestead.keep.sync import (
     deliver as _engine_deliver,
 )
 
-from homestead_ledger import accounts, obligations, overlay, transfers
+from homestead_ledger import accounts, budget, obligations, overlay, transfers
 from homestead_ledger.store import Canonical, Sidecar
 
 __all__ = [
@@ -72,8 +72,10 @@ __all__ = [
 _NUMBER_FIELD = "number"
 
 #: Sidecar matters outside the account-instance labels, each read off its
-#: own domain module's declared constant (I-23) rather than retyped here.
-_KNOWN_SIDECAR_MATTERS = (accounts.MATTER, overlay.MATTER, transfers.MATTER)
+#: own domain module's declared constant (I-23) rather than retyped here —
+#: a new sidecar-matter module (`budget`, G4-budget) joins this tuple the
+#: same way, never as a hand-typed string.
+_KNOWN_SIDECAR_MATTERS = (accounts.MATTER, overlay.MATTER, transfers.MATTER, budget.MATTER)
 
 
 class NumberNeverCrosses(ValueError):
@@ -88,7 +90,7 @@ def known_matters(sidecar: Sidecar) -> tuple[str, ...]:
     """Every matter name `scope_from` accepts: each registered account
     instance's own label (the canonical matter its transactions are filed
     under), the obligations matter, and the other sidecar matters
-    (`accounts`, `overlay`, `transfers`). No `"all"` (I-40)."""
+    (`accounts`, `overlay`, `transfers`, `budget`). No `"all"` (I-40)."""
     return tuple(sorted(
         set(accounts.instances(sidecar))
         | {obligations.KIND}

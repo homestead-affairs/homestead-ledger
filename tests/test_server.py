@@ -1095,7 +1095,7 @@ def test_get_sync_matters_lists_what_scope_from_would_accept(ui):
     ui.add_account(label="chk-main")
     status, data = ui.json("/api/sync/matters")
     assert status == 200
-    assert {"chk-main", "obligations", "overlay", "accounts", "transfers"} <= set(data["matters"])
+    assert {"chk-main", "obligations", "overlay", "accounts", "transfers", "budget"} <= set(data["matters"])
     assert "all" not in data["matters"]
 
 

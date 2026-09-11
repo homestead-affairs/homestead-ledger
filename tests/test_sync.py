@@ -94,7 +94,7 @@ def test_known_matters_is_read_off_the_registry_not_hardcoded(store):
     after = sync.known_matters(store)
     assert "chk-main" not in before
     assert "chk-main" in after
-    assert {"accounts", "overlay", "transfers", "obligations"} <= set(after)
+    assert {"accounts", "overlay", "transfers", "budget", "obligations"} <= set(after)
 
 
 # ── do_not_use never crosses; a tagged-but-not-excluded row does ───────────

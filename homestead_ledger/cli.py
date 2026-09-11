@@ -668,6 +668,80 @@ def _cmd_transaction(argv: list[str]) -> int:
     return 2
 
 
+_BUDGET_USAGE = """\
+usage: homestead-ledger budget set <category> <YYYY-MM> <amount> [--replace]
+       homestead-ledger budget show [--month YYYY-MM]
+  e.g.: homestead-ledger budget set groceries 2026-09 400.00
+        homestead-ledger budget show --month 2026-09
+  <category> is the same closed-shape word `transaction tag --category`
+  takes. A limit never renders on `show` — only whether spending in a
+  category this month is within it, over it, unset, or absent altogether;
+  --month defaults to the current calendar month.
+"""
+
+
+def _cmd_budget(argv: list[str]) -> int:
+    """budget <set|show> — a household's own per-category, per-month
+    spending limit, and the derived state it reads through."""
+    import datetime as dt
+
+    from homestead.keep.store import RecordExists
+
+    from homestead_ledger import budget
+    from homestead_ledger.store import Canonical, Sidecar
+
+    args = argv[1:]
+    if not args:
+        print(_BUDGET_USAGE, end="", file=sys.stderr)
+        return 2
+    sub, rest = args[0], args[1:]
+    _boot()
+    sidecar = Sidecar()
+
+    if sub == "set":
+        replace = "--replace" in rest
+        rest = [a for a in rest if a != "--replace"]
+        if len(rest) < 3:
+            print(_BUDGET_USAGE, end="", file=sys.stderr)
+            return 2
+        category, month, amount = rest[0], rest[1], rest[2]
+        try:
+            ref, replaced = budget.set_limit(
+                sidecar, category, month, amount, replace=replace,
+            )
+        except (ValueError, RecordExists) as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        print(f"  stored: {budget.MATTER}/{ref[2]}")
+        print("  limit L4 — never shown again on `budget show`, only its state")
+        if replaced is not None:
+            print("  (replaced the previous limit for this category and month)")
+        return 0
+
+    if sub == "show":
+        rest, month = _flag(rest, "--month")
+        month = month or dt.date.today().strftime("%Y-%m")
+        try:
+            rows, gaps = budget.envelopes(Canonical(), sidecar, month)
+        except ValueError as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        if not rows and not gaps.uncategorised and not gaps.undated:
+            print(f"  {month}: nothing to show — no limits and no spending on file")
+            return 0
+        print(f"  {month}:")
+        for row in rows:
+            print(f"  {row.category}: {budget.state_text(row)}")
+        print(f"  needs a category: {gaps.uncategorised}")
+        # A row whose date no calendar can read sits in no month at all —
+        # `transaction list --gaps` is where the operator goes to fix one.
+        print(f"  needs a date: {gaps.undated}")
+        return 0
+
+    print(f"unknown subcommand {sub!r} — one of: set, show", file=sys.stderr)
+    return 2
+
+
 def _cmd_put(argv: list[str]) -> int:
     """put — retired; one field under a random id was a record nothing could find."""
     print("  `put` is retired — enter an obligation or a transaction whole:", file=sys.stderr)
@@ -941,6 +1015,7 @@ COMMANDS: dict[str, tuple] = {
     "reconcile":   (_cmd_reconcile,   "reconcile <baseline> <observed> — compare amounts"),
     "put":         (_cmd_put,         "put — retired; use obligation add / transaction add"),
     "queue":       (_cmd_queue,       "queue — show what's due"),
+    "budget":      (_cmd_budget,      "budget <set|show> — per-category, per-month spending limits"),
     "schedules": (_cmd_schedules, "schedules <show|export> — the liability schedule"),
     "sync":      (_cmd_sync,      "sync --matters a,b --ceiling L3 — send a scope to the fleet"),
     "verify":    (_cmd_verify,    "verify — check ledger chain integrity"),
