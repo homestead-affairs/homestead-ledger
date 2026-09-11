@@ -76,6 +76,11 @@ commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
   schedules    schedules show — the liability schedule, amounts derived
                schedules export [--out DIR] — the same schedule to a JSON
                file, interactively confirmed (never the number)
+  sync         sync --matters a,b --ceiling L3 [--types ...] [--tables ...]
+               [--url URL] [--init-household] — compose a consented scope
+               of the books and send it to the household's own fleet
+               store, shown in full and confirmed interactively; there is
+               no "all" matter and no --yes
   ui           ui [--port N] — entry forms, intake, queue and subscriptions in the browser
 
 commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
@@ -86,7 +91,7 @@ commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
 
 _CLI_COMMANDS = {
     "account", "obligation", "transaction", "resolve", "reconcile", "put", "queue",
-    "schedules", "verify", "ui",
+    "schedules", "sync", "verify", "ui",
 }
 
 
@@ -132,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             schedules,
             server,
             store,
+            sync,
             transfers,
             transfers_boundary,
         )

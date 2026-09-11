@@ -198,6 +198,25 @@ re-identification), I-26 (import-pure core), I-27/I-28 (cold install, bare pytes
 - **Family is never content** — the household graph is surfaced only as structure,
   never rendered as a person's record (the self-portrait's blind spot).
 
+**Promoted from provisional (ratified by the engine's E4-sync-core audit,
+2026-09-11; this module is a *tested consumer*, not the thing that ratified
+them):**
+- **I-37** — a sync is ledgered only on a confirmed act; a refused confirm
+  writes and ledgers nothing (`tests/test_sync.py`'s declined-confirm tests).
+- **I-38** — an envelope is delivered once; a repeat is refused rather than
+  re-sent (`tests/test_sync.py`'s `AlreadyDelivered` tests, both legs).
+- **I-40** — a `SyncScope` names each matter explicitly; there is no `"all"`,
+  and `homestead_ledger.sync.scope_from` holds a name against what this
+  household actually has on file before a scope is even built.
+- **I-43** — an account's bank-issued number lives in exactly one record and
+  never crosses a sync at any ceiling — this module's own structural belt,
+  independent of the engine's ceiling drop (`tests/test_sync.py`'s planted
+  number and the monkeypatched-rung-table regression).
+
+`homestead_ledger.sync` is no longer unbuilt — G5-sync (`homestead_ledger/
+sync.py`, `tests/test_sync.py`, the CLI's `sync` command, the server's Sync
+tab).
+
 ---
 
 ## Related

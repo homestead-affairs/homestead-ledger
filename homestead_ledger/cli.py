@@ -7,6 +7,7 @@ The household's own commands need only the engine:
   transaction  — add one transaction to the books, or list the account
   queue        — what's due (obligation due dates)
   schedules    — the household's liability schedule: show it, or export it
+  sync         — send a consented scope of the books to the household's own fleet
   ui           — the browser UI: entry forms, intake, queue, subscriptions
 
 The Nestor-backed commands need the optional ``entity`` extra and say so in
@@ -790,6 +791,120 @@ def _cmd_schedules(argv: list[str]) -> int:
     return 2
 
 
+_SYNC_USAGE = """\
+usage: homestead-ledger sync --matters M[,M...] --ceiling L1|L2|L3|L4
+                              [--types T[,T...]] [--tables sidecar,canonical]
+                              [--url URL] [--init-household]
+  e.g.: homestead-ledger sync --matters chk-main,obligations --ceiling L3
+  Composes a consented scope of the household's own record and sends it to
+  its own fleet store — shown in full and confirmed interactively, never
+  in the background. --matters names each matter explicitly; there is no
+  "all". --tables defaults to both. --ceiling never exceeds L4. --url
+  overrides HOMESTEAD_FLEET_URL / a fleet.url file in the household root;
+  with neither set, the envelope is dropped as a file under the exports
+  directory instead — a destination is never a permission (I-37).
+  --init-household mints this household's own id — required before the
+  first sync ever run here.
+"""
+
+
+def _cmd_sync(argv: list[str]) -> int:
+    """sync --matters a,b --ceiling L3 [...] — send a consented scope to the fleet."""
+    from homestead.keep.egress import EgressRefused
+    from homestead.keep.household import household_id
+    from homestead.keep.rungs import Rung
+
+    from homestead_ledger import sync as sync_mod
+    from homestead_ledger.schedules import NOTICE
+    from homestead_ledger.store import Sidecar
+
+    args = argv[1:]
+    rest, matters_raw = _flag(args, "--matters")
+    rest, types_raw = _flag(rest, "--types")
+    rest, tables_raw = _flag(rest, "--tables")
+    rest, ceiling_raw = _flag(rest, "--ceiling")
+    rest, url = _flag(rest, "--url")
+    init_household = "--init-household" in rest
+    rest = [t for t in rest if t != "--init-household"]
+    if rest or not matters_raw or not ceiling_raw:
+        print(_SYNC_USAGE, end="", file=sys.stderr)
+        return 2
+
+    _boot()
+    household_file = paths.home() / "household.id"
+    if not household_file.exists() and not init_household:
+        print(
+            "  refused: no household id on file yet — pass --init-household "
+            "to mint one (a one-time, exclusive act) before the first sync",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        ceiling = Rung(ceiling_raw)
+    except ValueError:
+        print(
+            f"  refused: --ceiling {ceiling_raw!r} is not one of L1, L2, L3, L4",
+            file=sys.stderr,
+        )
+        return 2
+
+    matters = tuple(m.strip() for m in matters_raw.split(",") if m.strip())
+    types = tuple(t.strip() for t in types_raw.split(",") if t.strip()) if types_raw else None
+    tables = (
+        tuple(t.strip() for t in tables_raw.split(",") if t.strip())
+        if tables_raw else ("sidecar", "canonical")
+    )
+
+    sidecar = Sidecar()
+    try:
+        scope = sync_mod.scope_from(matters, types, ceiling, tables, sidecar=sidecar)
+        envelope = sync_mod.preview(scope, sidecar=sidecar)
+    except ValueError as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return 1
+
+    household = household_id()  # mints once, only reached with --init-household or an id already on file
+    counts: dict[str, int] = {}
+    for row in envelope.rows:
+        counts[row["table"]] = counts.get(row["table"], 0) + 1
+    print(f"  household: {household}")
+    print(f"  pre-sync head: {envelope.head}")
+    for table in sorted(tables):
+        print(f"  {table}: {counts.get(table, 0)} row(s)")
+    print(f"  ceiling: {ceiling.value}")
+    print(f"  destination: {url or sync_mod.destination_preview()}")
+    print(f"  {NOTICE}")
+
+    if not sys.stdin.isatty():
+        print(
+            "  refused: sync needs an interactive terminal to confirm "
+            "(I-37) — there is no --yes on this side",
+            file=sys.stderr,
+        )
+        return 1
+
+    def confirm(wire) -> bool:
+        print("  about to sync the household's own record to its fleet:")
+        print(f"  {wire.method} {wire.url}")
+        print("  " + "-" * 60)
+        print(wire.body)
+        print("  " + "-" * 60)
+        answer = input("  send? [y/N] ").strip().lower()
+        return answer in ("y", "yes")
+
+    try:
+        receipt = sync_mod.send(envelope, url=url, confirm=confirm)
+    except (EgressRefused, sync_mod.AlreadyDelivered) as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"  sent: envelope {receipt.envelope_id}")
+    print(f"  destination: {receipt.destination}")
+    print(f"  ledger head: {receipt.head}")
+    return 0
+
+
 def _cmd_verify(argv: list[str]) -> int:
     """verify — check the Nestor ledger chain."""
     if not _needs_nestor():
@@ -827,6 +942,7 @@ COMMANDS: dict[str, tuple] = {
     "put":         (_cmd_put,         "put — retired; use obligation add / transaction add"),
     "queue":       (_cmd_queue,       "queue — show what's due"),
     "schedules": (_cmd_schedules, "schedules <show|export> — the liability schedule"),
+    "sync":      (_cmd_sync,      "sync --matters a,b --ceiling L3 — send a scope to the fleet"),
     "verify":    (_cmd_verify,    "verify — check ledger chain integrity"),
     "ui":        (_cmd_ui,        "ui [--port N] — intake UI in the browser"),
 }

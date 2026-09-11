@@ -1048,3 +1048,141 @@ def test_subscriptions_excludes_a_paired_leg_and_a_do_not_use_row_together(ui):
     assert status == 200
     status, data = ui.json("/api/subscriptions")
     assert status == 200 and data["subscriptions"] == []
+
+
+# ── the Sync tab: /api/sync/matters, /api/sync/preview, /api/sync/send ──────
+
+
+@pytest.fixture
+def sync_ui(tmp_path, monkeypatch):
+    """Like `ui`, but the server's monotonic clock is injectable — the Sync
+    tab's 10-minute preview hold reads it, so an expiry test can fast-forward
+    without sleeping ten minutes."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    clock_value = [0.0]
+    srv = server.build_server(host="127.0.0.1", port=0, clock=lambda: clock_value[0])
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+
+    class _Client:
+        host, port = srv.server_address[0], srv.server_address[1]
+
+        def json(self, path, payload=None):
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=5)
+            if payload is None:
+                conn.request("GET", path)
+            else:
+                conn.request("POST", path, body=json.dumps(payload),
+                             headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            data = json.loads(resp.read())
+            conn.close()
+            return resp.status, data
+
+    try:
+        client = _Client()
+        client.advance = lambda seconds: clock_value.__setitem__(0, clock_value[0] + seconds)
+        client.add_account = lambda label="chk-t", kind="checking", number="9821", **extra: client.json(
+            "/api/account", {"label": label, "kind": kind, "number": number, **extra},
+        )
+        yield client
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_get_sync_matters_lists_what_scope_from_would_accept(ui):
+    ui.add_account(label="chk-main")
+    status, data = ui.json("/api/sync/matters")
+    assert status == 200
+    assert {"chk-main", "obligations", "overlay", "accounts", "transfers"} <= set(data["matters"])
+    assert "all" not in data["matters"]
+
+
+_PLANTED_BALANCE = "918273.45"
+_PLANTED_NUMBER = "PLANTED-SRV-9821-NEVER-SHOWN"
+
+
+def test_post_sync_preview_carries_counts_never_row_values(ui):
+    """Plant an L4 balance and the L5 number; grep the response bytes."""
+    ui.add_account(
+        label="visa-chase", kind="credit_card", number=_PLANTED_NUMBER,
+        balance_as_of=_PLANTED_BALANCE,
+    )
+    status, data = ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    assert status == 200
+    assert set(data) == {
+        "envelope_id", "counts", "ceiling", "matters", "tables", "head",
+        "destination_preview",
+    }
+    assert data["counts"]["sidecar"] > 0
+    assert data["counts"]["canonical"] == 0
+    body = json.dumps(data)
+    assert _PLANTED_BALANCE not in body
+    assert _PLANTED_NUMBER not in body
+
+
+def test_post_sync_preview_refuses_all_and_an_unknown_ceiling(ui):
+    ui.add_account(label="chk-main")
+    status, data = ui.json("/api/sync/preview", {
+        "matters": ["all"], "tables": ["sidecar"], "ceiling": "L3",
+    })
+    assert status == 400 and data["ok"] is False
+
+    status, data = ui.json("/api/sync/preview", {
+        "matters": ["chk-main"], "tables": ["sidecar"], "ceiling": "L5",
+    })
+    assert status == 400 and data["ok"] is False
+
+
+def test_post_sync_send_delivers_the_previewed_envelope_exactly_once(ui):
+    ui.add_account(label="chk-main", institution="Test Bank")
+    _, preview = ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    envelope_id = preview["envelope_id"]
+
+    status, data = ui.json("/api/sync/send", {"envelope_id": envelope_id})
+    assert status == 200
+    assert data["ok"] is True
+    assert data["envelope_id"] == envelope_id
+
+    status, data = ui.json("/api/sync/send", {"envelope_id": envelope_id})
+    assert status == 404
+    assert data["ok"] is False
+
+
+def test_post_sync_send_refuses_an_unknown_envelope_id(ui):
+    status, data = ui.json("/api/sync/send", {"envelope_id": "no-such-envelope"})
+    assert status == 404
+    assert data["ok"] is False
+
+
+def test_post_sync_send_refuses_after_the_ten_minute_hold_expires(sync_ui):
+    sync_ui.add_account(label="chk-main", institution="Test Bank")
+    _, preview = sync_ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    envelope_id = preview["envelope_id"]
+
+    sync_ui.advance(601)
+
+    status, data = sync_ui.json("/api/sync/send", {"envelope_id": envelope_id})
+    assert status == 404
+    assert data["ok"] is False
+
+
+def test_post_sync_send_still_works_just_before_the_hold_expires(sync_ui):
+    sync_ui.add_account(label="chk-main", institution="Test Bank")
+    _, preview = sync_ui.json("/api/sync/preview", {
+        "matters": ["accounts"], "tables": ["sidecar"], "ceiling": "L4",
+    })
+    envelope_id = preview["envelope_id"]
+
+    sync_ui.advance(599)
+
+    status, data = sync_ui.json("/api/sync/send", {"envelope_id": envelope_id})
+    assert status == 200
+    assert data["ok"] is True

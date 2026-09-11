@@ -313,6 +313,25 @@ tracks what a household owes and nothing about a bankruptcy case, a
 claim, or a filing (provisional I-44: no drafting, no filing, no official
 form language anywhere in this package — `tests/test_i44_no_drafting.py`).
 
+## Sync
+
+`homestead-ledger sync --matters chk-main,obligations --ceiling L3` (and the
+browser's Sync tab) is an operator act, never a background process: it
+composes a consented scope of the household's own books — matters named
+explicitly (there is no `all`), a ceiling of `L1`–`L4`, and `sidecar`
+and/or `canonical` — and shows exactly what would leave, and where, before
+anything does. Sidecar rows land labelled for the fleet to merge into its
+own copy and canonical rows land labelled so the fleet only ever inserts a
+new row, never overwrites one — the fleet's own read-only-books rule, one
+level further out. A delivered sync writes one `IntegrityLog` row and one
+visible line, both references only, and an envelope already delivered is
+refused rather than sent a second time. A destination — a URL, or a file
+dropped under the household's own exports directory — is a place to send
+to, never a permission to send: a declined confirmation writes and ledgers
+nothing whether or not one is configured, an account's bank-issued number
+never crosses at any ceiling, and a transaction tagged do-not-use never
+crosses either.
+
 ## The method
 
 Test-first, as in `homestead`: every claim is a check somebody can run. From a
