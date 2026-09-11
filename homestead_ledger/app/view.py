@@ -15,12 +15,20 @@ It rests on the **cover** (I-21): nothing is drawn until the operator asks,
 and the cover shows only the obligation counts that survive re-identification
 (`queue.cover`, I-31) — "Nothing is open" whenever nothing survives that
 check, which is the honest answer over the single obligation kind bite 2
-registers. Opening the checking account composes the accounts→transactions
-`S1_LIST` (amounts in their derived L4 form, dates L2, payees L3; the account
+registers. Opening an account composes that kind's transactions→`S1_LIST`
+(amounts in their derived L4 form, dates L2, payees L3; the account
 number is never a row — L5 has no override, I-13); opening a row's detail
 re-serves that one field and the amount renders in full (opening the pane
 *is* the purpose declaration). "What's due" composes the obligations queue,
 gaps first, then overdue, then soonest (I-8).
+
+**Bite 2a — one button per registered account kind.** `account_buttons()`
+pairs each `registry.all_accounts()` kind with the label its cover button
+shows ("Open checking account", "Open savings account", …) — factored out
+headless (no tkinter) so bite 2a's new packs (`savings`, `credit_card`,
+`loan`) prove they get a button with no other change here, the same "one
+enumeration" posture `registry.py` itself takes. `show_list` opens whichever
+kind its button named; there is no longer one hardcoded checking pane.
 
 **No reveal-expire timer.** I-32's ground is "a reveal does not persist past
 the act that asked for it" — `Window.close()` already enforces that by
@@ -60,10 +68,10 @@ from homestead_ledger import registry
 from homestead_ledger import queue as queue_mod
 from homestead_ledger.app import demo
 from homestead_ledger.app.window import Window
-from homestead_ledger.packs import checking, obligations
+from homestead_ledger.packs import obligations
 from homestead_ledger.store import Canonical, Sidecar
 
-__all__ = ["run", "compose_store", "LedgerContext", "DEMO_BANNER"]
+__all__ = ["run", "compose_store", "LedgerContext", "DEMO_BANNER", "account_buttons"]
 
 #: Shown on the cover in place of the ordinary subheading whenever `run()`
 #: fell back to the throwaway demo store — the "clearly-visible indicator"
@@ -103,6 +111,14 @@ def _has_real_data(canonical: Canonical, sidecar: Sidecar) -> bool:
         if sidecar.records(kind):
             return True
     return False
+
+
+def account_buttons() -> tuple[tuple[str, str], ...]:
+    """`(label, kind)` for every registered account kind, in registry order
+    — the cover's one-button-per-kind list, factored out headless so bite
+    2a's new packs prove they get a button with no other change here (I-23:
+    iterate `registry.all_accounts()`, never a hand-kept list of buttons)."""
+    return tuple((f"Open {kind} account", kind) for kind in registry.all_accounts())
 
 
 def compose_store() -> LedgerContext:
@@ -178,9 +194,11 @@ def run() -> int:
         summary = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in resting.items())
         ttk.Label(content, text=summary or "Nothing is open.", style="Muted.TLabel").pack(anchor="w")
         ttk.Button(content, text="What's due", command=show_queue).pack(anchor="w", pady=(24, 0))
-        ttk.Button(
-            content, text="Open checking account", style="Secondary.TButton", command=show_list,
-        ).pack(anchor="w", pady=(8, 0))
+        for label, kind in account_buttons():
+            ttk.Button(
+                content, text=label, style="Secondary.TButton",
+                command=lambda kind=kind: show_list(kind),
+            ).pack(anchor="w", pady=(8, 0))
 
     def show_queue() -> None:
         clear()
@@ -221,10 +239,10 @@ def run() -> int:
             content, text="Close", style="Secondary.TButton", command=show_cover,
         ).pack(anchor="w", pady=(4, 0))
 
-    def show_list() -> None:
+    def show_list(kind: str) -> None:
         clear()
-        window.open_list(canonical.records(checking.ACCOUNT))
-        ttk.Label(content, text=checking.ACCOUNT, style="Heading.TLabel").pack(anchor="w")
+        window.open_list(canonical.records(kind))
+        ttk.Label(content, text=kind, style="Heading.TLabel").pack(anchor="w")
         # one indicator per pane, not per row (I-33): the pane says an L4 is
         # present in its derived form, never a badge on every line — each
         # row's own colour (`theme.rung_color`) is the per-row signal.
@@ -247,7 +265,7 @@ def run() -> int:
         def on_open(_event: object = None) -> None:
             selection = listbox.curselection()
             if selection:
-                show_detail(rows[selection[0]].ref, back=show_list)
+                show_detail(rows[selection[0]].ref, back=lambda: show_list(kind))
 
         listbox.bind("<Double-Button-1>", on_open)
         ttk.Button(content, text="Open", command=on_open).pack(anchor="w", pady=(12, 0))

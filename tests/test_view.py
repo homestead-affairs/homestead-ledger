@@ -79,7 +79,7 @@ def test_compose_store_falls_back_to_demo_when_the_real_store_is_empty(tmp_path,
 
     assert ledger.demo is True
     assert ledger.today == view.demo.TODAY
-    assert ledger.canonical.records(view.checking.ACCOUNT) != []  # the seeded demo rows
+    assert ledger.canonical.records("checking") != []  # the seeded demo rows
 
 
 def test_compose_store_never_seeds_the_real_root_on_fallback(tmp_path, monkeypatch):
@@ -97,7 +97,7 @@ def test_compose_store_never_seeds_the_real_root_on_fallback(tmp_path, monkeypat
     # tmpdir; point back at the real root to inspect it directly.
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
     real_adapter = SQLiteAdapter(tmp_path / "homestead-ledger.db")
-    assert real_adapter.read_matter(CANONICAL, view.checking.ACCOUNT) == []
+    assert real_adapter.read_matter(CANONICAL, "checking") == []
 
 
 def test_compose_store_opens_the_real_store_when_it_holds_a_transaction(tmp_path, monkeypatch):
@@ -118,7 +118,7 @@ def test_compose_store_opens_the_real_store_when_it_holds_a_transaction(tmp_path
     ledger = view.compose_store()
 
     assert ledger.demo is False
-    assert ledger.canonical.records(view.checking.ACCOUNT) != []
+    assert ledger.canonical.records("checking") != []
     # the real root, not a fallback tmpdir the decision quietly redirected to
     assert os.environ["HOMESTEAD_HOME"] == str(tmp_path)
 
@@ -138,6 +138,22 @@ def test_compose_store_opens_the_real_store_when_only_an_obligation_exists(tmp_p
     ledger = view.compose_store()
 
     assert ledger.demo is False
+
+
+# ── bite 2a — one cover button per registered account kind ─────────────────
+
+def test_account_buttons_pairs_a_label_with_every_registered_kind():
+    from homestead_ledger import registry
+    from homestead_ledger.app import view
+
+    buttons = view.account_buttons()
+    assert buttons == tuple(
+        (f"Open {kind} account", kind) for kind in registry.all_accounts()
+    )
+    assert ("Open checking account", "checking") in buttons
+    assert ("Open savings account", "savings") in buttons
+    assert ("Open credit_card account", "credit_card") in buttons
+    assert ("Open loan account", "loan") in buttons
 
 
 def test_demo_banner_names_the_import_flag():
@@ -171,7 +187,7 @@ def test_compose_store_over_a_real_import_reflects_the_imported_rows_headless(tm
     assert ledger.demo is False
 
     window = Window()
-    window.open_list(ledger.canonical.records(view.checking.ACCOUNT))
+    window.open_list(ledger.canonical.records("checking"))
     texts = [row.text for row in window.rows]
 
     assert any("Whole Foods Market" in t for t in texts)

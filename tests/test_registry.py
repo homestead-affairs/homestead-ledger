@@ -28,19 +28,32 @@ def test_i23_the_registry_is_the_only_enumeration():
     assert set(all_accounts()) == set(REGISTRY)
 
 
-def test_checking_is_registered_and_is_the_only_built_pack():
-    """One pack in bite 1 — savings and credit-card are the next account
-    kinds, deliberately not here: a name with no pack behind it is the
-    hand-kept phantom I-23 forbids."""
-    assert set(all_accounts()) == {"checking"}
-    assert "savings" not in REGISTRY, "not built — no phantom entry"
-    assert "credit_card" not in REGISTRY, "not built — no phantom entry"
+def test_the_bite_2a_account_kinds_are_registered():
+    """`checking` (bite 1) plus `savings`, `credit_card` and `loan` (bite
+    2a) — every account kind built so far, and nothing invented beyond it: a
+    name with no pack behind it is the hand-kept phantom I-23 forbids."""
+    assert set(all_accounts()) == {"checking", "savings", "credit_card", "loan"}
+    assert "heloc" not in REGISTRY, "not built — no phantom entry"
 
 
 def test_all_accounts_iterates_the_registry_and_nothing_else():
     assert set(all_accounts()) == set(REGISTRY)
     assert isinstance(all_accounts(), tuple)
     assert all(isinstance(name, str) for name in all_accounts())
+
+
+def test_all_accounts_order_is_pinned_because_surfaces_read_it_in_order():
+    """`all_accounts()` is an *ordered* contract, not just a set: the cover
+    draws one button per kind in this order (`app/view.account_buttons`) and
+    the browser form's `<select>` is built in it — so its **first** entry is
+    the account a transaction posts to before the operator touches anything.
+    A reordering of `REGISTRY` would silently move that default to another
+    account; it is pinned here so such a change has to be deliberate.
+    `checking` stays first because it is `books.Transaction.kind`'s default."""
+    assert all_accounts() == ("checking", "savings", "credit_card", "loan")
+    assert all_accounts()[0] == checking.ACCOUNT
+    assert all_accounts() == tuple(REGISTRY)  # insertion order, nothing re-sorted
+    assert all_accounts() == all_accounts()  # stable across calls
 
 
 def test_an_entry_ties_an_account_to_its_pack():
@@ -63,37 +76,71 @@ def test_the_registry_does_not_hardcode_the_field_list_it_reads_it():
 
 def test_account_is_strict_about_an_unknown_name():
     with pytest.raises(KeyError):
-        account("savings")
+        account("heloc")
     with pytest.raises(KeyError):
         account("not_an_account")
 
 
 # ── the import-time guard fires — BUG-6's shape, from each side ─────────────
 
-def _fake_pack(name: str) -> types.ModuleType:
+def _fake_pack(name: str, *, liability: bool = False) -> types.ModuleType:
     mod = types.ModuleType(f"homestead_ledger.packs._fake_{name}")
     mod.ACCOUNT = name
+    mod.LIABILITY = liability
     mod.FIELDS = {"description": Rung.L3}
     mod.SCHEMA = {"description": {"rung": Rung.L3, "account": name}}
     return mod
 
 
+#: A never-registered account name, used across this file's planted-violation
+#: fixtures — `savings` used to play this role before bite 2a built it for
+#: real; a genuinely fake name keeps these fixtures honest now that "savings"
+#: is one of the real, registered kinds.
+_UNBUILT = "heloc"
+
+
 def test_a_pack_on_disk_with_no_entry_fails_the_build():
-    savings = _fake_pack("savings")
-    on_disk = {"checking": checking, "savings": savings}
+    heloc = _fake_pack(_UNBUILT)
+    on_disk = {**registry_mod._discover_packs(), _UNBUILT: heloc}
     with pytest.raises(RuntimeError) as exc:
         registry_mod._validate(dict(REGISTRY), on_disk)
-    assert "savings" in str(exc.value)
+    assert _UNBUILT in str(exc.value)
     assert "no registry entry" in str(exc.value)
 
 
 def test_a_registry_entry_with_no_pack_is_a_phantom_and_fails_the_build():
-    phantom = registry_mod._entry(_fake_pack("savings"))
-    broken = {**REGISTRY, "savings": phantom}
+    phantom = registry_mod._entry(_fake_pack(_UNBUILT))
+    broken = {**REGISTRY, _UNBUILT: phantom}
     with pytest.raises(RuntimeError) as exc:
-        registry_mod._validate(broken, {"checking": checking})
-    assert "savings" in str(exc.value)
+        registry_mod._validate(broken, registry_mod._discover_packs())
+    assert _UNBUILT in str(exc.value)
     assert "no pack" in str(exc.value)
+
+
+def test_a_pack_without_liability_fails_the_build():
+    """Every account pack must declare `LIABILITY` as a bool — a pack that
+    leaves it undeclared (or spells it as a string, an int, anything but a
+    real bool) fails the build with the field named, the same posture
+    `classify_schema` takes for a missing rung (I-11's shape, restated for
+    this declaration)."""
+    mod = types.ModuleType("homestead_ledger.packs._fake_no_liability")
+    mod.ACCOUNT = _UNBUILT
+    mod.FIELDS = {"description": Rung.L3}
+    mod.SCHEMA = {"description": {"rung": Rung.L3, "account": _UNBUILT}}
+    # LIABILITY deliberately never set on `mod`.
+    broken = {**REGISTRY, _UNBUILT: registry_mod._entry(mod)}
+    with pytest.raises(RuntimeError) as exc:
+        registry_mod._validate(broken, {**registry_mod._discover_packs(), _UNBUILT: mod})
+    assert _UNBUILT in str(exc.value)
+    assert "LIABILITY" in str(exc.value)
+
+    # and a non-bool LIABILITY is caught exactly the same way — a string or
+    # an int is not the bool `AccountType.liability` and `balance.
+    # running_balance` need, even though it might read as "truthy."
+    mod.LIABILITY = "yes"
+    with pytest.raises(RuntimeError) as exc:
+        registry_mod._validate(broken, {**registry_mod._discover_packs(), _UNBUILT: mod})
+    assert "LIABILITY" in str(exc.value)
 
 
 def test_a_key_that_disagrees_with_its_packs_account_fails_the_build():
@@ -115,14 +162,29 @@ def test_the_real_registry_passes_its_own_guard():
 
 
 def test_adding_a_pack_to_the_registry_needs_no_other_code_change(monkeypatch):
-    """A second account kind appears in `all_accounts()` the instant it is in
+    """A new account kind appears in `all_accounts()` the instant it is in
     `REGISTRY`, with no other code touched — the whole point of one
     enumeration."""
-    savings = registry_mod._entry(_fake_pack("savings"))
-    monkeypatch.setitem(registry_mod.REGISTRY, "savings", savings)
+    before = set(all_accounts())
+    heloc = registry_mod._entry(_fake_pack(_UNBUILT))
+    monkeypatch.setitem(registry_mod.REGISTRY, _UNBUILT, heloc)
 
-    assert set(all_accounts()) == {"checking", "savings"}
-    assert account("savings").fields == {"description": Rung.L3}
+    assert set(all_accounts()) == before | {_UNBUILT}
+    assert account(_UNBUILT).fields == {"description": Rung.L3}
+
+
+def test_the_readme_names_every_registered_account_kind():
+    """The README told the operator `--account` takes "an account kind the
+    registry knows (`checking` today)" for a whole bite after three more were
+    built — a doc claim that went stale precisely because nothing read it.
+    Every registered kind is named there, so adding one without saying so
+    fails here rather than in the operator's hands."""
+    readme = (PKG.parent / "README.md").read_text("utf-8")
+    missing = [name for name in all_accounts() if name not in readme]
+    assert not missing, (
+        f"the README does not name {missing} — it tells the operator which "
+        "account kinds `--account`/`--kind` accept."
+    )
 
 
 # ── the structural guard: the registry is the ONLY enumeration ──────────────
@@ -165,10 +227,33 @@ def test_no_module_outside_the_registry_hardcodes_the_set_of_accounts():
 
 
 def test_the_structural_guard_fires_on_a_planted_enumeration(tmp_path):
-    names = {"checking", "savings", "credit_card"}
+    names = set(all_accounts())
     literal = tmp_path / "queue.py"
-    literal.write_text("ALL_ACCOUNTS = ['checking', 'savings', 'credit_card']\n", "utf-8")
+    literal.write_text(f"ALL_ACCOUNTS = {sorted(names)!r}\n", "utf-8")
     membership = tmp_path / "nav.py"
-    membership.write_text("def is_account(a):\n    return a in ('checking', 'savings')\n", "utf-8")
+    membership.write_text(
+        f"def is_account(a):\n    return a in {tuple(sorted(names))!r}\n", "utf-8"
+    )
     assert _account_name_enumerations(ast.parse(literal.read_text()), names)
     assert _account_name_enumerations(ast.parse(membership.read_text()), names)
+
+
+@pytest.mark.parametrize("name", sorted(all_accounts()))
+def test_the_structural_guard_fires_on_each_registered_name_alone(tmp_path, name):
+    """One planted name at a time, in each shape the scan reads — a list, a
+    set, a tuple and a bare `==` compare. A guard proved only on a plant
+    naming three of four kinds has not been shown to catch the fourth, which
+    is exactly the kind a later bite adds and forgets."""
+    names = set(all_accounts())
+    plants = {
+        "list": f"ACCOUNTS = [{name!r}]\n",
+        "set": f"ACCOUNTS = {{{name!r}}}\n",
+        "tuple": f"ACCOUNTS = ({name!r},)\n",
+        "compare": f"def is_it(a):\n    return a == {name!r}\n",
+    }
+    for shape, source in plants.items():
+        mod = tmp_path / f"planted_{shape}.py"
+        mod.write_text(source, "utf-8")
+        assert _account_name_enumerations(ast.parse(mod.read_text()), names), (
+            f"the guard missed {name!r} planted as a {shape}"
+        )
