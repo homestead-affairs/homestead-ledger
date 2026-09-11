@@ -20,7 +20,7 @@ def test_seed_imports_the_demo_transactions(tmp_path, monkeypatch):
 
     canonical = Canonical()
     for item_id in item_ids:
-        assert canonical.get(demo.ACCOUNT, "amount", item_id).payload  # exists, readable
+        assert canonical.get(demo.LABEL, "amount", item_id).payload  # exists, readable
 
 
 def test_seed_is_not_idempotent_against_a_second_call(tmp_path, monkeypatch):

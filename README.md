@@ -48,17 +48,19 @@ needs the optional `entity` extra:
 pip install -e .
 
 homestead-ledger ui                                              # entry forms, intake, queue and subscriptions, on localhost
+homestead-ledger account add chk-main --kind checking --number 9821   # register the real account first
 homestead-ledger obligation add rent "Sunrise Properties LLC" 1450.00 2026-10-01 monthly
 homestead-ledger obligation list                                 # the list pane: payee, due date, cadence; the amount derives
 homestead-ledger obligation show rent                            # the detail pane: the amount renders
 homestead-ledger queue                                           # what's due
-homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account-number 9821
-homestead-ledger transaction list                                # the books, through the gate — the account number is never a row
-python -m homestead_ledger --import statement.csv --account-number 9821   # a whole statement
-python -m homestead_ledger --import card.csv --account-number 4242 --account credit_card \
-  --kind credit_card --liability-columns debit,credit                    # a card statement
-python -m homestead_ledger --import statement.csv --account-number 9821 --bank chase   # a slashed date column
-homestead-ledger transaction list --gaps                        # rows whose stored date predates this fix
+homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account chk-main
+homestead-ledger transaction list --account chk-main             # the books, through the gate — the account number is never a row
+python -m homestead_ledger --import statement.csv --account chk-main   # a whole statement
+homestead-ledger account add visa-chase --kind credit_card --number 4242
+python -m homestead_ledger --import card.csv --account visa-chase \
+  --liability-columns debit,credit                                     # a card statement
+python -m homestead_ledger --import statement.csv --account chk-main --bank chase   # a slashed date column
+homestead-ledger transaction list --account chk-main --gaps      # rows whose stored date predates this fix
 python -m homestead_ledger                                       # the window, on these books (the demo only if empty)
 ```
 
@@ -78,6 +80,34 @@ slashed date (v1's own books are synthetic-only) — such a row keeps its old
 date text, will not dedup against a re-import in the new ISO form, and
 `transaction list --gaps` is how an operator finds it.
 
+## Accounts
+
+**An account number lives in exactly one record (decision 9, provisional
+I-43).** Before a household can post a transaction, it registers the real
+account it belongs to — `account add <label> --kind checking --number 9821`
+— once. `<label>` is the household's own short name for that one real
+account (`chk-main`, `visa-chase`): lowercase letters, digits and hyphens,
+never a registered kind name (`checking`, `savings`, `credit_card`, `loan`)
+and never the bank-issued number itself, so a label can never be mistaken
+for a kind. `--kind` says which registered kind the account is; `--number`
+is its bank- or issuer-assigned identifier, sealed **L5** and never shown
+again on any surface — the CLI, the browser, or an export — once it is
+stored. Optional fields (`--institution`, `--opened`, `--balance-as-of`,
+`--rate`, `--limit`, `--payment-due-day`, `--min-payment`) are written only
+when given; `account list` shows every label with its kind and institution,
+`account show <label>` opens one (the number always reads `(sealed)`), and
+`--replace` is how a second `add` under the same label is meant.
+
+Every transaction is filed under a label from then on — `transaction add …
+--account chk-main`, `--import FILE --account chk-main` — and its kind is
+looked up from the instance, never retyped. `--account-number` and `--kind`
+are retired from `transaction add` and `--import`: an unrecognized flag is
+refused by name, pointing at `account add`, rather than silently ignored.
+There is **no migration** for rows a household already imported before this
+change wrote their own `account_number` record per transaction — those rows
+keep it; only the transactions imported from here on rely on the instance's
+one number instead.
+
 An obligation is one record per field at the pack's rungs
 (`homestead_ledger/obligations.py`), under the household's own short id
 (lowercase letters, digits and hyphens — `rent`, `car-insurance`), which is
@@ -91,9 +121,9 @@ extracts amounts, dates, merchants and due dates from a pasted bill or receipt
 and fills a form with one click, the *Queue*, and *Subscriptions* — the
 recurring-charge pass over the real books. Merchant resolution, reconciliation
 and the ledger check need `pip install 'homestead-ledger[entity]'` and say so
-when it is missing. `--account` names an account kind the registry knows
-(`checking`, `savings`, `credit_card`, `loan`); an unregistered name is refused
-rather than quietly grown. An amount is signed from the household's own side on
+when it is missing. `--account` names a registered account **instance** — a
+label, added with `account add` — never a bare kind name; an unregistered
+label is refused rather than quietly grown. An amount is signed from the household's own side on
 every kind — money leaving is negative, money arriving is positive — so on a
 credit card or a loan a charge is negative and a payment positive, and the
 running balance is read back as what is *owed* (`balance.running_balance(...,

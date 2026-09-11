@@ -85,7 +85,11 @@ def ui(tmp_path, monkeypatch):
             return status, rest
 
     try:
-        yield _Client()
+        client = _Client()
+        client.add_account = lambda label="chk-t", kind="checking", number="9821", **extra: client.json(
+            "/api/account", {"label": label, "kind": kind, "number": number, **extra},
+        )
+        yield client
     finally:
         srv.shutdown()
         srv.server_close()
@@ -95,9 +99,13 @@ def test_the_page_serves_and_carries_both_forms(ui):
     status, body = ui.get("/")
     assert status == 200
     page = body.decode()
-    for field in ("oid", "oname", "oamount", "odue", "ocadence", "tdate", "tamount", "tdesc", "tacct"):
+    for field in (
+        "oid", "oname", "oamount", "odue", "ocadence",
+        "alabel", "akind", "anumber", "ainstitution",
+        "tdate", "tamount", "tdesc",
+    ):
         assert f'id="{field}"' in page
-    assert "/api/obligation" in page and "/api/transaction" in page
+    assert "/api/obligation" in page and "/api/transaction" in page and "/api/account" in page
     assert "/api/store" not in page
 
 
@@ -142,13 +150,36 @@ def test_obligation_refusals_at_entry(ui):
     assert status == 404
 
 
+def test_account_round_trip_and_the_number_never_shows(ui):
+    status, data = ui.add_account(label="chk-main", kind="checking", number="9821")
+    assert status == 200 and data == {"ok": True, "label": "chk-main", "replaced": False}
+    assert "9821" not in json.dumps(data)
+
+    status, data = ui.json("/api/status")
+    assert status == 200
+    assert data["accounts"] == [{"label": "chk-main", "kind": "checking"}]
+    assert "9821" not in json.dumps(data)
+
+    status, data = ui.add_account(label="chk-main", kind="savings", number="1")
+    assert status == 400 and "replace" in data["error"]
+    status, data = ui.add_account(label="chk-main", kind="savings", number="1", replace=True)
+    assert status == 200 and data["replaced"] is True
+
+
+def test_account_label_cannot_be_a_kind_name(ui):
+    status, data = ui.add_account(label="checking", kind="checking", number="1")
+    assert status == 400 and data["ok"] is False
+    assert "kind" in data["error"]
+
+
 def test_transaction_round_trip_and_the_l5_never_shows(ui):
+    ui.add_account(label="chk-main")
     status, data = ui.json("/api/transaction", {"date": "2026-08-01", "amount": "-84.23",
                                                 "description": "Whole Foods Market",
-                                                "account_number": "9821"})
+                                                "account": "chk-main"})
     assert status == 200 and data["ok"] is True and len(data["id"]) == 64
 
-    status, data = ui.json("/api/transactions?account=checking")
+    status, data = ui.json("/api/transactions?account=chk-main")
     by_field = {r["field"]: r for r in data["rows"]}
     assert by_field["description"]["text"] == "Whole Foods Market"
     assert by_field["amount"]["text"] == "a debit is on file"
@@ -157,17 +188,18 @@ def test_transaction_round_trip_and_the_l5_never_shows(ui):
 
     status, data = ui.json("/api/transaction", {"date": "2026-08-01", "amount": "-84.23",
                                                 "description": "Whole Foods Market",
-                                                "account_number": "9821"})
+                                                "account": "chk-main"})
     assert status == 409
 
 
 def test_transaction_refusals_at_entry(ui):
-    base = {"date": "2026-08-01", "amount": "-84.23", "description": "x", "account_number": "1"}
+    ui.add_account(label="chk-main")
+    base = {"date": "2026-08-01", "amount": "-84.23", "description": "x", "account": "chk-main"}
     for key, value in (("date", "yesterday"), ("amount", "lots"), ("description", ""),
-                       ("account_number", ""), ("account", "brokerage")):
+                       ("account", ""), ("account", "brokerage")):
         status, data = ui.json("/api/transaction", {**base, key: value})
         assert status == 400, (key, value)
-    status, data = ui.json("/api/transactions")
+    status, data = ui.json("/api/transactions?account=chk-main")
     assert data["rows"] == []
     status, data = ui.json("/api/transactions?account=brokerage")
     assert status == 400
@@ -175,16 +207,16 @@ def test_transaction_refusals_at_entry(ui):
 
 def test_the_account_select_is_the_registry_and_drives_the_list(ui):
     """The transaction pane names one account in its `<select>` and lists the
-    rows of one account below it; if picking a kind in the select does not
-    redraw the list, the pane shows `checking`'s rows under the word
-    `credit_card` — the two halves of one pane disagreeing about which
-    account the operator is looking at. The options come from the registry
-    (`/api/status`), and the list is drawn only once they exist."""
-    from homestead_ledger import registry
+    rows of one account below it; if picking an account in the select does
+    not redraw the list, the pane shows one account's rows under another's
+    label — the two halves of one pane disagreeing about which account the
+    operator is looking at. The options come from `/api/status`, and the
+    list is drawn only once they exist."""
+    ui.add_account(label="chk-main")
 
     status, data = ui.json("/api/status")
     assert status == 200
-    assert data["accounts"] == list(registry.all_accounts())
+    assert data["accounts"] == [{"label": "chk-main", "kind": "checking"}]
 
     page = server._PAGE
     assert "<select id=\"taccount\"" in page
@@ -197,7 +229,7 @@ def test_the_account_select_is_the_registry_and_drives_the_list(ui):
 
 def test_no_account_name_is_hardcoded_as_a_default_in_the_page(ui):
     """I-23 on this surface, and I-11's fail-closed: the page must not carry
-    a literal account name to fall back on when `/api/status` has not
+    a literal account kind to fall back on when `/api/status` has not
     answered — a hardcoded `||'checking'` posts a transaction to, and lists,
     an account the operator never chose."""
     from homestead_ledger import registry
@@ -207,15 +239,16 @@ def test_no_account_name_is_hardcoded_as_a_default_in_the_page(ui):
         for literal in (f"'{name}'", f'"{name}"'):
             assert literal not in page, (
                 f"{literal} is hardcoded in the page — read the account from "
-                "currentAccount() (the registry-filled select) instead."
+                "currentAccount() (the /api/status-filled select) instead."
             )
     assert "function currentAccount()" in page
 
 
 def test_subscriptions_run_over_the_real_books(ui):
+    ui.add_account(label="chk-main")
     for date in ("2026-05-15", "2026-06-15", "2026-07-15", "2026-08-15"):
         ui.json("/api/transaction", {"date": date, "amount": "-15.99", "description": "Netflix",
-                                     "account_number": "9821"})
+                                     "account": "chk-main"})
     status, data = ui.json("/api/subscriptions")
     assert status == 200
     assert [s["merchant"] for s in data["subscriptions"]] == ["netflix"]
@@ -231,8 +264,11 @@ def test_intake_extracts_without_storing(ui):
 
 
 def test_status_and_localhost(ui):
+    ui.add_account(label="chk-main")
     status, data = ui.json("/api/status")
-    assert status == 200 and isinstance(data["nestor"], bool) and "checking" in data["accounts"]
+    assert status == 200 and isinstance(data["nestor"], bool)
+    assert {"label": "chk-main", "kind": "checking"} in data["accounts"]
+    assert "checking" in data["kinds"]
     assert ui.host == "127.0.0.1"
 
 
@@ -356,11 +392,12 @@ def test_an_amount_that_is_not_a_number_never_reaches_the_books(ui):
     """`float("nan")` and `float("1e400")` both succeed and `f"{…:.2f}"` writes
     the words. An amount on the books that is not finite makes every balance
     after it `nan`."""
-    base = {"date": "2026-08-01", "description": "x", "account_number": "1"}
+    ui.add_account(label="chk-main")
+    base = {"date": "2026-08-01", "description": "x", "account": "chk-main"}
     for bad in ("nan", "inf", "-inf", "Infinity"):
         status, data = ui.json("/api/transaction", {**base, "amount": bad})
         assert status == 400, bad
-    status, data = ui.json("/api/transactions?account=checking")
+    status, data = ui.json("/api/transactions?account=chk-main")
     assert data["rows"] == []
 
     # a real exponent is a real number, and `Decimal` keeps it finite where
@@ -371,10 +408,13 @@ def test_an_amount_that_is_not_a_number_never_reaches_the_books(ui):
 
 def test_no_error_text_echoes_the_account_number_or_the_amount(ui):
     """I-15: an error may name a field, never repeat an L3+ value — and an
-    error crosses to the browser exactly as a rendered record does. The one
-    fingerprint in `books`'s re-import refusal is a *reference*, not content."""
+    error crosses to the browser exactly as a rendered record does. The
+    account number, set once on the instance (bite 2b), and the amount must
+    never leak through a later transaction door refusal. The one fingerprint
+    in `books`'s re-import refusal is a *reference*, not content."""
+    ui.add_account(label="chk-main", number="4111111111111111")
     good = {"date": "2026-08-01", "amount": "-73.61", "description": "Whole Foods",
-            "account_number": "4111111111111111"}
+            "account": "chk-main"}
     assert ui.json("/api/transaction", good)[0] == 200
 
     probes = [
@@ -393,12 +433,12 @@ def test_no_error_text_echoes_the_account_number_or_the_amount(ui):
 
 
 def test_an_unknown_account_is_refused_on_both_doors(ui):
-    """I-23: the registry is the only enumeration. An unregistered name would
-    grow a phantom account in the canonical books that nothing iterating
-    `all_accounts()` ever reads back."""
+    """Bite 2b: an unregistered label would grow a phantom matter in the
+    canonical books that nothing iterating `accounts.instances()` ever reads
+    back."""
     status, data = ui.json("/api/transaction", {
         "date": "2026-08-01", "amount": "-1.00", "description": "x",
-        "account_number": "1", "account": "mattress"})
+        "account": "mattress"})
     assert status == 400
     status, data = ui.json("/api/transactions?account=mattress")
     assert status == 400
@@ -411,6 +451,8 @@ def test_a_handler_that_fails_answers_with_a_type_not_a_record(ui, monkeypatch):
     what broke, never an exception's text, which can carry the record it was
     handed (I-15)."""
     from homestead_ledger import balance
+
+    ui.add_account(label="chk-main")
 
     def boom(*a, **k):
         raise RuntimeError("account 4111111111111111 balance -84.23")

@@ -79,7 +79,7 @@ def test_compose_store_falls_back_to_demo_when_the_real_store_is_empty(tmp_path,
 
     assert ledger.demo is True
     assert ledger.today == view.demo.TODAY
-    assert ledger.canonical.records("checking") != []  # the seeded demo rows
+    assert ledger.canonical.records(view.demo.LABEL) != []  # the seeded demo rows
 
 
 def test_compose_store_never_seeds_the_real_root_on_fallback(tmp_path, monkeypatch):
@@ -97,28 +97,29 @@ def test_compose_store_never_seeds_the_real_root_on_fallback(tmp_path, monkeypat
     # tmpdir; point back at the real root to inspect it directly.
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
     real_adapter = SQLiteAdapter(tmp_path / "homestead-ledger.db")
-    assert real_adapter.read_matter(CANONICAL, "checking") == []
+    assert real_adapter.read_matter(CANONICAL, view.demo.LABEL) == []
 
 
-def test_compose_store_opens_the_real_store_when_it_holds_a_transaction(tmp_path, monkeypatch):
+def test_compose_store_opens_the_real_store_when_it_holds_a_transaction(tmp_path, monkeypatch, make_account):
     monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
     import os
 
     from homestead_ledger import importer
     from homestead_ledger.app import view
 
+    label = make_account("checking")
     csv_path = tmp_path / "statement.csv"
     csv_path.write_text(
         "Date,Description,Amount\n2026-08-01,Whole Foods Market,-84.23\n",
         encoding="utf-8",
     )
-    result = importer.import_csv(csv_path, account_number="9821")
+    result = importer.import_csv(csv_path, account=label)
     assert result.imported == 1
 
     ledger = view.compose_store()
 
     assert ledger.demo is False
-    assert ledger.canonical.records("checking") != []
+    assert ledger.canonical.records(label) != []
     # the real root, not a fallback tmpdir the decision quietly redirected to
     assert os.environ["HOMESTEAD_HOME"] == str(tmp_path)
 
@@ -140,20 +141,22 @@ def test_compose_store_opens_the_real_store_when_only_an_obligation_exists(tmp_p
     assert ledger.demo is False
 
 
-# ── bite 2a — one cover button per registered account kind ─────────────────
+# ── bite 2b — one cover button per registered account instance ─────────────
 
-def test_account_buttons_pairs_a_label_with_every_registered_kind():
-    from homestead_ledger import registry
+def test_account_buttons_pairs_a_button_with_every_registered_instance(tmp_path, monkeypatch, make_account):
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
     from homestead_ledger.app import view
+    from homestead_ledger.store import Sidecar
 
-    buttons = view.account_buttons()
-    assert buttons == tuple(
-        (f"Open {kind} account", kind) for kind in registry.all_accounts()
+    chk = make_account("checking", label="chk-main")
+    card = make_account("credit_card", label="visa-chase", number="4242")
+    sidecar = Sidecar()
+
+    buttons = view.account_buttons(sidecar)
+    assert buttons == (
+        (f"Open {chk} (checking)", chk),
+        (f"Open {card} (credit_card)", card),
     )
-    assert ("Open checking account", "checking") in buttons
-    assert ("Open savings account", "savings") in buttons
-    assert ("Open credit_card account", "credit_card") in buttons
-    assert ("Open loan account", "loan") in buttons
 
 
 def test_demo_banner_names_the_import_flag():
@@ -163,7 +166,7 @@ def test_demo_banner_names_the_import_flag():
     assert "demonstration" in view.DEMO_BANNER.lower()
 
 
-def test_compose_store_over_a_real_import_reflects_the_imported_rows_headless(tmp_path, monkeypatch):
+def test_compose_store_over_a_real_import_reflects_the_imported_rows_headless(tmp_path, monkeypatch, make_account):
     """The end-to-end proof piece 1 exists for: import a tiny statement, then
     show the composed window reflects the REAL rows the import produced —
     driven through `Window` the way the rest of this file drives the view,
@@ -173,6 +176,7 @@ def test_compose_store_over_a_real_import_reflects_the_imported_rows_headless(tm
     from homestead_ledger.app import view
     from homestead_ledger.app.window import Window
 
+    label = make_account("checking")
     csv_path = tmp_path / "statement.csv"
     csv_path.write_text(
         "Date,Description,Amount\n"
@@ -180,14 +184,14 @@ def test_compose_store_over_a_real_import_reflects_the_imported_rows_headless(tm
         "2026-08-03,Employer Payroll,1500.00\n",
         encoding="utf-8",
     )
-    result = importer.import_csv(csv_path, account_number="9821")
+    result = importer.import_csv(csv_path, account=label)
     assert result.imported == 2
 
     ledger = view.compose_store()
     assert ledger.demo is False
 
     window = Window()
-    window.open_list(ledger.canonical.records("checking"))
+    window.open_list(ledger.canonical.records(label))
     texts = [row.text for row in window.rows]
 
     assert any("Whole Foods Market" in t for t in texts)
