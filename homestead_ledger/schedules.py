@@ -58,7 +58,11 @@ from homestead.keep.rungs import Classified, Purpose, Rung, Surface, compose, se
 from homestead_ledger import accounts, registry
 from homestead_ledger.store import Sidecar
 
-__all__ = ["SCHEMA", "NOTICE", "DebtRow", "debts", "rows", "export"]
+__all__ = [
+    "SCHEMA", "NOTICE", "BUSINESS_NOTICE", "BUSINESS_NONE_NOTICE",
+    "BUSINESS_INCLUDED_NOTICE", "BUSINESS_SENTENCES",
+    "DebtRow", "debts", "rows", "export",
+]
 
 #: The export document's schema identifier — versioned so a future shape
 #: change does not silently reinterpret an old file.
@@ -81,6 +85,38 @@ NOTICE = (
     "it carries no form number, and the Chapter 13 plan payment is an "
     "ordinary obligation here, not a claim."
 )
+
+#: **G8-business-books: one of three sentences, and the true one.**
+#: Appended to `NOTICE` when the household actually holds a business-owned
+#: account and this export left it out.
+#:
+#: **A notice is a statement of fact, so it may not be constant.** An
+#: earlier draft appended this sentence unconditionally, to make two
+#: exports byte-identical whether or not a business account was on file —
+#: which told a household that holds no business account at all that
+#: accounts it does not have were excluded from its own schedule. The
+#: byte-identical property the plan asks for is over the **rows** (a
+#: business account changes no household row), and it still holds; the
+#: notice tells the truth about *this* export instead
+#: (`tests/test_business_books.py`).
+BUSINESS_NOTICE = "Business-owned accounts are excluded from this schedule."
+
+#: The sentence for a household with no business-owned account on file at
+#: all — in either mode, since with none on file the two modes compose the
+#: same schedule from the same rows and nothing was left out of it.
+BUSINESS_NONE_NOTICE = "No business-owned accounts are on file."
+
+#: `export(..., include_business=True)`'s own sentence, when there is in
+#: fact a business-owned account for the flag to have pulled in. Never
+#: combined with either sentence above in one document.
+BUSINESS_INCLUDED_NOTICE = (
+    "Business-owned accounts are included in this schedule at the "
+    "operator's own request (--include-business)."
+)
+
+#: Every sentence this module can append to `NOTICE` — what
+#: `tests/test_i44_no_drafting.py`'s carve-out is anchored to, by value.
+BUSINESS_SENTENCES = (BUSINESS_NOTICE, BUSINESS_NONE_NOTICE, BUSINESS_INCLUDED_NOTICE)
 
 
 @dataclass(frozen=True)
@@ -135,12 +171,21 @@ def _text(record: Classified, surface: Surface, purpose: Purpose | None) -> str 
 
 
 def _compose(
-    store: Sidecar, *, surface: Surface, purpose: Purpose | None
+    store: Sidecar, *, surface: Surface, purpose: Purpose | None,
+    include_business: bool = False,
 ) -> list[DebtRow]:
     """`debts()` and `rows()` share this — the only difference between the
-    two is which surface (and purpose) every field is served on."""
+    two is which surface (and purpose) every field is served on.
+
+    **G8-business-books.** `include_business=False` (the default) drops a
+    business-owned instance before it is ever composed — the household's
+    liability schedule excludes the business's own debts unless the caller
+    widens the scope."""
+    household = None if include_business else set(accounts.household_labels(store))
     out: list[DebtRow] = []
     for label, fields in sorted(_by_label(store).items()):
+        if household is not None and label not in household:
+            continue
         if "kind" not in fields:
             continue  # a torn write; add_account's own I-9 gate is the
             # dedup point and nothing here guesses at a missing kind
@@ -164,7 +209,7 @@ def _compose(
     return out
 
 
-def debts(store: Sidecar) -> list[DebtRow]:
+def debts(store: Sidecar, *, include_business: bool = False) -> list[DebtRow]:
     """Every liability account instance, composed for **export**: each
     field served on `Surface.S4_EGRESS` with `Purpose.EXPORT` declared, so
     `balance_as_of`/`rate`/`limit`/`min_payment` (`L4`) render as themselves
@@ -175,17 +220,24 @@ def debts(store: Sidecar) -> list[DebtRow]:
 
     Rows sorted by label. A `checking` or `savings` instance never appears
     — only a kind `registry.account(kind).liability` reads `True` for does.
+    `include_business` widens the scope to the business's own instances too
+    (G8-business-books); the default excludes them.
     """
-    return _compose(store, surface=Surface.S4_EGRESS, purpose=Purpose.EXPORT)
+    return _compose(
+        store, surface=Surface.S4_EGRESS, purpose=Purpose.EXPORT,
+        include_business=include_business,
+    )
 
 
-def rows(store: Sidecar) -> list[DebtRow]:
+def rows(store: Sidecar, *, include_business: bool = False) -> list[DebtRow]:
     """The same rows, composed for the household's own screen: each field
     served on `Surface.S1_LIST` with **no** purpose declared, so the `L4`
     fields **derive** — `"a balance is on file"`, never the number. What
     `schedules show` and `GET /api/schedules` draw from; only `export()`
     ever renders them."""
-    return _compose(store, surface=Surface.S1_LIST, purpose=None)
+    return _compose(
+        store, surface=Surface.S1_LIST, purpose=None, include_business=include_business,
+    )
 
 
 def _row_dict(row: DebtRow) -> dict[str, str]:
@@ -213,13 +265,35 @@ def _row_dict(row: DebtRow) -> dict[str, str]:
     return out
 
 
-def _document(store: Sidecar) -> tuple[dict[str, object], list[DebtRow]]:
-    """The composed export document, and the rows it was built from (needed
-    afterward to compose the whole document's own rung) — one call to
-    `debts()`, never two, so the `composed_at` timestamp in the document and
-    the rows behind it can never come from two different reads of the
-    store."""
-    debt_rows = debts(store)
+def _document(
+    store: Sidecar, *, include_business: bool = False,
+) -> tuple[dict[str, object], list[DebtRow], str]:
+    """The composed export document, the rows it was built from (needed
+    afterward to compose the whole document's own rung), and the full
+    `NOTICE` text used — one call to `debts()`, never two, so the
+    `composed_at` timestamp in the document and the rows behind it can
+    never come from two different reads of the store.
+
+    **G8-business-books: the byte-identical export, and a true notice.**
+    The *rows* depend only on `include_business`: adding a business-owned
+    account changes no household row, so the same household exported twice
+    in the default mode — once with no business account on file and once
+    with one — composes the identical row list, which is the byte-identical
+    property the plan asks for (`tests/test_business_books.py`). The
+    appended **sentence** is a statement of fact about this export, so it
+    is not constant: with no business account on file there is nothing to
+    have excluded (`BUSINESS_NONE_NOTICE`), with one on file and the
+    default scope there is (`BUSINESS_NOTICE`), and with one on file and
+    the scope widened it is in the rows (`BUSINESS_INCLUDED_NOTICE`).
+    """
+    if not accounts.business_labels(store):
+        sentence = BUSINESS_NONE_NOTICE
+    elif include_business:
+        sentence = BUSINESS_INCLUDED_NOTICE
+    else:
+        sentence = BUSINESS_NOTICE
+    full_notice = f"{NOTICE} {sentence}"
+    debt_rows = debts(store, include_business=include_business)
     document = {
         "schema": SCHEMA,
         # Microseconds, not seconds: two exports of an unchanged schedule in
@@ -227,9 +301,9 @@ def _document(store: Sidecar) -> tuple[dict[str, object], list[DebtRow]]:
         "composed_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "rows": [_row_dict(row) for row in debt_rows],
         "count": len(debt_rows),
-        "NOTICE": NOTICE,
+        "NOTICE": full_notice,
     }
-    return document, debt_rows
+    return document, debt_rows, full_notice
 
 
 def export(
@@ -238,6 +312,7 @@ def export(
     confirm: Callable[[Wire], bool],
     purpose: Purpose = Purpose.EXPORT,
     out_dir: Path | None = None,
+    include_business: bool = False,
 ) -> ExportReceipt:
     """Compose the household's liability schedule and take it out, through
     the engine's own export machinery — never reimplemented here.
@@ -297,7 +372,7 @@ def export(
             "relative and would mean a different place from every working "
             "directory. Nothing was composed and nothing was ledgered."
         )
-    document, debt_rows = _document(store)
+    document, debt_rows, full_notice = _document(store, include_business=include_business)
     body = json.dumps(document, sort_keys=True, ensure_ascii=False)
     wire = Wire(method="FILE", url="schedules/debts", body=body)
     if not confirm(wire):
@@ -306,7 +381,7 @@ def export(
             "ledgered — the same posture a refused network send takes."
         )
     rung = compose(*(row.rung for row in debt_rows)) if debt_rows else Rung.L2
-    item = Classified(rung, document, NOTICE)
+    item = Classified(rung, document, full_notice)
     try:
         return export_record(
             item, "schedules", "debts", "export", purpose=purpose, exports=out_dir,

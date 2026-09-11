@@ -1347,3 +1347,104 @@ def test_post_sync_preview_refuses_an_unknown_item_type_by_name(ui):
     })
     assert status == 400 and data["ok"] is False
     assert "unknown item type" in data["error"]
+
+
+# ── G8-business-books at the browser door (auditor's pins) ─────────────────
+
+
+_PLANTED_NUMBER = "60056789"
+_PLANTED_TOTAL = "918273.64"
+
+
+def test_api_grant_report_masks_every_total_and_carries_no_number(ui):
+    """Counts cross; figures do not. The report's own door is `S1_LIST`:
+    a total reads "a total is on file", and the restricted account's L5
+    number is nowhere in the response (I-43)."""
+    ui.add_account(label="grant-main", kind="checking", number=_PLANTED_NUMBER)
+
+    from homestead_ledger import accounts, overlay
+    from homestead_ledger.store import Sidecar
+
+    sidecar = Sidecar()
+    accounts.set_restricted(sidecar, "grant-main")
+    overlay.set_allowable_uses(sidecar, "grant-main", ["software"])
+    fp = _post_transaction(ui, "grant-main", date="2026-01-05",
+                           amount=f"-{_PLANTED_TOTAL}", description="Vendor Invoice")
+    status, data = ui.json("/api/transaction/tag", {"fingerprint": fp, "use": "software"})
+    assert status == 200 and data["ok"] is True
+
+    status, body = ui.get("/api/grant/report?label=grant-main&period=2026-01..2026-01")
+    assert status == 200
+    text = body.decode()
+    assert _PLANTED_TOTAL not in text
+    assert _PLANTED_NUMBER not in text
+    assert "Vendor Invoice" not in text
+    payload = json.loads(text)
+    assert payload["rows"] == [
+        {"use": "software", "count": 1, "total": "a total is on file"}
+    ]
+    assert payload["needs_use"] == 0
+
+
+def test_api_grant_report_refuses_a_missing_label_or_period_by_name(ui):
+    status, data = ui.json("/api/grant/report")
+    assert data["error"] and "period" in data["error"]
+    status, data = ui.json("/api/grant/report?label=nope&period=2026-01..2026-01")
+    assert status == 400 and "nope" in data["error"]
+
+
+def test_there_is_no_grant_report_export_door_on_the_server(ui):
+    """An export is a terminal act, confirmed at the terminal — the same
+    posture `schedules export` takes. Neither verb finds a door here."""
+    assert ui.get("/api/grant/report/export")[0] == 404
+    status, _data = ui.json_raw("POST", "/api/grant/report/export", "{}")
+    assert status == 404
+
+
+def test_api_subscriptions_excludes_a_business_account_until_the_flag_is_passed(ui):
+    """The recurring pass at the browser door: a business account's own
+    monthly charge is not one of the household's subscriptions unless the
+    caller asks for it, per call."""
+    from homestead_ledger import accounts
+    from homestead_ledger.store import Sidecar
+
+    ui.add_account(label="chk-main", kind="checking", number="1111")
+    ui.add_account(label="biz-chk", kind="checking", number="2222")
+    accounts.set_owner(Sidecar(), "biz-chk", "business")
+    for month in ("06", "07", "08"):
+        _post_transaction(ui, "chk-main", date=f"2026-{month}-01",
+                          amount="-15.99", description="Netflix")
+        _post_transaction(ui, "biz-chk", date=f"2026-{month}-03",
+                          amount="-9.99", description="Cloudy Compute")
+
+    status, data = ui.json("/api/subscriptions")
+    assert status == 200
+    assert {s["merchant"] for s in data["subscriptions"]} == {"netflix"}
+
+    status, data = ui.json("/api/subscriptions?include_business=true")
+    assert status == 200
+    assert {s["merchant"] for s in data["subscriptions"]} == {"netflix", "cloudy compute"}
+
+    # and the widening does not stick: the next default call is narrow again
+    status, data = ui.json("/api/subscriptions")
+    assert {s["merchant"] for s in data["subscriptions"]} == {"netflix"}
+
+
+def test_api_budget_and_schedules_take_the_same_per_call_flag(ui):
+    from homestead_ledger import accounts
+    from homestead_ledger.store import Sidecar
+
+    ui.add_account(label="biz-card", kind="credit_card", number="2222")
+    accounts.set_owner(Sidecar(), "biz-card", "business")
+    _post_transaction(ui, "biz-card", date="2026-01-05", amount="-50.00", description="AWS")
+
+    status, data = ui.json("/api/schedules")
+    assert status == 200 and data["rows"] == []
+    status, data = ui.json("/api/schedules?include_business=true")
+    assert status == 200 and [r["label"] for r in data["rows"]] == ["biz-card"]
+
+    status, data = ui.json("/api/budget?month=2026-01")
+    assert status == 200 and data["uncategorised"] == 0
+    assert data["needs_use"] == 0 and data["commingling"] == 0
+    status, data = ui.json("/api/budget?month=2026-01&include_business=true")
+    assert status == 200 and data["uncategorised"] == 1

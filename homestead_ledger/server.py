@@ -899,8 +899,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
     from homestead.keep.store import InvalidKey, RecordExists
 
     from homestead_ledger import (
-        accounts, balance, books, budget, money, nestor_seam, obligations, overlay,
-        registry, schedules, sync, transfers,
+        accounts, balance, books, budget, grant_report, money, nestor_seam,
+        obligations, overlay, registry, schedules, sync, transfers,
     )
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
@@ -1062,13 +1062,15 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
             if p.path == "/api/queue":
                 return self._get_queue()
             if p.path == "/api/schedules":
-                return self._get_schedules()
+                return self._get_schedules(qs)
             if p.path == "/api/resolve":
                 return self._get_resolve(qs)
             if p.path == "/api/subscriptions":
-                return self._get_subscriptions()
+                return self._get_subscriptions(qs)
             if p.path == "/api/budget":
                 return self._get_budget(qs)
+            if p.path == "/api/grant/report":
+                return self._get_grant_report(qs)
             if p.path == "/api/transaction/transfers/suggest":
                 return self._get_transfer_suggestions()
             if p.path == "/api/sync/matters":
@@ -1085,19 +1087,22 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                 for i in items
             ]})
 
-        def _get_schedules(self):
+        def _get_schedules(self, qs):
             # S1_LIST semantics (`schedules.rows`): the amount fields derive
             # here — "a balance is on file" — never the number, and never
             # the rendered value either; only the terminal export
             # (`schedules export`, an operator act) renders those. There is
             # deliberately no POST door here: an export is confirmed at the
-            # terminal, not from the browser.
+            # terminal, not from the browser. `include_business` (G8-
+            # business-books) widens the scope the same way the CLI's own
+            # `--include-business` does; the default excludes it.
+            include_business = qs.get("include_business") == "true"
             self._json({"rows": [
                 {"label": r.label, "kind": r.kind, "institution": r.institution,
                  "opened": r.opened, "balance_as_of": r.balance_as_of,
                  "rate": r.rate, "limit": r.limit, "min_payment": r.min_payment,
                  "rung": r.rung.value}
-                for r in schedules.rows(sidecar)
+                for r in schedules.rows(sidecar, include_business=include_business)
             ]})
 
         def _get_obligations(self):
@@ -1147,7 +1152,9 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                     "item_id": r.ref[2], "field": r.ref[1], "rung": r.rung.value,
                     "text": r.text, "category": tags.get("category"),
                     "note": tags.get("note"), "do_not_use": r.ref[2] in excluded,
+                    "use": tags.get("use"),
                     "transfer_to": transfers.other_label(sidecar, r.ref[2]),
+                    "commingling": transfers.is_commingled(sidecar, r.ref[2]),
                 })
             self._json({"rows": out_rows})
 
@@ -1165,7 +1172,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
             except Exception as exc:
                 self._json({"error": str(exc)}, 500)
 
-        def _get_subscriptions(self):
+        def _get_subscriptions(self, qs):
             # The recurring pass over the real books — the household's own
             # numbers, reflected. The detector is a pure function over plain
             # tuples; every exclusion happens **here, at the caller**, and
@@ -1180,13 +1187,18 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
             # honest filter once both bites are on main — it had to match
             # paired rows by *content* while no id reached this seam, and
             # counting identical tuples is what it did instead.
+            #
+            # G8-business-books: `include_business` widens the scope from
+            # `accounts.household_labels` (the default) to every instance.
             today = dt.date.today()
+            include_business = qs.get("include_business") == "true"
             excluded = (
                 overlay.excluded_fingerprints(sidecar)
                 | transfers.paired_fingerprints(sidecar)
             )
+            labels = accounts.instances(sidecar) if include_business else accounts.household_labels(sidecar)
             found = []
-            for label in accounts.instances(sidecar):
+            for label in labels:
                 txns = [
                     (txn_date, amount, description)
                     for item_id, txn_date, amount, description
@@ -1205,10 +1217,16 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
             # Bite G4-budget: every category's spend-versus-limit state for
             # one month, served through `budget.envelopes` — derived states
             # only (I-8/I-15). A bad month is refused by name, never
-            # defaulted to "today" behind the caller's back.
+            # defaulted to "today" behind the caller's back. G8-business-
+            # books: `include_business` widens the scope; `needs_use` and
+            # `commingling` ride alongside the existing gap counts, both by
+            # count only, never an amount.
             month = qs.get("month", "")
+            include_business = qs.get("include_business") == "true"
             try:
-                rows, gaps = budget.envelopes(canonical, sidecar, month)
+                rows, gaps = budget.envelopes(
+                    canonical, sidecar, month, include_business=include_business,
+                )
             except ValueError as exc:
                 return self._json({"error": str(exc)}, 400)
             self._json({
@@ -1221,7 +1239,27 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                 ],
                 "uncategorised": gaps.uncategorised,
                 "undated": gaps.undated,
+                "needs_use": gaps.needs_use,
+                "commingling": gaps.commingling,
             })
+
+        def _get_grant_report(self, qs):
+            # G8-business-books: counts only, and a total that never leaves
+            # as a figure ("a total is on file") — S1_LIST. There is no
+            # export door here; `grant report` at the terminal is the only
+            # way a real total crosses (S4_EGRESS, Purpose.EXPORT).
+            label = qs.get("label", "")
+            period = qs.get("period", "")
+            if not label or ".." not in period:
+                return self._json(
+                    {"error": "label and period=YYYY-MM..YYYY-MM are required"}, 400,
+                )
+            start, _sep, end = period.partition("..")
+            try:
+                rows, needs_use = grant_report.list_rows(canonical, sidecar, label, start, end)
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
+            self._json({"label": label, "period": period, "rows": rows, "needs_use": needs_use})
 
         def _get_transfer_suggestions(self):
             # References only: two fingerprints and whether the match is the
@@ -1349,6 +1387,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
             # JSON `true` and nothing else — see `_post_obligation`'s own
             # comment on why (I-9).
             replace = body.get("replace") is True
+            restricted = body.get("restricted") is True
 
             def optional(name: str) -> str | None:
                 value = self._field(body, name).strip()
@@ -1367,6 +1406,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                     limit=optional("limit"),
                     payment_due_day=optional("payment_due_day"),
                     min_payment=optional("min_payment"),
+                    owner=optional("owner"),
+                    restricted=restricted,
                     replace=replace,
                 )
             except (ValueError, UnparseableDate, InvalidKey, RecordExists) as exc:
@@ -1457,6 +1498,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385, clock=None):
                     note=optional("note"),
                     confirmed_merchant=optional("merchant"),
                     do_not_use=do_not_use,
+                    use=optional("use"),
                     replace=replace,
                 )
             except RecordExists as exc:
