@@ -42,16 +42,23 @@ usage: python -m homestead_ledger [--help] [--smoke | --demo]
   (default)    open the tkinter view on the cover — requires tkinter and a
                display; falls back to a guidance message if neither is present
 
-commands (real data, requires nestor-meaning):
+commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
+  obligation   obligation add <id> <payee> <amount> <due-date> <cadence> [--replace]
+               obligation list · obligation show <id>
+  transaction  transaction add <date> <amount> <description> --account-number N
+               transaction list [--account NAME]
+  queue        queue — what's due
+  ui           ui [--port N] — entry forms, intake, queue and subscriptions in the browser
+
+commands that need the `entity` extra (pip install 'homestead-ledger[entity]'):
   resolve      resolve <surface> — merchant entity resolution
   reconcile    reconcile <baseline> <observed> — compare amounts
-  put          put <field> <value> — store a ledger field
-  queue        queue — show what's due
   verify       verify — check ledger chain integrity
-  ui           ui [--port N] — intake UI in the browser
 """
 
-_CLI_COMMANDS = {"resolve", "reconcile", "put", "queue", "verify", "ui"}
+_CLI_COMMANDS = {
+    "obligation", "transaction", "resolve", "reconcile", "put", "queue", "verify", "ui",
+}
 
 
 def main(argv: list[str] | None = None) -> int:
