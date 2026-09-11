@@ -35,9 +35,9 @@ partial row moving.
 
 **Bite 2a — `kind`, and a debit/credit header on a liability account.**
 `import_csv` gains `kind` (the registered account kind a statement's rows
-classify against — `books.Transaction.kind`, passed straight through with
-`dataclasses.replace` after a row parses, so the parsers above are untouched
-by this) and `liability_columns`. A bank's own "Debit"/"Credit" column
+classify against — `books.Transaction.kind`, handed to the row parsers so a
+`Transaction` is never built with a kind it does not mean, not even for the
+line between parsing and a later correction) and `liability_columns`. A bank's own "Debit"/"Credit" column
 headers do not say which direction is a charge and which is a payment on a
 *liability* account the way they unambiguously do on an asset one (see
 `packs/credit_card.py`'s docstring) — so a debit/credit-shaped statement for
@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import csv
 import sys
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable
@@ -167,7 +167,8 @@ def _cell(row: dict[str, str], hmap: dict[str, str], name: str) -> str:
 
 
 def _parse_single_amount_row(
-    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str
+    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str,
+    kind: str,
 ) -> books.Transaction:
     date = _cell(row, hmap, "date").strip()
     if not date:
@@ -175,13 +176,14 @@ def _parse_single_amount_row(
     description = _cell(row, hmap, "description").strip()
     amount = _single_amount(_cell(row, hmap, "amount"))
     return books.Transaction(
-        account=account, date=date, amount=amount, description=description,
-        account_number=account_number,
+        account=account, kind=kind, date=date, amount=amount,
+        description=description, account_number=account_number,
     )
 
 
 def _parse_debit_credit_row(
-    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str
+    row: dict[str, str], hmap: dict[str, str], *, account: str, account_number: str,
+    kind: str,
 ) -> books.Transaction:
     date = _cell(row, hmap, "date").strip()
     if not date:
@@ -189,8 +191,8 @@ def _parse_debit_credit_row(
     description = _cell(row, hmap, "description").strip()
     amount = _debit_credit_amount(_cell(row, hmap, "debit"), _cell(row, hmap, "credit"))
     return books.Transaction(
-        account=account, date=date, amount=amount, description=description,
-        account_number=account_number,
+        account=account, kind=kind, date=date, amount=amount,
+        description=description, account_number=account_number,
     )
 
 
@@ -306,8 +308,9 @@ def import_csv(
 
         for line_no, row in enumerate(reader, start=2):  # header is line 1
             try:
-                txn = parser(row, hmap, account=account, account_number=account_number)
-                txn = replace(txn, kind=kind)
+                txn = parser(
+                    row, hmap, account=account, account_number=account_number, kind=kind,
+                )
             except ValueError as exc:
                 errors += 1
                 message = f"{path.name}:{line_no}: {exc}"

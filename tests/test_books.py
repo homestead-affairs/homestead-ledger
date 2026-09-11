@@ -188,6 +188,64 @@ def test_an_unregistered_kind_is_refused_by_name(tmp_path, monkeypatch):
     assert Canonical().records("brokerage") == []
 
 
+def _transaction_calls_missing_kind(tree) -> list[int]:
+    """Line numbers of every `Transaction(...)` construction in `tree` that
+    does not pass `kind=` explicitly."""
+    import ast
+
+    missing = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name != "Transaction":
+            continue
+        if not any(kw.arg == "kind" for kw in node.keywords):
+            missing.append(node.lineno)
+    return missing
+
+
+def test_every_transaction_in_the_package_says_which_kind_it_is():
+    """`Transaction.kind` defaults to `checking` so bite 1's callers keep
+    working — which means a caller that forgets it does not fail, it
+    classifies a card's or a loan's fields against the *checking* pack and
+    writes "a debit is on file" over a charge. Nothing silent about it is
+    visible at the call site, so the call sites are held here: every
+    `Transaction(...)` built inside the package names its kind."""
+    import ast
+    from pathlib import Path
+
+    pkg = Path(__file__).resolve().parent.parent / "homestead_ledger"
+    offenders = []
+    for mod in sorted(pkg.rglob("*.py")):
+        if "__pycache__" in mod.parts:
+            continue
+        for lineno in _transaction_calls_missing_kind(ast.parse(mod.read_text("utf-8"))):
+            offenders.append(f"{mod.relative_to(pkg.parent)}:{lineno}")
+    assert not offenders, (
+        f"a Transaction is built without naming its kind at {offenders} — it "
+        "would be classified against the checking pack whatever account it "
+        "is filed under."
+    )
+
+
+def test_the_kind_scan_catches_a_planted_call_without_it():
+    """A scan that has never fired has not been shown to check anything."""
+    import ast
+
+    planted = ast.parse(
+        "books.Transaction(account='credit_card', date='2026-08-01', "
+        "amount='-42.00', description='x', account_number='1')\n"
+    )
+    assert _transaction_calls_missing_kind(planted) == [1]
+    clean = ast.parse(
+        "books.Transaction(account='credit_card', kind='credit_card', "
+        "date='2026-08-01', amount='-42.00', description='x', account_number='1')\n"
+    )
+    assert _transaction_calls_missing_kind(clean) == []
+
+
 def test_import_transaction_bypasses_canonical_and_sidecar_deliberately(tmp_path, monkeypatch):
     """books.py does not — cannot — call `Canonical.put` (it does not exist)
     or `Sidecar.put` (that would land a transaction in the household's
