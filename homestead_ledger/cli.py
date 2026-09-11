@@ -6,6 +6,7 @@ The household's own commands need only the engine:
   obligation   — add / list / show / paid a recurring obligation (rent, insurance…)
   transaction  — add one transaction to the books, or list the account
   queue        — what's due (obligation due dates)
+  schedules    — the household's liability schedule: show it, or export it
   ui           — the browser UI: entry forms, intake, queue, subscriptions
 
 The Nestor-backed commands need the optional ``entity`` extra and say so in
@@ -628,6 +629,95 @@ def _cmd_queue(argv: list[str]) -> int:
     return 0
 
 
+_SCHEDULES_USAGE = """\
+usage: homestead-ledger schedules show
+       homestead-ledger schedules export [--out DIR]
+  e.g.: homestead-ledger schedules export
+  `show` lists every liability account instance (credit cards, loans) on
+  file — the amount fields as "a balance is on file", never the number.
+  `export` composes the same schedule into a JSON file — the amounts
+  themselves, never the number — after showing exactly what will be
+  written and asking for confirmation. --out DIR writes there instead of
+  the default exports directory; DIR must be an absolute path under
+  the household root (copy the file out from there yourself).
+"""
+
+
+def _cmd_schedules(argv: list[str]) -> int:
+    """schedules <show|export> — the household's liability schedule."""
+    from homestead.keep.export import ExportRefused
+
+    from homestead_ledger import schedules
+    from homestead_ledger.store import Sidecar
+
+    args = argv[1:]
+    if not args:
+        print(_SCHEDULES_USAGE, end="", file=sys.stderr)
+        return 2
+    sub, rest = args[0], args[1:]
+    _boot()
+    sidecar = Sidecar()
+
+    if sub == "show":
+        found = schedules.rows(sidecar)
+        if not found:
+            print(
+                "  no liability accounts on file — `homestead-ledger account "
+                "add <label> --kind credit_card --number <number>` (or "
+                "--kind loan)"
+            )
+            return 0
+        print(f"  {len(found)} liability account(s):")
+        for row in found:
+            institution = row.institution or "(not on file)"
+            balance = row.balance_as_of or "(not on file)"
+            print(
+                f"  [{row.rung.value}]  {row.label} ({row.kind}): "
+                f"{institution}  ·  {balance}"
+            )
+        return 0
+
+    if sub == "export":
+        from pathlib import Path
+
+        rest, out = _flag(rest, "--out")
+        if rest:
+            # `export` takes no positional argument, so anything left after
+            # `--out` was consumed is a typo — including `--out` itself with
+            # no value after it, which `_flag` leaves in `rest`. The same
+            # reasoning `_stray_flags` states for `transaction add`: a flag
+            # that looks honoured and is not. Here it would quietly export
+            # to the default directory instead of the one that was asked
+            # for, which is a file in the wrong place and a ledger row
+            # saying an export happened.
+            print(f"  refused: unexpected argument(s) {rest}", file=sys.stderr)
+            print(_SCHEDULES_USAGE, end="", file=sys.stderr)
+            return 2
+        out_dir = Path(out) if out else None
+
+        def confirm(wire) -> bool:
+            print("  about to export the household's liability schedule:")
+            print(f"  {wire.method} {wire.url}")
+            print("  " + "-" * 60)
+            print(wire.body)
+            print("  " + "-" * 60)
+            answer = input("  write this file? [y/N] ").strip().lower()
+            return answer in ("y", "yes")
+
+        try:
+            receipt = schedules.export(sidecar, confirm=confirm, out_dir=out_dir)
+        except ExportRefused as exc:
+            print(f"  refused: {exc}", file=sys.stderr)
+            return 1
+        print(f"  exported: {receipt.artifact}")
+        print(f"  {receipt.ref}  [{receipt.rung.value}]  {receipt.disposition.value}")
+        print(f"  ledger head: {receipt.head}")
+        return 0
+
+    print(f"unknown subcommand {sub!r} — one of: show, export", file=sys.stderr)
+    return 2
+
+
 def _cmd_verify(argv: list[str]) -> int:
     """verify — check the Nestor ledger chain."""
     if not _needs_nestor():
@@ -664,6 +754,7 @@ COMMANDS: dict[str, tuple] = {
     "reconcile":   (_cmd_reconcile,   "reconcile <baseline> <observed> — compare amounts"),
     "put":         (_cmd_put,         "put — retired; use obligation add / transaction add"),
     "queue":       (_cmd_queue,       "queue — show what's due"),
+    "schedules": (_cmd_schedules, "schedules <show|export> — the liability schedule"),
     "verify":    (_cmd_verify,    "verify — check ledger chain integrity"),
     "ui":        (_cmd_ui,        "ui [--port N] — intake UI in the browser"),
 }

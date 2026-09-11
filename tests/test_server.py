@@ -958,3 +958,56 @@ def test_tagging_by_the_twelve_characters_the_list_shows(ui):
     status, data = ui.json("/api/transactions?account=chk-main")
     by_id = {r["item_id"]: r for r in data["rows"] if r["field"] == "date"}
     assert by_id[fp]["category"] == "groceries"
+
+
+def test_api_schedules_mirrors_rows_exactly_and_derives_the_amounts(ui):
+    """The browser door is `schedules.rows()` and nothing else: every field
+    of a `DebtRow` appears, the `L4` amounts as their derived stand-in
+    (S1_LIST, no purpose — only the terminal export renders them), and the
+    account number nowhere. Asserted against the dataclass's own fields, so
+    a field added to the composition and forgotten here fails rather than
+    silently dropping out of the pane."""
+    from homestead_ledger import schedules
+
+    ui.add_account(label="chk-main", kind="checking", number="1111")
+    ui.add_account(label="visa-chase", kind="credit_card", number="4242-PLANTED",
+                   institution="Chase", opened="2019-03-01",
+                   balance_as_of="1200.00", rate="19.99", limit="5000.00",
+                   min_payment="35.00")
+
+    status, data = ui.json("/api/schedules")
+    assert status == 200
+    (row,) = data["rows"]                         # checking is not a liability
+    assert set(row) == set(schedules.DebtRow.__dataclass_fields__)
+    assert row["label"] == "visa-chase"
+    assert row["institution"] == "Chase"
+    assert row["opened"] == "2019-03-01"
+    assert row["balance_as_of"] == "a balance is on file"
+    assert row["min_payment"] == "a minimum payment is on file"
+    assert row["rung"] == "L4"
+    assert "4242-PLANTED" not in json.dumps(data)
+    assert "1200.00" not in json.dumps(data)
+
+
+def test_there_is_no_export_door_on_the_server(ui):
+    """An export is an operator act at the terminal, confirmed there. The
+    browser has a read door and no write one — neither a GET nor a POST
+    reaches an export, and `_route_post` names no schedules path at all, so
+    a door cannot be added without this failing."""
+    import inspect
+
+    for path in ("/api/schedules/export", "/api/schedule/export"):
+        status, _ = ui.get(path)
+        assert status == 404, path
+        conn = http.client.HTTPConnection(ui.host, ui.port, timeout=5)
+        conn.request("POST", path, body="{}",
+                     headers={"Content-Type": "application/json"})
+        assert conn.getresponse().status == 404, path
+        conn.close()
+
+    status, _ = ui.get("/api/schedules")
+    assert status == 200                                  # the read door is there
+
+    source = inspect.getsource(server.build_server)
+    post_block = source.split("def _route_post")[1].split("def _field")[0]
+    assert "schedule" not in post_block
