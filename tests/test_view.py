@@ -40,19 +40,54 @@ def test_run_is_callable_and_takes_no_arguments():
     assert list(inspect.signature(view.run).parameters) == []
 
 
+def _module_scope_banned_imports(tree: ast.Module, banned: frozenset[str]) -> list[str]:
+    """Every name in `banned` imported at the module's own top level --
+    walking only `tree.body` (never nested statements) on purpose, since a
+    lazy import inside a function body is exactly the shape `view.py`'s
+    `run()` relies on and must not trip this guard."""
+    hits: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            hits.extend(
+                top for alias in node.names
+                if (top := alias.name.split(".")[0]) in banned
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            top = node.module.split(".")[0]
+            if top in banned:
+                hits.append(top)
+    return hits
+
+
 def test_no_tkinter_import_at_module_scope_by_source_inspection():
     """A structural double-check alongside the poisoned-import test above:
     `import tkinter` (or `from tkinter import ...`) may only appear nested
-    inside a function body, never at the module's own top level."""
-    tree = ast.parse(VIEW.read_text("utf-8"))
-    for node in tree.body:  # only the module's direct top-level statements
-        if isinstance(node, ast.Import):
-            names = {alias.name for alias in node.names}
-            assert "tkinter" not in names, "tkinter imported at module scope"
-        if isinstance(node, ast.ImportFrom) and node.module:
-            assert not node.module.startswith("tkinter"), (
-                "tkinter imported at module scope"
-            )
+    inside a function body, never at the module's own top level.
+
+    2026-09-11: factored the walk into `_module_scope_banned_imports`,
+    planted below (G9d-inline-scans, "Inline scans the meta-scan cannot
+    see" -- this was one of the two named examples)."""
+    hits = _module_scope_banned_imports(ast.parse(VIEW.read_text("utf-8")), frozenset({"tkinter"}))
+    assert hits == [], f"tkinter imported at module scope: {hits}"
+
+
+def test_the_module_scope_import_guard_fires_on_a_planted_tkinter_import(tmp_path):
+    """Planted: a module that promotes `import tkinter` to its own top
+    level -- the regression this structural check exists to catch if
+    `view.py` ever drifts that way -- and the negative: a lazy import
+    nested inside a function is not a violation."""
+    promoted = tmp_path / "planted_view.py"
+    promoted.write_text("import tkinter\n\n\ndef run():\n    pass\n", encoding="utf-8")
+    hits = _module_scope_banned_imports(
+        ast.parse(promoted.read_text("utf-8")), frozenset({"tkinter"})
+    )
+    assert hits == ["tkinter"]
+
+    lazy = tmp_path / "planted_lazy_view.py"
+    lazy.write_text("def run():\n    import tkinter\n", encoding="utf-8")
+    assert _module_scope_banned_imports(
+        ast.parse(lazy.read_text("utf-8")), frozenset({"tkinter"})
+    ) == []
 
 
 # ── bite 4, piece 1 — real store vs. demo fallback (`compose_store`) ───────

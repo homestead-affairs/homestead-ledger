@@ -30,6 +30,8 @@ from homestead_ledger.books import Transaction, import_transaction
 from homestead_ledger.packs import budget as pack
 from homestead_ledger.store import Canonical, Sidecar
 
+from tests._scans import terms_found
+
 PKG = Path(__file__).resolve().parent.parent / "homestead_ledger"
 LABEL = "chk-b"
 
@@ -167,7 +169,18 @@ def test_the_visible_log_never_carries_the_amount(store):
         assert line["event"] == Event.RECORD_ADDED.value
         assert line["ref"] == f"{budget.MATTER}/groceries.2026-09"
         blob = json.dumps(line)
-        assert "12345" not in blob and "76543" not in blob
+        assert terms_found(blob, ("12345", "76543")) == []
+
+
+def test_terms_found_catches_a_planted_leak():
+    """Planted: `tests/_scans.py::terms_found` is the shared I-15 grep half
+    every "log/document never carries X" test in this suite calls (15 of
+    them, across 8 modules, as of G9d-inline-scans) — proven once here
+    rather than re-derived at every call site."""
+    from tests._scans import terms_found as tf
+
+    assert tf("a line naming the fingerprint 12345", ("12345", "76543")) == ["12345"]
+    assert tf("a clean line naming only a reference", ("12345", "76543")) == []
 
 
 # ── envelopes: within / over / no-limit / no-spend, on a planted month ────
@@ -317,14 +330,18 @@ def test_chokepoint_scan_is_clean_on_the_budget_module():
     """`budget.py`/`packs/budget.py` reach no `.payload` and name no
     `CANONICAL` — the I-16/"mirror, not judge" guard, run directly against
     this bite's own files rather than only inferred from
-    `tests/test_invariants_chokepoint.py` staying green."""
+    `tests/test_invariants_chokepoint.py` staying green.
+
+    2026-09-11: this used to re-walk the AST here; it now calls
+    `test_invariants_chokepoint`'s own `_payload_reaches`/`_canonical_reaches`
+    — the one place that scan is owned and planted (G9d-inline-scans,
+    "Duplicated chokepoint scans")."""
+    from tests import test_invariants_chokepoint as chk
+
     for relative in ("budget.py", "packs/budget.py"):
         tree = ast.parse((PKG / relative).read_text("utf-8"))
-        payload_hits = [n.lineno for n in ast.walk(tree)
-                        if isinstance(n, ast.Attribute) and n.attr == "payload"]
-        canonical_hits = [n.lineno for n in ast.walk(tree)
-                          if (isinstance(n, ast.Name) and n.id == "CANONICAL")
-                          or (isinstance(n, ast.Attribute) and n.attr == "CANONICAL")]
+        payload_hits = chk._payload_reaches(tree)
+        canonical_hits = chk._canonical_reaches(tree)
         assert not payload_hits, f"{relative} reaches .payload at {payload_hits}"
         assert not canonical_hits, f"{relative} names CANONICAL at {canonical_hits}"
 

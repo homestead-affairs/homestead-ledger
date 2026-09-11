@@ -55,14 +55,33 @@ def test_no_network_import(mod: Path):
     assert not hits, f"{mod.name} imports network module(s): {sorted(hits)}"
 
 
+def _dynamic_exec_calls(tree: ast.Module) -> list[str]:
+    """Every bare call to a name in `DYNAMIC` -- `eval`/`exec`/`compile`/
+    `__import__` -- that could smuggle a network import past the plain
+    `import` scan above."""
+    return [
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id in DYNAMIC
+    ]
+
+
 @pytest.mark.parametrize("mod", _modules(), ids=lambda p: p.name)
 def test_no_dynamic_exec(mod: Path):
-    bad: list[str] = []
-    for node in ast.walk(ast.parse(mod.read_text(encoding="utf-8"))):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id in DYNAMIC):
-            bad.append(node.func.id)
+    """2026-09-11: factored the walk into `_dynamic_exec_calls`, planted
+    below (G9d-inline-scans, "Inline scans the meta-scan cannot see")."""
+    bad = _dynamic_exec_calls(ast.parse(mod.read_text(encoding="utf-8")))
     assert not bad, f"{mod.name} uses dynamic exec/import: {sorted(set(bad))}"
+
+
+def test_the_dynamic_exec_scan_fires_on_a_planted_eval(tmp_path):
+    """Planted: a module reaching for `eval` -- exactly the shortcut past
+    the plain-import scan a smuggled network call would take."""
+    planted = tmp_path / "planted_egress.py"
+    planted.write_text("def draw(expr):\n    return eval(expr)\n", encoding="utf-8")
+    hits = _dynamic_exec_calls(ast.parse(planted.read_text("utf-8")))
+    assert hits == ["eval"]
 
 
 # ── the scan, fired against a planted leak ─────────────────────────────────

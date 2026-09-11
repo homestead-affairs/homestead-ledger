@@ -224,13 +224,17 @@ def test_the_aggregate_is_always_its_own_distribution_summed(tmp_path, monkeypat
 def test_queue_module_reaches_no_payload():
     """The queue works over what `serve()` already gated; it never reads a
     `.payload` — pinned here for the module that is most tempted to reach for
-    a due date directly. Held package-wide by test_invariants_chokepoint too."""
+    a due date directly. Held package-wide by test_invariants_chokepoint too.
+
+    2026-09-11: this used to re-walk the AST itself; it now calls
+    `test_invariants_chokepoint`'s own `_payload_reaches`, the one place that
+    scan is owned and planted (G9d-inline-scans, "Duplicated chokepoint
+    scans")."""
     import ast
     from pathlib import Path
 
+    from tests import test_invariants_chokepoint as chk
+
     src = Path(queue_mod.__file__).read_text("utf-8")
-    reaches = [
-        n.lineno for n in ast.walk(ast.parse(src))
-        if isinstance(n, ast.Attribute) and n.attr == "payload"
-    ]
+    reaches = chk._payload_reaches(ast.parse(src))
     assert not reaches, f"queue.py reaches a payload at {reaches}"

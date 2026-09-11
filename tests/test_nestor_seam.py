@@ -77,15 +77,18 @@ def test_nestor_seam_imports_no_nestor_at_module_load():
     """`import homestead_ledger.nestor_seam` must succeed on a checkout that
     never installed `[entity]`. `bind`/`resolver_for`/`reconciler_for`/
     `verify_ledger` each import `nestor` locally, inside the function --
-    never at module scope."""
+    never at module scope.
+
+    2026-09-11: reuses `test_view`'s own `_module_scope_banned_imports`
+    (planted there against a promoted `import tkinter`) rather than
+    re-walking the import statements here -- the same structural shape, one
+    module scan away from the other (G9d-inline-scans, "Inline scans the
+    meta-scan cannot see" -- this was the other named example)."""
+    from tests.test_view import _module_scope_banned_imports
+
     tree = ast.parse(SEAM.read_text(encoding="utf-8"))
-    top_level: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            top_level |= {a.name.split(".")[0] for a in node.names}
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            top_level.add(node.module.split(".")[0])
-    assert "nestor" not in top_level, (
+    hits = _module_scope_banned_imports(tree, frozenset({"nestor"}))
+    assert hits == [], (
         "nestor_seam.py imports `nestor` at module load -- this makes the "
         "optional extra ambient: a checkout without [entity] would fail to "
         "import this module, and every other test in the suite with it."

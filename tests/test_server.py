@@ -1901,10 +1901,30 @@ def test_api_grant_report_ignores_the_include_business_flag(ui):
     assert plain[1]["needs_use"] == 1
 
 
+def _files_containing(files: list, term: bytes) -> list[str]:
+    """Every file in `files` whose raw bytes carry `term` -- reported by
+    `.as_posix()` path, never a Windows-suffix assertion."""
+    return [p.as_posix() for p in files if term in p.read_bytes()]
+
+
+def test_the_files_containing_scan_fires_on_a_planted_write(tmp_path):
+    """Planted: a file that does carry the term, beside one that does not --
+    both are named or cleared correctly."""
+    clean = tmp_path / "clean.bin"
+    clean.write_bytes(b"nothing to see")
+    dirty = tmp_path / "dirty.bin"
+    dirty.write_bytes(b"the word include_business landed here")
+    hits = _files_containing([clean, dirty], b"include_business")
+    assert hits == [dirty.as_posix()]
+
+
 def test_the_include_business_flag_is_never_written_anywhere(ui):
     """A per-call scope that landed in the keep would be a permission the
     next call inherits. Nothing under `HOMESTEAD_HOME` may carry the word
-    after a call that passed it."""
+    after a call that passed it.
+
+    2026-09-11: the raw byte-grep is now `_files_containing`, planted above
+    (G9d-inline-scans, "Inline scans the meta-scan cannot see")."""
     ui.add_account(label="biz-chk", kind="checking", number="2222")
     _post_transaction(ui, "biz-chk", date="2026-01-05", amount="-9.99", description="Cloudy")
     for path in (
@@ -1918,7 +1938,7 @@ def test_the_include_business_flag_is_never_written_anywhere(ui):
     # whether the word landed in it at all, in any encoding it could ride in
     files = [p for p in sorted(ui.home.rglob("*")) if p.is_file()]
     assert files, "nothing was written at all — this scan would pass vacuously"
-    written = [p.as_posix() for p in files if b"include_business" in p.read_bytes()]
+    written = _files_containing(files, b"include_business")
     assert not written, f"the per-call flag was stored at {written}"
 
 

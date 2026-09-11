@@ -21,6 +21,8 @@ from homestead_ledger import registry as registry_mod
 from homestead_ledger.packs import checking
 from homestead_ledger.registry import REGISTRY, AccountType, account, all_accounts
 
+from tests._scans import terms_found
+
 PKG = Path(__file__).resolve().parent.parent / "homestead_ledger"
 
 
@@ -200,7 +202,8 @@ def test_the_readme_names_every_registered_account_kind():
     Every registered kind is named there, so adding one without saying so
     fails here rather than in the operator's hands."""
     readme = (PKG.parent / "README.md").read_text("utf-8")
-    missing = [name for name in all_accounts() if name not in readme]
+    named = set(terms_found(readme, all_accounts()))
+    missing = sorted(set(all_accounts()) - named)
     assert not missing, (
         f"the README does not name {missing} — it tells the operator which "
         "account kinds `--account`/`--kind` accept."

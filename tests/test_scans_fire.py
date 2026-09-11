@@ -598,3 +598,273 @@ def test_a_docstring_that_says_planted_does_clear_the_scan(tmp_path):
     )
     assert _scan_helpers(source) == ["_reaches"]
     assert _unplanted_scan_helpers(source) == []
+
+
+# ── the inline half: a scan written directly in a test's own body ───────────
+#
+# G9d-inline-scans — "Inline scans the meta-scan cannot see"
+# (`docs/PLAN-affairs-face.md`). Everything above reads *module-level
+# helpers*. A guard written inline, in a test's own body, with nothing to
+# name and nothing to plant, is invisible to it — `tests/test_view.py`'s
+# module-scope tkinter check and `tests/test_nestor_seam.py`'s lazy-import
+# check were exactly this shape before this bite factored them out. This
+# half closes that gap: it walks every `test_*` function's own body for the
+# same four shapes the module-helper half already knows, holds it to the
+# same "reads a file, not a string it built" requirement, and clears a test
+# that delegates to a scan helper already defined (and already required to
+# be planted) somewhere in `tests/` — recognized by name, whichever module
+# actually owns it, since `from tests.test_x import _helper` and a bare call
+# to a same-file helper are the same delegation by a different route.
+#
+# "Reads a membership question of it" is held to the text actually read, not
+# to anything built from it: a name bound directly to a `.read_text()`/
+# `.read_bytes()` call (one level, no chain through `json.loads` or the
+# like) counts; a dict key or a `Path.parents` check several steps removed
+# does not. Loosening that would also catch `"x" in pyproject["project"]` and
+# similar ordinary assertions that have nothing to do with scanning a tree,
+# and a rule that cries wolf on those gets an allowlist bolted onto it and
+# stops meaning anything, exactly the fate the module docstring above warns
+# the word-list shape away from.
+
+
+def _is_read_call(expr: ast.AST) -> bool:
+    """True if `expr` itself is a `.read_text()`/`.read_bytes()` call —
+    reading a real file, not a string the test built."""
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Attribute)
+        and expr.func.attr in _TEXT_READS
+    )
+
+
+def _direct_text_names(func: ast.FunctionDef) -> frozenset[str]:
+    """Local names assigned directly from a `.read_text()`/`.read_bytes()`
+    call — one level, no chain through `json.loads` or anything else. The
+    membership question this rule means is asked of the text actually read."""
+    names: set[str] = set()
+    for node in ast.walk(func):
+        if isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if targets and _is_read_call(node.value):
+                names.update(targets)
+    return frozenset(names)
+
+
+def _is_text_source(expr: ast.AST, direct_names: frozenset[str]) -> bool:
+    return _is_read_call(expr) or (isinstance(expr, ast.Name) and expr.id in direct_names)
+
+
+def _membership_on_read_text(node: ast.FunctionDef) -> bool:
+    """A membership test whose text side is a file read — directly, or
+    through a name `_direct_text_names` traces one level to one."""
+    direct_names = _direct_text_names(node)
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Compare) and any(isinstance(op, (ast.In, ast.NotIn)) for op in sub.ops):
+            if any(_is_text_source(operand, direct_names) for operand in (sub.left, *sub.comparators)):
+                return True
+    return False
+
+
+def _isinstance_against_ast_type(node: ast.AST) -> bool:
+    """True if the body itself calls `isinstance(x, ast.SomeType)` (or a
+    tuple containing one) — the direct judgment of a source walk, as against
+    a test that merely calls `ast.parse()` and hands the tree to a scan
+    helper already defined (and already planted) elsewhere."""
+    for call in _calls_in(node):
+        if isinstance(call.func, ast.Name) and call.func.id == "isinstance" and len(call.args) == 2:
+            type_arg = call.args[1]
+            candidates = type_arg.elts if isinstance(type_arg, ast.Tuple) else [type_arg]
+            for candidate in candidates:
+                if (
+                    isinstance(candidate, ast.Attribute)
+                    and isinstance(candidate.value, ast.Name)
+                    and candidate.value.id == "ast"
+                ):
+                    return True
+    return False
+
+
+def _global_scan_helper_names() -> frozenset[str]:
+    """Every scan-helper name defined anywhere in `tests/` — every
+    `test_*.py` file (this one excluded — its own helpers are proven above,
+    not by this rule) plus the shared `tests/_scans.py`, if there is one. A
+    test that calls one of these by name — bare, or through
+    `module.helper(...)` — is delegating to a helper the module-helper half
+    already holds to its own plant, wherever that helper actually lives."""
+    names: set[str] = set()
+    paths = sorted(TESTS_DIR.glob("test_*.py"))
+    shared = TESTS_DIR / "_scans.py"
+    if shared.exists():
+        paths.append(shared)
+    for path in paths:
+        if path.name == "test_scans_fire.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        constants = _module_collection_constants(tree)
+        for name, fn in _module_helpers(tree).items():
+            if _is_scan_helper(fn, constants):
+                names.add(name)
+    return frozenset(names)
+
+
+def _calls_any_by_name(node: ast.AST, names: frozenset[str]) -> bool:
+    """True if `node` calls any of `names`, bare (`helper(...)`) or through
+    an attribute (`module.helper(...)`)."""
+    for call in _calls_in(node):
+        if isinstance(call.func, ast.Name) and call.func.id in names:
+            return True
+        if isinstance(call.func, ast.Attribute) and call.func.attr in names:
+            return True
+    return False
+
+
+def _is_inline_scan(node: ast.FunctionDef, global_helpers: frozenset[str]) -> bool:
+    """A test body counts as an inline scan when it reads a real file and,
+    in its own body — not by calling a scan helper `tests/` already defines
+    somewhere — walks source and judges it directly (`ast.parse`/`ast.walk`
+    plus an `isinstance` against an `ast.*` type), matches a pattern, or asks
+    a membership question of the text it read."""
+    if not (isinstance(node, ast.FunctionDef) and node.name.startswith("test_")):
+        return False
+    if _is_fixture(node):
+        return False
+    if not _reads_file_text(node):
+        return False  # not reading a real file — a string the test built
+    if _calls_any_by_name(node, global_helpers):
+        return False  # delegates to a helper already held to its own plant
+    return (
+        (_walks_source(node) and _isinstance_against_ast_type(node))
+        or _matches_text(node)
+        or _membership_on_read_text(node)
+    )
+
+
+def _inline_scan_tests(source: str, global_helpers: frozenset[str]) -> list[str]:
+    """Every `test_*` function in one tests module whose own body is itself
+    a scan by the rule above."""
+    tree = ast.parse(source)
+    return sorted(
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and _is_inline_scan(node, global_helpers)
+    )
+
+
+def _inline_scan_offenders() -> list[str]:
+    """Every `file::test_name` in `tests/*.py` whose own body is itself an
+    unfactored scan."""
+    global_helpers = _global_scan_helper_names()
+    offenders = []
+    for path in sorted(TESTS_DIR.glob("test_*.py")):
+        if path.name == "test_scans_fire.py":
+            continue
+        for name in _inline_scan_tests(path.read_text(encoding="utf-8"), global_helpers):
+            offenders.append(f"{path.name}::{name}")
+    return offenders
+
+
+def test_no_test_body_is_itself_a_scan():
+    """The inline half of the house rule: a guard written directly in a
+    test's body, with no helper to name and plant, is invisible to the scan
+    above and can never be shown to fire. Every `tests/*.py` test must
+    either not be a scan by the four shapes, or delegate to a scan helper
+    `tests/` already defines and plants — in the same file, another test
+    module, or the shared `tests/_scans.py`."""
+    offenders = _inline_scan_offenders()
+    assert not offenders, (
+        "these tests are themselves a scan (reads a real file, then walks "
+        "its source and judges it, matches a pattern, or asks a membership "
+        "question of the text) with no scan helper behind them anywhere in "
+        f"tests/, so the scan has never been planted: {offenders}"
+    )
+
+
+def test_the_inline_scan_check_finds_a_scan_written_directly_in_a_test_body(tmp_path):
+    """Planted: a test file whose only guard is written inline — `ast.parse`
+    plus a direct `isinstance` walk, on a file the test actually reads (via
+    `tmp_path`, not a string built in place) — exactly `test_view.py`'s
+    tkinter check before this bite factored it out. No helper exists
+    anywhere for it to delegate to, so it must be reported."""
+    target = tmp_path / "target.py"
+    target.write_text("import banned\n", encoding="utf-8")
+    source = _write(
+        tmp_path,
+        "test_planted_inline_scan.py",
+        "import ast\n"
+        "from pathlib import Path\n"
+        f"TARGET = Path({str(target)!r})\n"
+        "\n"
+        "def test_no_banned_import_at_module_scope():\n"
+        "    tree = ast.parse(TARGET.read_text('utf-8'))\n"
+        "    for node in tree.body:\n"
+        "        if isinstance(node, ast.Import):\n"
+        "            assert 'banned' not in {a.name for a in node.names}\n",
+    )
+    assert _inline_scan_tests(source, frozenset()) == ["test_no_banned_import_at_module_scope"]
+
+
+def test_the_inline_scan_check_does_not_fire_on_a_string_the_test_built(tmp_path):
+    """Planted: a test that matches a pattern, but only against a string
+    literal it built itself — no `.read_text()`/`.read_bytes()` anywhere.
+    Not a scan of the tree, so it must not be reported."""
+    source = _write(
+        tmp_path,
+        "test_planted_string_literal_match.py",
+        "import re\n"
+        "\n"
+        "def test_the_greeting_has_no_banned_word():\n"
+        "    assert not re.search(r'banned', 'a household keeps its own books')\n",
+    )
+    assert _inline_scan_tests(source, frozenset()) == []
+
+
+def test_the_inline_scan_check_does_not_fire_on_a_fixture(tmp_path):
+    """The other honesty check, held against the inline half too: a fixture
+    that reads a file and asks membership of it is setup, not a scan, and
+    must not be reported."""
+    source = _write(
+        tmp_path,
+        "test_planted_inline_fixture.py",
+        "import pytest\n"
+        "\n"
+        "@pytest.fixture\n"
+        "def household(tmp_path):\n"
+        "    (tmp_path / 'seed').write_text('x', encoding='utf-8')\n"
+        "    return 'seed' in (tmp_path / 'seed').read_text(encoding='utf-8')\n"
+        "\n"
+        "def test_it(household):\n"
+        "    assert household\n",
+    )
+    assert _inline_scan_tests(source, frozenset()) == []
+
+
+def test_the_inline_scan_check_clears_a_test_that_delegates_to_a_known_helper(tmp_path):
+    """And not over-strict: a test that reads a real file and calls a scan
+    helper already known to `tests/` (wherever it actually lives — bare name
+    or `module.helper(...)`) is delegating, not scanning inline, so it must
+    not be reported even though it still reads a real file and still asks a
+    membership question of the result."""
+    target = tmp_path / "target.py"
+    target.write_text("import homestead\n", encoding="utf-8")
+    source = _write(
+        tmp_path,
+        "test_planted_delegating_test.py",
+        "from pathlib import Path\n"
+        f"TARGET = Path({str(target)!r})\n"
+        "\n"
+        "def test_the_module_does_not_import_homestead():\n"
+        "    imported = _toplevel_and_nested_imports(TARGET)\n"
+        "    assert 'homestead' not in imported\n",
+    )
+    assert _inline_scan_tests(source, frozenset({"_toplevel_and_nested_imports"})) == []
+
+
+def test_the_inline_scan_check_does_not_fire_on_the_real_tree():
+    """The whole thing against a real file of this repo's: `test_view.py`
+    used to carry an inline tkinter scan and now delegates to its own
+    `_module_scope_banned_imports`, planted in the same file — so the check
+    must clear it, or it would be crying wolf on the very fix it exists to
+    require."""
+    global_helpers = _global_scan_helper_names()
+    source = (TESTS_DIR / "test_view.py").read_text(encoding="utf-8")
+    assert _inline_scan_tests(source, global_helpers) == []

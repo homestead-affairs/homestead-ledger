@@ -28,12 +28,28 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests._scans import terms_found
+
 APP = Path(__file__).resolve().parent.parent
 PLAN_FACE = APP / "docs" / "PLAN-affairs-face.md"
 
 _STRIKE_RE = re.compile(r"~~(.*?)~~", re.DOTALL)
 _PR_RE = re.compile(r"#\d+")
 _RELEASE_RE = re.compile(r"released\s+\d+\.\d+\.\d+")
+
+#: The one other evidence shape this file accepts, alongside PR+release: a
+#: bite closing an *open item it recorded itself*, on its own branch, before
+#: the orchestrator has opened (let alone merged) its PR. "A document does
+#: not mark its own landing" (G9d-inline-scans) means such a strike can name
+#: no PR number yet -- inventing one would be the exact wishful claim this
+#: file exists to forbid. `docs/PLAN-affairs-face.md`'s "Inline scans"/
+#: "Duplicated chokepoint scans" bullets are struck this way, once the
+#: branch that closed them existed to write the sentence.
+_SELF_CLOSURE_RE = re.compile(
+    r"closed\s+by\s+[\w-]+\s+\(this\s+branch;\s+PR\s+number\s+filled\s+in\s+by"
+    r"\s+the\s+orchestrator\)",
+    re.DOTALL,
+)
 
 #: How far past a `~~...~~` span to look for its `(#NN, released ...)` tail —
 #: generous enough for this file's longest struck bite's trailing note. The
@@ -75,9 +91,13 @@ def _struck_blocks(text: str) -> list[tuple[str, str]]:
 
 def _strikes_missing_evidence(text: str) -> list[str]:
     """Every struck bite whose tail does not carry both a PR number and a
-    release version, named by what it is missing."""
+    release version, named by what it is missing -- except the one other
+    accepted shape, `_SELF_CLOSURE_RE`, which is exempt from both because it
+    makes neither claim."""
     missing = []
     for struck, tail in _struck_blocks(text):
+        if _SELF_CLOSURE_RE.search(tail):
+            continue
         lacks = []
         if not _PR_RE.search(tail):
             lacks.append("PR number")
@@ -129,13 +149,41 @@ def test_the_evidence_guard_fires_on_a_strikethrough_missing_either_half(tmp_pat
     )
 
 
+def test_the_self_closure_exemption_fires_on_the_documented_phrase(tmp_path):
+    """Planted: the one other accepted evidence shape. A bite closing an
+    open item it recorded itself, on its own branch, before the
+    orchestrator has opened a PR -- naming no PR number is honest here, not
+    wishful, so it must not be reported."""
+    planted = tmp_path / "PLAN-planted.md"
+    planted.write_text(
+        "~~an open item this branch closed~~ (closed by G9d-inline-scans "
+        "(this branch; PR number filled in by the orchestrator))\n",
+        encoding="utf-8",
+    )
+    assert _strikes_missing_evidence(planted.read_text(encoding="utf-8")) == []
+
+
+def test_the_self_closure_exemption_does_not_swallow_a_bare_closed_claim(tmp_path):
+    """And not over-strict in the other direction: the exemption is the one
+    documented phrase, not the word "closed" alone -- a strike that merely
+    asserts it is closed, with neither a PR number nor the orchestrator
+    phrase, is still the wishful claim this file exists to catch."""
+    planted = tmp_path / "PLAN-planted.md"
+    planted.write_text(
+        "~~an open item~~ (closed, trust me)\n",
+        encoding="utf-8",
+    )
+    missing = _strikes_missing_evidence(planted.read_text(encoding="utf-8"))
+    assert missing, "a bare 'closed' claim with no PR/release must still be reported"
+
+
 def test_every_ledger_bite_the_plan_names_has_an_entry():
     """Landed or not, each one is named. The unlanded ones are how a reader
     tells "nothing outstanding" from "nobody wrote it down"."""
     text = PLAN_FACE.read_text(encoding="utf-8")
-    absent = [
-        name for name in LANDED_BITES + UNLANDED_BITES if name not in text
-    ]
+    all_bites = LANDED_BITES + UNLANDED_BITES
+    named = set(terms_found(text, all_bites))
+    absent = sorted(set(all_bites) - named)
     assert not absent, (
         "these ledger bites are named in the Homestead · Affairs plan and "
         f"nowhere in docs/PLAN-affairs-face.md: {absent}"
