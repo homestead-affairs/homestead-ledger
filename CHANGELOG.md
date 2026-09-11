@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.4.0...v0.5.0) (2026-09-11)
+
+
+### Added
+
+* account instances — a label, never a kind, and one number record ([3725c95](https://github.com/homestead-affairs/homestead-ledger/commit/3725c950ce7305edfd489d66bde23f9a9086adba))
+
+
+### Fixed
+
+* refuse a retired flag on `transaction add` instead of writing it into the payee ([5dadf2d](https://github.com/homestead-affairs/homestead-ledger/commit/5dadf2d5f21863a6bab8aad27b444fa14f39a521))
+
 ## [0.4.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.3.0...v0.4.0) (2026-09-11)
 
 
