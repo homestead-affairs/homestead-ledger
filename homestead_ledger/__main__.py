@@ -27,7 +27,9 @@ import sys
 
 USAGE = """\
 usage: python -m homestead_ledger [--help] [--smoke | --demo]
-       python -m homestead_ledger --import FILE --account-number N [--dry-run] [--account NAME]
+       python -m homestead_ledger --import FILE --account-number N [--dry-run]
+                                   [--account NAME] [--kind KIND]
+                                   [--liability-columns CHARGE,PAYMENT]
        homestead-ledger <command> [args...]
 
   --help, -h   show this message and exit
@@ -38,7 +40,13 @@ usage: python -m homestead_ledger [--help] [--smoke | --demo]
                import a bank-statement CSV for one account (header
                auto-detected: single-amount or debit/credit split); prints
                the imported/skipped/errors tally. --account defaults to
-               "checking"; --dry-run parses and tallies without writing
+               "checking"; --dry-run parses and tallies without writing.
+               --kind names the registered account kind rows classify
+               against (defaults to --account's value); on a debit/credit
+               statement for a liability kind (credit_card, loan),
+               --liability-columns CHARGE,PAYMENT says which of "debit"/
+               "credit" means a charge and which means a payment — required
+               there, since a bank's own column names do not say
   (default)    open the tkinter view on the cover — requires tkinter and a
                display; falls back to a guidance message if neither is present
 
@@ -103,7 +111,10 @@ def main(argv: list[str] | None = None) -> int:
         from homestead_ledger.app import cover, demo, view, window  # noqa: F401
         from homestead_ledger.packs import (  # noqa: F401
             checking,
+            credit_card,
+            loan,
             obligations as _obligations_pack,
+            savings,
         )
 
         print(f"homestead-ledger ok · books at {paths.home() / 'homestead-ledger.db'}")
@@ -179,11 +190,54 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
+        # `--kind` defaults to `--account`'s own value — until bite 2b splits
+        # an account instance's label from its kind, the two name the same
+        # thing, so a caller who never touches `--kind` gets exactly what
+        # they got before this flag existed.
+        kind = account
+        if "--kind" in argv:
+            try:
+                kind_index = argv.index("--kind")
+                kind = argv[kind_index + 1]
+            except IndexError:
+                print("homestead-ledger: --kind requires a value", file=sys.stderr)
+                return 2
+            if kind not in registry.all_accounts():
+                print(
+                    f"homestead-ledger: unknown kind {kind!r} — one of: "
+                    f"{', '.join(registry.all_accounts())}",
+                    file=sys.stderr,
+                )
+                return 2
+
+        liability_columns = None
+        if "--liability-columns" in argv:
+            try:
+                lc_index = argv.index("--liability-columns")
+                raw_columns = argv[lc_index + 1]
+            except IndexError:
+                print(
+                    "homestead-ledger: --liability-columns requires a value "
+                    "like debit,credit",
+                    file=sys.stderr,
+                )
+                return 2
+            parts = raw_columns.split(",")
+            if len(parts) != 2:
+                print(
+                    "homestead-ledger: --liability-columns takes exactly two "
+                    "comma-separated names, e.g. debit,credit",
+                    file=sys.stderr,
+                )
+                return 2
+            liability_columns = (parts[0].strip(), parts[1].strip())
+
         dry_run = "--dry-run" in argv
 
         try:
             result = importer.import_csv(
-                csv_path, account=account, account_number=account_number, dry_run=dry_run,
+                csv_path, account=account, account_number=account_number, kind=kind,
+                liability_columns=liability_columns, dry_run=dry_run,
             )
         except (ValueError, FileNotFoundError) as exc:
             print(f"homestead-ledger: import failed — {exc}", file=sys.stderr)

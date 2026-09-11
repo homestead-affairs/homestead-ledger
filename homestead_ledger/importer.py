@@ -32,19 +32,34 @@ header shape this module does not recognize raises inside the row parser;
 this module catches only that, counts it as an error, and prints one line to
 stderr naming the row — it never invents a date or an amount to keep a
 partial row moving.
+
+**Bite 2a — `kind`, and a debit/credit header on a liability account.**
+`import_csv` gains `kind` (the registered account kind a statement's rows
+classify against — `books.Transaction.kind`, passed straight through with
+`dataclasses.replace` after a row parses, so the parsers above are untouched
+by this) and `liability_columns`. A bank's own "Debit"/"Credit" column
+headers do not say which direction is a charge and which is a payment on a
+*liability* account the way they unambiguously do on an asset one (see
+`packs/credit_card.py`'s docstring) — so a debit/credit-shaped statement for
+a registered liability kind is refused outright unless `liability_columns`
+names which of the two literal headers means a charge and which means a
+payment. Naming them re-points the header lookup the existing debit/credit
+reader already does — `debit` reads as negative, `credit` as positive,
+matching the sign convention exactly — rather than adding a second amount
+parser next to it.
 """
 from __future__ import annotations
 
 import csv
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
 from homestead.keep.store import RecordExists
 
-from homestead_ledger import books, money
+from homestead_ledger import books, money, registry
 from homestead_ledger.packs import checking
 
 __all__ = [
@@ -194,6 +209,8 @@ def import_csv(
     *,
     account: str = checking.ACCOUNT,
     account_number: str,
+    kind: str = checking.ACCOUNT,
+    liability_columns: tuple[str, str] | None = None,
     dry_run: bool = False,
     adapter=None,
 ) -> ImportResult:
@@ -201,14 +218,25 @@ def import_csv(
 
     `account` is the pack label (`checking.ACCOUNT` by default); `account_number`
     is the L5 bank identifier — both are parameters for the whole statement,
-    never a per-row column, because a statement is for one account. `adapter`
-    is passed straight through to `books.import_transaction` (`None` uses this
-    package's own database) — the same seam the tests use to point at a tmp
-    store via `HOMESTEAD_HOME`.
+    never a per-row column, because a statement is for one account. `kind` is
+    the registered account kind each row classifies against
+    (`registry.all_accounts()`; defaults to `checking.ACCOUNT`, matching
+    `account`'s own default). `adapter` is passed straight through to
+    `books.import_transaction` (`None` uses this package's own database) —
+    the same seam the tests use to point at a tmp store via `HOMESTEAD_HOME`.
+
+    `liability_columns` names, as `(charge_header, payment_header)` — each
+    one of the literal header names `detect_format` already recognizes for
+    the debit/credit shape ("debit"/"credit", case-insensitive) — which
+    column means a charge and which means a payment, for a debit/credit
+    statement against a registered liability kind. Required in that one
+    case (see the module docstring); ignored otherwise.
 
     Returns an `ImportResult` tally. Raises `ValueError` immediately, before
-    reading any row, if the header names neither supported shape — an
-    unrecognized file is refused outright, not silently misread.
+    reading any row, if the header names neither supported shape, or if a
+    liability kind's debit/credit statement has no `liability_columns` — an
+    unrecognized or ambiguous file is refused outright, not silently
+    misread.
     """
     path = Path(path)
     imported = skipped = errors = 0
@@ -221,9 +249,35 @@ def import_csv(
         parser = _ROW_PARSERS[fmt]
         hmap = _header_map(headers)
 
+        if fmt == "debit_credit" and registry.account(kind).liability:
+            if liability_columns is None:
+                raise ValueError(
+                    f"a debit/credit header on {kind!r} (a liability account) "
+                    "is ambiguous — a bank's \"Debit\" column may mean a "
+                    "charge (increases what is owed) or a payment (decreases "
+                    "it), and guessing would misstate the debt. Pass "
+                    "--liability-columns naming which of \"debit\"/\"credit\" "
+                    "means a charge and which means a payment, e.g. "
+                    "--liability-columns debit,credit."
+                )
+            charge_name, payment_name = (c.strip().lower() for c in liability_columns)
+            if {charge_name, payment_name} != {"debit", "credit"}:
+                raise ValueError(
+                    f"--liability-columns must name \"debit\" and \"credit\" "
+                    f"(in whichever order means charge,payment for this "
+                    f"statement), not {liability_columns!r}."
+                )
+            # Re-point the header lookup so the existing debit/credit reader
+            # (debit → negative, credit → positive — already the household's
+            # charge/payment sign convention) reads the right column for
+            # each role, instead of a second amount parser duplicating it.
+            hmap = dict(hmap)
+            hmap["debit"], hmap["credit"] = hmap[charge_name], hmap[payment_name]
+
         for line_no, row in enumerate(reader, start=2):  # header is line 1
             try:
                 txn = parser(row, hmap, account=account, account_number=account_number)
+                txn = replace(txn, kind=kind)
             except ValueError as exc:
                 errors += 1
                 message = f"{path.name}:{line_no}: {exc}"

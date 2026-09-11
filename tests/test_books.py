@@ -26,6 +26,7 @@ from homestead_ledger.store import Canonical
 def _txn(**overrides) -> Transaction:
     base = dict(
         account="checking",
+        kind="checking",
         date="2026-08-01",
         amount="-84.23",
         description="Whole Foods Market",
@@ -138,6 +139,53 @@ def test_canonical_still_exposes_no_write_method():
     test_canonical_is_read_only_by_type."""
     for forbidden in ("put", "write", "update", "delete", "insert"):
         assert not hasattr(Canonical, forbidden)
+
+
+# ── bite 2a — classification is registry-driven, not `checking`-shaped ─────
+
+def test_import_classifies_by_the_registered_kind_not_checking(tmp_path, monkeypatch):
+    """A `credit_card` import must derive the *card's* words for its amount
+    ("a charge is on file"), not checking's ("a debit is on file") — proof
+    that `import_transaction` reads the pack `txn.kind` names, never the one
+    pack this module used to import by name."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    txn = _txn(
+        account="credit_card", kind="credit_card", amount="-42.00",
+        description="Hardware Store",
+    )
+    item_id = import_transaction(txn)
+
+    canonical = Canonical()
+    amount = canonical.get("credit_card", "amount", item_id)
+    assert amount.rung is Rung.L4
+    assert amount.derived == "a charge is on file"
+    assert amount.derived != "a debit is on file"
+
+    payment = _txn(
+        account="credit_card", kind="credit_card", date="2026-08-02",
+        amount="42.00", description="Payment Received",
+    )
+    payment_id = import_transaction(payment)
+    assert canonical.get("credit_card", "amount", payment_id).derived == (
+        "a payment or credit is on file"
+    )
+
+
+def test_an_unregistered_kind_is_refused_by_name(tmp_path, monkeypatch):
+    """A phantom kind must never reach the store — refused by name, as a
+    `ValueError` naming `all_accounts()`, before any row is written."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    from homestead_ledger import registry
+
+    txn = _txn(account="brokerage", kind="brokerage")
+    with pytest.raises(ValueError) as exc:
+        import_transaction(txn)
+    assert "brokerage" in str(exc.value)
+    for name in registry.all_accounts():
+        assert name in str(exc.value)
+
+    # and nothing landed on the books for the refused kind.
+    assert Canonical().records("brokerage") == []
 
 
 def test_import_transaction_bypasses_canonical_and_sidecar_deliberately(tmp_path, monkeypatch):

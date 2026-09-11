@@ -27,6 +27,18 @@ independently (an amount denied at L5 would hide the whole transaction if it
 were one record; account_number and amount are stored separately so one
 being sealed does not seal the rest).
 
+**Bite 2a — classification is registry-driven, not `checking`-shaped.**
+`Transaction` gains `kind`: the registered account kind (`registry.
+all_accounts()`) whose pack actually authored the four fields' rungs and
+derived forms. `account` stays the *matter* name for now — the label a
+transaction is filed under, which bite 2b turns into an instance distinct
+from its kind; until then the two are the same value in practice, but this
+module never assumes that (it reads `kind`, never `account`, to find the
+pack). `import_transaction` looks the kind up through `registry.account`,
+which is strict by design (`KeyError` on an unregistered name) — refused
+here by name, as a `ValueError`, rather than let a phantom kind's fields get
+classified against the wrong pack or crash uninformatively.
+
 The first field written (`date`) is the de-duplication gate: its atomic
 `insert` either succeeds (a genuinely new transaction) or fails because the
 key is occupied, and a failure there refuses the whole import before any new
@@ -48,11 +60,12 @@ from dataclasses import dataclass
 from homestead.keep.rungs import Classified
 from homestead.keep.store import CANONICAL, RecordExists, SQLiteAdapter, key
 
+from homestead_ledger import registry
 from homestead_ledger.fingerprint import fingerprint
-from homestead_ledger.packs import checking
+from homestead_ledger.packs import checking  # default `kind` below, nothing else
 from homestead_ledger.store import _adapter as _ledger_adapter
 
-__all__ = ["Transaction", "import_transaction"]
+__all__ = ["Transaction", "import_transaction", "owed"]
 
 #: The fields written per transaction, in write order. `date` first and on
 #: purpose — see the module docstring on why it is the de-duplication gate.
@@ -62,14 +75,18 @@ _FIELD_ORDER = ("date", "amount", "description", "account_number")
 @dataclass(frozen=True)
 class Transaction:
     """One transaction as imported, before classification — plain strings.
-    `import_transaction` is where each field becomes `Classified` at the
-    checking pack's declared rung; nothing here re-declares or infers one."""
+    `import_transaction` is where each field becomes `Classified` at its
+    `kind`'s registered pack's declared rung; nothing here re-declares or
+    infers one. `kind` defaults to `checking.ACCOUNT` only so that existing
+    callers who never dealt with a second account kind keep working
+    unchanged — a caller that means a different kind always says so."""
 
     account: str
     date: str
     amount: str
     description: str
     account_number: str
+    kind: str = checking.ACCOUNT
 
 
 def _blob(item: Classified) -> str:
@@ -85,17 +102,26 @@ def _blob(item: Classified) -> str:
     return json.dumps({"rung": item.rung.value, "payload": item.payload, "derived": item.derived})
 
 
-def _derived_for(field: str, payload: str) -> str | None:
+def _derived_for(schema: dict, field: str, payload: str) -> str | None:
     """The stand-in text for a field whose rung can be derived (L3/L4) —
-    never the payload restated, never its magnitude. `amount`'s derived form
-    names only the sign (debit or credit on file), matching the convention
-    `tests/test_store_binding.py` already fixed in bite 0
-    (`derived="a debit is on file"`)."""
-    if field == "amount":
-        return "a debit is on file" if payload.strip().startswith("-") else "a credit is on file"
-    if field == "description":
-        return "a payee is on file"
-    return None  # date (L2) and account_number (L5) need no derived form
+    never the payload restated, never its magnitude — read off the account
+    kind's *own* pack declaration rather than a convention hardcoded here.
+
+    A field whose declaration carries `derived_by_sign` (bite 2a: `amount`,
+    on every account pack) picks the form for the payload's sign — `"-"` or
+    `"+"` — so a liability pack's charge/payment wording and an asset pack's
+    debit/credit wording each come from the pack that means them, never from
+    a guess this module makes about what "negative" implies for a kind it
+    was not told about. A field with a plain `derived` string (`description`)
+    returns that unconditionally; a field with neither (`date`,
+    `account_number`) returns `None` — L2 and L5 need no derived form.
+    """
+    spec = schema[field]
+    sign_forms = spec.get("derived_by_sign")
+    if sign_forms is not None:
+        sign = "-" if payload.strip().startswith("-") else "+"
+        return sign_forms[sign]
+    return spec.get("derived")
 
 
 def import_transaction(txn: Transaction, *, adapter: SQLiteAdapter | None = None) -> str:
@@ -103,6 +129,14 @@ def import_transaction(txn: Transaction, *, adapter: SQLiteAdapter | None = None
     fingerprint. Refuses a re-import of the same transaction (I-9) rather
     than duplicating or overwriting it; see the module docstring for exactly
     what "refuses" covers and does not.
+
+    Classifies each field through `registry.account(txn.kind)` — the
+    registered pack's own `FIELDS`/`SCHEMA`, read live, never one pack's
+    fields hardcoded for every kind (I-23: the registry is the only
+    enumeration, and that includes which pack answers for a kind). `txn.kind`
+    naming a kind that is not registered is refused by name, as a
+    `ValueError`, before any row is written — the same "fail closed, name the
+    field" posture the rest of this module already takes.
 
     Returns the transaction's item id (its fingerprint), so a caller can
     immediately look the transaction back up through `Canonical`.
@@ -113,6 +147,14 @@ def import_transaction(txn: Transaction, *, adapter: SQLiteAdapter | None = None
     explicitly to point at a different database, as the tests do via
     `HOMESTEAD_HOME`.
     """
+    try:
+        account_type = registry.account(txn.kind)
+    except KeyError:
+        raise ValueError(
+            f"{txn.kind!r} is not a registered account kind — one of "
+            f"{registry.all_accounts()} (see registry.all_accounts())"
+        ) from None
+
     item_id = fingerprint(
         date=txn.date, amount=txn.amount, description=txn.description,
         account=txn.account_number,
@@ -127,8 +169,8 @@ def import_transaction(txn: Transaction, *, adapter: SQLiteAdapter | None = None
 
     for index, field in enumerate(_FIELD_ORDER):
         payload = payloads[field]
-        rung = checking.FIELDS[field]
-        classified = Classified(rung, payload, _derived_for(field, payload))
+        rung = account_type.fields[field]
+        classified = Classified(rung, payload, _derived_for(account_type.schema, field, payload))
         ref = key(txn.account, field, item_id)
         wrote = store.insert(CANONICAL, ref, _blob(classified))
         if wrote:
@@ -149,3 +191,22 @@ def import_transaction(txn: Transaction, *, adapter: SQLiteAdapter | None = None
         )
 
     return item_id
+
+
+def owed(total: float) -> float:
+    """A liability's *owed* figure, from its raw signed running total.
+
+    Every account pack signs `amount` from the household's own side (see
+    each pack's module docstring): money leaving is negative on every kind,
+    which for a liability means a charge is negative and a payment/credit is
+    positive — exactly the same signs an asset account gives a debit and a
+    credit. Summing those the way an asset account's running total works
+    would leave a card with three charges and no payments reading
+    *negative*, which is correct arithmetic and the wrong word for a debt:
+    a household says it owes three hundred dollars, not that its card reads
+    minus three hundred. Negating the total once, here, is that conversion —
+    the one place it happens, so `balance.running_balance(..., liability=
+    True)` does not have to know the sign convention itself, only that a
+    liability's total needs this applied and an asset's does not.
+    """
+    return -total

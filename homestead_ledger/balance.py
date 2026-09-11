@@ -17,11 +17,22 @@ analogous case — a computation over canonical content, not a rendering of it
 — and *what it returns* (a running total) still has to cross the gate before
 any surface shows it; that crossing is bite 3's, when a total is first drawn
 on screen. Nothing in this bite serves a `BalancePoint` to a surface.
+
+**Bite 2a — a liability's running total is reported as owed.** Every account
+pack signs `amount` from the household's own side (a charge on a liability
+kind is negative, a payment positive — see e.g. `packs/credit_card.py`'s
+docstring), the same signs an asset account gives a debit and a credit. Left
+alone, that makes a card's running sum read negative, which is correct
+arithmetic and the wrong word for a debt. `running_balance(..., liability=
+True)` negates the total through `books.owed` so a caller gets what a
+household actually calls it — a positive number owed — instead of doing that
+conversion itself.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from homestead_ledger.books import owed
 from homestead_ledger.store import Canonical
 
 __all__ = ["BalancePoint", "running_balance", "transaction_tuples"]
@@ -39,7 +50,9 @@ class BalancePoint:
     running: float
 
 
-def running_balance(canonical: Canonical, account: str) -> list[BalancePoint]:
+def running_balance(
+    canonical: Canonical, account: str, *, liability: bool = False,
+) -> list[BalancePoint]:
     """Every transaction in `account`, oldest posting date first, each paired
     with the running total through that point.
 
@@ -49,6 +62,12 @@ def running_balance(canonical: Canonical, account: str) -> list[BalancePoint]:
     transaction missing either field (a torn import; see `books.py`'s
     documented limitation) is skipped rather than guessed at — an incomplete
     transaction contributes nothing to a total it cannot honestly join.
+
+    `liability=True` reports each point's `running` total as *owed*
+    (`books.owed`) rather than the raw signed sum — see the module
+    docstring's sign convention. `amount`, each point's own contribution,
+    is never flipped either way: it stays the value as imported, signed the
+    way its account kind's pack declares it.
     """
     amounts: dict[str, str] = {}
     dates: dict[str, str] = {}
@@ -69,8 +88,9 @@ def running_balance(canonical: Canonical, account: str) -> list[BalancePoint]:
     for item_id in complete_ids:
         amount = float(amounts[item_id])
         total += amount
+        running = owed(total) if liability else total
         points.append(
-            BalancePoint(item_id=item_id, date=dates[item_id], amount=amount, running=round(total, 2))
+            BalancePoint(item_id=item_id, date=dates[item_id], amount=amount, running=round(running, 2))
         )
     return points
 

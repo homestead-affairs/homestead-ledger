@@ -163,12 +163,12 @@ def test_transaction_round_trip_and_the_l5_never_shows(ui):
 def test_transaction_refusals_at_entry(ui):
     base = {"date": "2026-08-01", "amount": "-84.23", "description": "x", "account_number": "1"}
     for key, value in (("date", "yesterday"), ("amount", "lots"), ("description", ""),
-                       ("account_number", ""), ("account", "savings")):
+                       ("account_number", ""), ("account", "brokerage")):
         status, data = ui.json("/api/transaction", {**base, key: value})
         assert status == 400, (key, value)
     status, data = ui.json("/api/transactions")
     assert data["rows"] == []
-    status, data = ui.json("/api/transactions?account=savings")
+    status, data = ui.json("/api/transactions?account=brokerage")
     assert status == 400
 
 

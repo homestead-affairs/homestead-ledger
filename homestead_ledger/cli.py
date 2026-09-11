@@ -251,7 +251,7 @@ def _cmd_transaction(argv: list[str]) -> int:
             print("  refused: a transaction names its payee or description", file=sys.stderr)
             return 1
         txn = books.Transaction(
-            account=account, date=date, amount=amount,
+            account=account, kind=account, date=date, amount=amount,
             description=description.strip(), account_number=account_number.strip(),
         )
         try:

@@ -190,7 +190,7 @@ textarea:focus{outline:2px solid var(--accent);border-color:transparent}
     </div>
     <div class="rf">
       <input id="tacct" placeholder="Account number (L5, never shown)" style="max-width:260px">
-      <input id="taccount" placeholder="Account name" value="checking" style="max-width:160px">
+      <select id="taccount" style="max-width:160px"></select>
       <button class="btn bg" onclick="storeTransaction()">Add</button>
     </div>
     <div class="why">The books are the household's own record: a transaction is added once (a re-entry is refused) and never edited. A whole statement: <code>python -m homestead_ledger --import FILE.csv --account-number N</code>.</div>
@@ -280,6 +280,19 @@ function storeTransaction() {
       loadTransactions();
     } else {msg.innerHTML='<span class="sm s-err">'+esc(data.error||'Failed')+'</span>';}
   }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
+}
+
+function loadAccounts() {
+  // The transaction form's account field is the registry, not a hardcoded
+  // "checking" — a new account pack shows up here with no change but the
+  // pack itself (I-23: iterate all_accounts(), never keep a list by hand).
+  var sel=document.getElementById('taccount');
+  fetch('/api/status').then(function(r){return r.json()}).then(function(data){
+    var accounts=data.accounts||[];
+    sel.innerHTML=accounts.map(function(a){
+      return '<option value="'+attr(a)+'">'+esc(a)+'</option>';
+    }).join('');
+  }).catch(function(){/* the transaction form still posts whatever the field holds */});
 }
 
 function loadObligations() {
@@ -470,7 +483,7 @@ function loadSubscriptions() {
     div.innerHTML=html;
   }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load subscriptions</p>';});
 }
-loadObligations();loadTransactions();
+loadAccounts();loadObligations();loadTransactions();
 </script>
 </body>
 </html>
@@ -810,7 +823,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             except ValueError as exc:
                 return self._json({"ok": False, "error": str(exc)}, 400)
             txn = books.Transaction(
-                account=account, date=date, amount=amount,
+                account=account, kind=account, date=date, amount=amount,
                 description=description, account_number=account_number,
             )
             try:

@@ -227,6 +227,82 @@ def test_torn_write_record_exists_is_surfaced_as_an_error_not_a_skip(tmp_path, m
     assert len(result.error_messages) == 2
 
 
+# ── bite 2a — kind, and a liability's ambiguous debit/credit header ────────
+
+def test_a_debit_credit_header_on_a_liability_kind_is_refused_without_a_column_mapping(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    path = _write(tmp_path, "card.csv", _DEBIT_CREDIT_CSV)
+
+    with pytest.raises(ValueError, match="--liability-columns"):
+        importer.import_csv(path, account_number=ACCOUNT_NUMBER, kind="credit_card")
+
+    # nothing landed — refused before any row was written.
+    assert Canonical().records("credit_card") == []
+
+
+def test_liability_columns_reverses_which_header_means_a_charge(tmp_path, monkeypatch):
+    """`_DEBIT_CREDIT_CSV` puts the Hardware-Store-shaped charge under
+    "Debit" and the payment under "Credit" — the sign the existing reader
+    already assumes. Naming them the *other* way round must flip which row
+    is negative, proving the mapping is actually read, not merely accepted."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    path = _write(tmp_path, "card.csv", _DEBIT_CREDIT_CSV)
+
+    result = importer.import_csv(
+        path, account="credit_card", account_number=ACCOUNT_NUMBER, kind="credit_card",
+        liability_columns=("credit", "debit"),  # reversed
+    )
+    assert result.imported == 2
+
+    canonical = Canonical()
+    amounts = sorted(
+        record.payload for ref, record in canonical.records("credit_card") if ref[1] == "amount"
+    )
+    assert amounts == ["-1500.00", "84.23"]
+
+
+def test_liability_columns_normal_order_matches_the_asset_reading(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    path = _write(tmp_path, "card.csv", _DEBIT_CREDIT_CSV)
+
+    result = importer.import_csv(
+        path, account="credit_card", account_number=ACCOUNT_NUMBER, kind="credit_card",
+        liability_columns=("debit", "credit"),
+    )
+    assert result.imported == 2
+
+    canonical = Canonical()
+    amounts = sorted(
+        record.payload for ref, record in canonical.records("credit_card") if ref[1] == "amount"
+    )
+    assert amounts == ["-84.23", "1500.00"]
+
+
+def test_liability_columns_is_ignored_for_an_asset_kind(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    path = _write(tmp_path, "debit_credit.csv", _DEBIT_CREDIT_CSV)
+
+    result = importer.import_csv(path, account_number=ACCOUNT_NUMBER)  # checking, no mapping given
+    assert result.imported == 2
+
+
+def test_import_csv_classifies_rows_at_the_given_kind(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    path = _write(tmp_path, "single.csv", _SINGLE_AMOUNT_CSV)
+
+    result = importer.import_csv(
+        path, account="savings", account_number=ACCOUNT_NUMBER, kind="savings",
+    )
+    assert result.imported == 2
+
+    canonical = Canonical()
+    assert canonical.records("checking") == []  # nothing landed in the wrong matter
+    dates = [record.payload for ref, record in canonical.records("savings") if ref[1] == "date"]
+    assert sorted(dates) == ["2026-08-01", "2026-08-03"]
+
+
 # ── the account identity is a parameter, not a per-row column ──────────────
 
 def test_account_number_is_taken_as_a_parameter_not_a_csv_column(tmp_path, monkeypatch):

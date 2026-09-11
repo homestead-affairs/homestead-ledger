@@ -15,10 +15,11 @@ checking`) that authored the fields. The registry holds a *reference* to the
 pack, not a copy: `fields`/`schema` read `pack.FIELDS`/`pack.SCHEMA` live, so
 there is exactly one field list in the process.
 
-Only `checking` is built in bite 1 — savings and credit-card are the next
-account kinds the model would need, and inventing a stub for either would be
-the hand-kept phantom this file forbids (a name in the registry with no pack
-behind it).
+Bite 2a adds `savings`, `credit_card` and `loan` alongside `checking` — the
+account kinds the household's real books need. Each pack also declares
+`LIABILITY` (a bool); `AccountType.liability` reads it live, the same "read
+through, never copy" posture `fields`/`schema` already take, and `_validate`
+below refuses a pack that leaves it undeclared or not a bool.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ from typing import Any, Mapping
 from homestead.keep.rungs import Rung
 
 from homestead_ledger import packs
-from homestead_ledger.packs import checking, obligations
+from homestead_ledger.packs import checking, credit_card, loan, obligations, savings
 
 __all__ = [
     "AccountType", "REGISTRY", "all_accounts", "account",
@@ -59,6 +60,16 @@ class AccountType:
         """The pack's closed schema, read live."""
         return self.pack.SCHEMA
 
+    @property
+    def liability(self) -> bool:
+        """Whether this account kind is money the household owes rather than
+        money it holds — read live off `pack.LIABILITY`, never copied onto
+        the entry, so there is exactly one flag per pack and no second place
+        it could drift from. `_validate` requires this be a bool on every
+        pack that exists; a pack that has not declared it fails the build
+        rather than this property guessing a default."""
+        return self.pack.LIABILITY
+
 
 def _entry(pack: ModuleType) -> AccountType:
     """An `AccountType` from a pack, reading its own declared `ACCOUNT` — the
@@ -68,10 +79,14 @@ def _entry(pack: ModuleType) -> AccountType:
     return AccountType(name=pack.ACCOUNT, pack=pack)
 
 
-#: The one enumeration (I-23). Only `checking` is built (bite 1); savings and
-#: credit-card are the next account kinds, not built here.
+#: The one enumeration (I-23). `checking` (bite 1), plus `savings`,
+#: `credit_card` and `loan` (bite 2a) — the account kinds the household's
+#: real books need.
 REGISTRY: dict[str, AccountType] = {
     checking.ACCOUNT: _entry(checking),
+    savings.ACCOUNT: _entry(savings),
+    credit_card.ACCOUNT: _entry(credit_card),
+    loan.ACCOUNT: _entry(loan),
 }
 
 
@@ -103,6 +118,14 @@ def _validate(registry: Mapping[str, Any], on_disk: Mapping[str, ModuleType]) ->
                 f"REGISTRY key {key!r} disagrees with its pack's ACCOUNT "
                 f"({entry.pack.ACCOUNT!r}) — an account kind is keyed by the "
                 "name its pack declares, read once, so the two cannot drift."
+            )
+        if not isinstance(getattr(entry.pack, "LIABILITY", None), bool):
+            raise RuntimeError(
+                f"{key}'s pack does not declare LIABILITY as a bool — every "
+                "account pack must say which side of the sign convention it "
+                "is on (an asset the household holds, or a debt it owes) so "
+                "`AccountType.liability` and `balance.running_balance` have "
+                "something to read rather than guess."
             )
 
     unregistered = sorted(set(on_disk) - set(registry))

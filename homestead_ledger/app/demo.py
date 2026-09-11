@@ -40,28 +40,28 @@ TODAY = "2026-08-10"
 #: would — a subscription is just a checking transaction.
 _DEMO_TRANSACTIONS: list[Transaction] = [
     Transaction(
-        account=ACCOUNT, date="2026-08-01", amount="-84.23",
+        account=ACCOUNT, kind=ACCOUNT, date="2026-08-01", amount="-84.23",
         description="Whole Foods Market", account_number="9821",
     ),
     Transaction(
-        account=ACCOUNT, date="2026-08-03", amount="1500.00",
+        account=ACCOUNT, kind=ACCOUNT, date="2026-08-03", amount="1500.00",
         description="Employer Payroll", account_number="9821",
     ),
     Transaction(
-        account=ACCOUNT, date="2026-08-05", amount="-64.10",
+        account=ACCOUNT, kind=ACCOUNT, date="2026-08-05", amount="-64.10",
         description="Electric Co", account_number="9821",
     ),
     # A monthly subscription, three months running — the recurring pattern.
     Transaction(
-        account=ACCOUNT, date="2026-05-15", amount="-15.99",
+        account=ACCOUNT, kind=ACCOUNT, date="2026-05-15", amount="-15.99",
         description="Netflix", account_number="9821",
     ),
     Transaction(
-        account=ACCOUNT, date="2026-06-15", amount="-15.99",
+        account=ACCOUNT, kind=ACCOUNT, date="2026-06-15", amount="-15.99",
         description="Netflix", account_number="9821",
     ),
     Transaction(
-        account=ACCOUNT, date="2026-07-15", amount="-15.99",
+        account=ACCOUNT, kind=ACCOUNT, date="2026-07-15", amount="-15.99",
         description="Netflix", account_number="9821",
     ),
 ]
