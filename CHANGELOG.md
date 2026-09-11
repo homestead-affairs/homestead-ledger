@@ -5,7 +5,12 @@
 
 ### Added
 
-* pair two transactions as a transfer and keep them out of the aggregates ([6185db6](https://github.com/homestead-affairs/homestead-ledger/commit/6185db6eeb88eb9dd9f51af70d8561a077036efd))
+* pair transfers between the household's own accounts (decision 9) ([b498c25](https://github.com/homestead-affairs/homestead-ledger/commit/b498c257b0c881ac32e2a152ca85ab185f74a4fc))
+
+
+### Fixed
+
+* narrow the transfers chokepoint entry, and make a pairing say what happened ([78f4f59](https://github.com/homestead-affairs/homestead-ledger/commit/78f4f59a47f8d5c6c10ff4961abc47bf7b30dd35))
 
 ## [0.6.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.5.0...v0.6.0) (2026-09-11)
 
