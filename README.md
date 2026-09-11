@@ -7,8 +7,10 @@ it, so its store is embedded **SQLite** — a linked library, not a server (the
 face's 2026-08-04 "no listening socket" decision holds; SQLite binds no port).
 The record layer is the engine's: `store.py` is a thin binding —
 `homestead.keep.store`'s adapter contract on a SQLite backing, in the ledger
-database. It **pins the engine from PyPI** — `homestead-affairs>=0.1.0,<1.0` (the
-distribution name; `import homestead` is unchanged) — and shares the
+database. It **pins the engine from PyPI** — ~~`homestead-affairs>=0.1.0,<1.0`~~
+`homestead-affairs>=0.13.0,<1.0` (the distribution name; `import homestead`
+is unchanged; the floor is raised by whichever bite first needs a symbol —
+0.13.0 is E7b's structured fleet values, G7b) — and shares the
 `~/.homestead` root with homestead-law, because a household's affairs are one
 thing.
 
