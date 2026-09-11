@@ -195,9 +195,12 @@ def _cmd_obligation(argv: list[str]) -> int:
 
 _TRANSACTION_USAGE = """\
 usage: homestead-ledger transaction add <date> <amount> <description> --account-number N [--account NAME]
-       homestead-ledger transaction list [--account NAME]
+       homestead-ledger transaction list [--account NAME] [--gaps]
   e.g.: homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account-number 9821
-  (a whole statement: python -m homestead_ledger --import FILE.csv --account-number N)
+  (a whole statement: python -m homestead_ledger --import FILE.csv --account-number N [--bank NAME])
+  --gaps lists rows whose stored date is not ISO (YYYY-MM-DD) — pre-existing
+  rows from before fix: G2c-importer-dates will not dedup against a re-import
+  in the new ISO form; there is no migration (v1 is synthetic-only)
 """
 
 
@@ -206,7 +209,7 @@ def _cmd_transaction(argv: list[str]) -> int:
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import RecordExists
 
-    from homestead_ledger import books, money, registry
+    from homestead_ledger import balance, books, money, registry
     from homestead_ledger.app.window import Window
     from homestead_ledger.packs import checking
     from homestead_ledger.store import Canonical
@@ -218,6 +221,18 @@ def _cmd_transaction(argv: list[str]) -> int:
     sub, rest = args[0], args[1:]
     rest, account = _flag(rest, "--account")
     account = account or checking.ACCOUNT
+    gaps_only = "--gaps" in rest
+    rest = [a for a in rest if a != "--gaps"]
+    # `--gaps` narrows `list` and belongs to no other sub-command. Swallowing
+    # it silently on `add` would let `transaction add … --gaps` write the row
+    # anyway and report success, which is a flag that looks honoured and is
+    # not — the shape a household reads as "it did what I asked".
+    if gaps_only and sub != "list":
+        print(
+            f"  --gaps is only for `transaction list`, not `transaction {sub}`",
+            file=sys.stderr,
+        )
+        return 2
     # I-23: the registry is the only enumeration. An unregistered `--account`
     # would otherwise grow a whole phantom account in the canonical books —
     # rows nothing that iterates `all_accounts()` (the queue, the subscription
@@ -266,6 +281,26 @@ def _cmd_transaction(argv: list[str]) -> int:
     if sub == "list":
         window = Window()
         rows = window.open_list(Canonical().records(account))
+        if gaps_only:
+            # I-16: never `.payload` here — `row.text` is already what
+            # `serve(S1_LIST)` handed back for this L2 field, so checking it
+            # against `balance.is_iso_date` never reaches the record itself.
+            rows = [
+                row for row in rows
+                if row.ref[1] == "date" and not balance.is_iso_date(row.text)
+            ]
+            if not rows:
+                print(f"  {account}: no gaps — every stored date is ISO (YYYY-MM-DD)")
+                return 0
+            print(
+                f"  {account}: {len(rows)} row(s) with a pre-ISO date — imported "
+                "before fix: G2c-importer-dates; will not dedup against a "
+                "re-import in the new ISO form (no migration, v1 is synthetic-only)"
+            )
+            for row in rows:
+                _, field, item_id = row.ref
+                print(f"  [{row.rung.value}]  {item_id[:12]}  {field}: {row.text}")
+            return 0
         if not rows:
             print(f"  {account}: nothing on the books — `homestead-ledger transaction add …` or `--import`")
             return 0

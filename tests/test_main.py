@@ -270,3 +270,19 @@ def test_smoke_actually_imports_the_ui_and_the_cli(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().endswith("0 []"), result.stdout + result.stderr
+
+
+def test_bank_without_import_is_refused_rather_than_silently_dropped(capsys):
+    """`--bank` declares how *a statement's* date column is written. With no
+    `--import` there is no statement, and falling through to the window would
+    run as though the flag had been honoured — the shape a household reads as
+    "it did what I asked"."""
+    assert main(["--bank", "chase"]) == 2
+    assert "--bank only applies to --import" in capsys.readouterr().err
+
+
+def test_bank_is_named_in_the_usage_only_alongside_import(capsys):
+    assert main(["--help"]) == 0
+    out = capsys.readouterr().out
+    assert "--bank NAME" in out
+    assert "--gaps" in out

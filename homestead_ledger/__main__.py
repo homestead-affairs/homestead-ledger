@@ -27,7 +27,7 @@ import sys
 
 USAGE = """\
 usage: python -m homestead_ledger [--help] [--smoke | --demo]
-       python -m homestead_ledger --import FILE --account-number N [--dry-run] [--account NAME]
+       python -m homestead_ledger --import FILE --account-number N [--bank NAME] [--dry-run] [--account NAME]
        homestead-ledger <command> [args...]
 
   --help, -h   show this message and exit
@@ -36,9 +36,21 @@ usage: python -m homestead_ledger [--help] [--smoke | --demo]
                them, headless
   --import FILE --account-number N
                import a bank-statement CSV for one account (header
-               auto-detected: single-amount or debit/credit split); prints
-               the imported/skipped/errors tally. --account defaults to
-               "checking"; --dry-run parses and tallies without writing
+               auto-detected: single-amount or debit/credit split); every
+               row's date is parsed to ISO. --bank NAME declares the day/
+               month order this statement's date column is written in (one
+               of: wells-fargo, chase, bank-of-america, capital-one, usaa,
+               discover, amex) and is tried first, so the declaration is
+               never overruled; a row it does not fit still parses if it is
+               unambiguous on its own (2026-08-01, August 1 2026). A slashed
+               date with no --bank is a per-row error, never a guess. A
+               refusal names the field, never the cell.
+               Prints the imported/skipped/
+               errors tally. --account defaults to "checking"; --dry-run
+               parses and tallies without writing. Rows imported before this
+               fix with a slashed, unparsed date will not dedup against a
+               re-import in the new ISO form — no migration (v1 is
+               synthetic-only); `transaction list --gaps` finds them.
   (default)    open the tkinter view on the cover — requires tkinter and a
                display; falls back to a guidance message if neither is present
 
@@ -46,7 +58,7 @@ commands (real data, in the household root — $HOMESTEAD_HOME or ~/.homestead):
   obligation   obligation add <id> <payee> <amount> <due-date> <cadence> [--replace]
                obligation list · obligation show <id>
   transaction  transaction add <date> <amount> <description> --account-number N
-               transaction list [--account NAME]
+               transaction list [--account NAME] [--gaps]
   queue        queue — what's due
   ui           ui [--port N] — entry forms, intake, queue and subscriptions in the browser
 
@@ -134,6 +146,16 @@ def main(argv: list[str] | None = None) -> int:
         from homestead_ledger.cli import run_cli
         return run_cli(argv)
 
+    if "--bank" in argv and "--import" not in argv:
+        # `--bank` declares how *a statement's* date column is written; with
+        # no statement to import it is a declaration about nothing, and
+        # falling through to the window would run as if it had been honoured.
+        print(
+            "homestead-ledger: --bank only applies to --import FILE",
+            file=sys.stderr,
+        )
+        return 2
+
     if "--import" in argv:
         # Bite 4 — a bank-statement CSV import, headless, no tkinter touched.
         # Imported inside this branch so `--smoke` and every other path stay
@@ -167,6 +189,15 @@ def main(argv: list[str] | None = None) -> int:
                 print("homestead-ledger: --account requires a value", file=sys.stderr)
                 return 2
 
+        bank = None
+        if "--bank" in argv:
+            try:
+                bank_index = argv.index("--bank")
+                bank = argv[bank_index + 1]
+            except IndexError:
+                print("homestead-ledger: --bank requires a value", file=sys.stderr)
+                return 2
+
         # I-23: the registry is the only enumeration. An unregistered account
         # name here would import a whole statement into a phantom account —
         # rows in the canonical books that nothing iterating `all_accounts()`
@@ -183,7 +214,8 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             result = importer.import_csv(
-                csv_path, account=account, account_number=account_number, dry_run=dry_run,
+                csv_path, account=account, account_number=account_number, bank=bank,
+                dry_run=dry_run,
             )
         except (ValueError, FileNotFoundError) as exc:
             print(f"homestead-ledger: import failed — {exc}", file=sys.stderr)
