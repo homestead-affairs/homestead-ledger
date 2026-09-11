@@ -1064,11 +1064,49 @@ def test_api_schedules_mirrors_rows_exactly_and_derives_the_amounts(ui):
     assert "1200.00" not in json.dumps(data)
 
 
+def _nested_function_body(source: str, name: str, next_name: str) -> str:
+    """The source of the nested `def <name>` inside `source`, cut at the next
+    `def <next_name>`. A slice of the module's own text, so a membership
+    question of it is a scan of the tree and not of a string built here."""
+    after = source.split(f"def {name}")
+    assert len(after) == 2, f"expected exactly one `def {name}` in the source"
+    return after[1].split(f"def {next_name}")[0]
+
+
+def test_the_nested_function_body_scan_fires_on_a_planted_route(tmp_path):
+    """Planted: a `_route_post` that does name a schedules path. The cut must
+    return the POST router's body and nothing of the function after it, or
+    the export-door check below would pass on a door that exists."""
+    planted = (
+        "def build_server():\n"
+        "    def _route_get(path):\n"
+        "        return '/api/schedules/export'\n"
+        "    def _route_post(path):\n"
+        "        return '/api/schedules/export'\n"
+        "    def _field(name):\n"
+        "        return '/api/schedules/export'\n"
+    )
+    block = _nested_function_body(planted, "_route_post", "_field")
+    assert "schedule" in block, "the planted POST route must be reported"
+    assert "_route_get" not in block and "def _field" not in block, (
+        "the cut must not spill into the functions either side of it"
+    )
+    clean = planted.replace("    def _route_post(path):\n        return '/api/schedules/export'\n",
+                            "    def _route_post(path):\n        return None\n")
+    assert "schedule" not in _nested_function_body(clean, "_route_post", "_field")
+
+
 def test_there_is_no_export_door_on_the_server(ui):
     """An export is an operator act at the terminal, confirmed there. The
     browser has a read door and no write one — neither a GET nor a POST
     reaches an export, and `_route_post` names no schedules path at all, so
-    a door cannot be added without this failing."""
+    a door cannot be added without this failing.
+
+    2026-09-11 (audit): the `_route_post` cut is now
+    `_nested_function_body`, planted above — it was an inline scan of
+    `build_server`'s own source, read through `inspect.getsource` rather
+    than `read_text`, which is why the first pass of
+    `tests/test_scans_fire.py`'s inline half could not see it."""
     import inspect
 
     for path in ("/api/schedules/export", "/api/schedule/export"):
@@ -1083,8 +1121,9 @@ def test_there_is_no_export_door_on_the_server(ui):
     status, _ = ui.get("/api/schedules")
     assert status == 200                                  # the read door is there
 
-    source = inspect.getsource(server.build_server)
-    post_block = source.split("def _route_post")[1].split("def _field")[0]
+    post_block = _nested_function_body(
+        inspect.getsource(server.build_server), "_route_post", "_field"
+    )
     assert "schedule" not in post_block
 
 

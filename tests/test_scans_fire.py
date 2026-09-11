@@ -104,8 +104,69 @@ _MATCH_CALLS = frozenset(
     {"search", "findall", "finditer", "match", "fullmatch", "compile"}
 )
 
-#: Reading a repo file's text. The grep half of a grep-shaped scan.
+#: Reading a file's text through `pathlib`. The grep half of a grep-shaped
+#: scan, in the spelling this suite reaches for first.
 _TEXT_READS = frozenset({"read_text", "read_bytes"})
+
+#: The same read through an already-open handle — `open(p).read()`, and the
+#: `with open(p) as f: f.read()` this suite would write it as. A rule that
+#: knew only `_TEXT_READS` cleared a scan written with the builtin, which is
+#: not a documented boundary, just a spelling it had not been shown (audit,
+#: 2026-09-11).
+_HANDLE_READS = frozenset({"read", "readlines", "readline"})
+
+#: Wrappers a read may be decoded or normalised through before the
+#: membership question is asked — `p.read_bytes().decode()` is the same read
+#: of the same file, and the text it yields is the text actually read.
+_TEXT_WRAPPERS = frozenset({"decode", "strip", "lower", "upper", "casefold"})
+
+#: Reading a module's source without touching the filesystem by hand.
+#: `inspect.getsource(obj)` returns the real file's text — a membership
+#: question of it is a scan of the tree by any honest reading, and
+#: `tests/test_server.py` had exactly one (a `_route_post` slice asserted not
+#: to name "schedule") that no rule here could see (audit, 2026-09-11).
+_SOURCE_READS = frozenset({"getsource", "getsourcelines"})
+
+
+def _is_open_call(expr: ast.AST) -> bool:
+    """A builtin `open(...)`, however its mode and encoding are spelled."""
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id == "open"
+    )
+
+
+def _open_handles(node: ast.AST) -> frozenset[str]:
+    """Every local name bound to an `open(...)` — `with open(p) as f` and
+    `f = open(p)` alike — so `f.read()` is recognised as the file read it
+    is."""
+    names: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.withitem) and _is_open_call(sub.context_expr):
+            if isinstance(sub.optional_vars, ast.Name):
+                names.add(sub.optional_vars.id)
+        elif isinstance(sub, ast.Assign) and _is_open_call(sub.value):
+            names.update(t.id for t in sub.targets if isinstance(t, ast.Name))
+    return frozenset(names)
+
+
+def _is_read_call(expr: ast.AST, handles: frozenset[str] = frozenset()) -> bool:
+    """True if `expr` itself reads a real file's text — `.read_text()`/
+    `.read_bytes()`, `open(...).read()` or an open handle's `.read()`, or
+    `inspect.getsource(...)` — through any number of decoding wrappers."""
+    if not isinstance(expr, ast.Call) or not isinstance(expr.func, ast.Attribute):
+        return False
+    attr = expr.func.attr
+    if attr in _TEXT_READS or attr in _SOURCE_READS:
+        return True
+    if attr in _HANDLE_READS:
+        return _is_open_call(expr.func.value) or (
+            isinstance(expr.func.value, ast.Name) and expr.func.value.id in handles
+        )
+    if attr in _TEXT_WRAPPERS:
+        return _is_read_call(expr.func.value, handles)
+    return False
 
 
 def _calls_in(node: ast.AST):
@@ -139,11 +200,10 @@ def _matches_text(node: ast.AST) -> bool:
 
 
 def _reads_file_text(node: ast.AST) -> bool:
-    """True if the body reads a file's text itself."""
-    return any(
-        isinstance(call.func, ast.Attribute) and call.func.attr in _TEXT_READS
-        for call in _calls_in(node)
-    )
+    """True if the body reads a file's text itself, in any of the spellings
+    `_is_read_call` knows."""
+    handles = _open_handles(node)
+    return any(_is_read_call(call, handles) for call in _calls_in(node))
 
 
 def _tests_membership(node: ast.AST) -> bool:
@@ -648,40 +708,85 @@ def test_a_docstring_that_says_planted_does_clear_the_scan(tmp_path):
 # the word-list shape away from.
 
 
-def _is_read_call(expr: ast.AST) -> bool:
-    """True if `expr` itself is a `.read_text()`/`.read_bytes()` call —
-    reading a real file, not a string the test built."""
-    return (
-        isinstance(expr, ast.Call)
-        and isinstance(expr.func, ast.Attribute)
-        and expr.func.attr in _TEXT_READS
-    )
+#: String operations that narrow text without turning it into something
+#: else: `source.split("def _route_post")[1]` is still the file's own text,
+#: and a membership question of it is still a question of the tree. The list
+#: is deliberately all `str`/`bytes` methods — `json.loads(...)` is a bare
+#: call to a *name*, not one of these, so a dict built from a read is still
+#: several steps removed and still not a scan.
+_TEXT_SLICERS = _TEXT_WRAPPERS | frozenset(
+    {"split", "rsplit", "splitlines", "partition", "rpartition", "replace",
+     "lstrip", "rstrip", "removeprefix", "removesuffix"}
+)
+
+
+def _text_root(expr: ast.AST) -> ast.AST:
+    """Peel subscripts and `_TEXT_SLICERS` calls off `expr` and return what
+    the text ultimately came from."""
+    while True:
+        if isinstance(expr, ast.Subscript):
+            expr = expr.value
+        elif (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr in _TEXT_SLICERS
+        ):
+            expr = expr.func.value
+        else:
+            return expr
 
 
 def _direct_text_names(func: ast.FunctionDef) -> frozenset[str]:
-    """Local names assigned directly from a `.read_text()`/`.read_bytes()`
-    call — one level, no chain through `json.loads` or anything else. The
-    membership question this rule means is asked of the text actually read."""
+    """Local names holding the text of a file this function read — bound
+    straight from the read, or from a slice of one such name through
+    `_TEXT_SLICERS` alone. Nothing that turns the text into another kind of
+    object (`json.loads`, `tomllib.loads`, a `Path.parents`) is traced, so
+    `"x" in pyproject["project"]` stays the ordinary assertion it is."""
+    handles = _open_handles(func)
     names: set[str] = set()
-    for node in ast.walk(func):
-        if isinstance(node, ast.Assign):
-            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            if targets and _is_read_call(node.value):
+    assigns = [
+        (
+            [t.id for t in node.targets if isinstance(t, ast.Name)],
+            _text_root(node.value),
+        )
+        for node in ast.walk(func)
+        if isinstance(node, ast.Assign)
+    ]
+    for _ in range(len(assigns) + 1):  # to a fixed point; each pass adds ≥1 or stops
+        grew = False
+        for targets, root in assigns:
+            if not targets or set(targets) <= names:
+                continue
+            if _is_read_call(root, handles) or (
+                isinstance(root, ast.Name) and root.id in names
+            ):
                 names.update(targets)
+                grew = True
+        if not grew:
+            break
     return frozenset(names)
 
 
-def _is_text_source(expr: ast.AST, direct_names: frozenset[str]) -> bool:
-    return _is_read_call(expr) or (isinstance(expr, ast.Name) and expr.id in direct_names)
+def _is_text_source(
+    expr: ast.AST, direct_names: frozenset[str], handles: frozenset[str]
+) -> bool:
+    root = _text_root(expr)
+    return _is_read_call(root, handles) or (
+        isinstance(root, ast.Name) and root.id in direct_names
+    )
 
 
 def _membership_on_read_text(node: ast.FunctionDef) -> bool:
     """A membership test whose text side is a file read — directly, or
-    through a name `_direct_text_names` traces one level to one."""
+    through a name `_direct_text_names` traces back to one."""
     direct_names = _direct_text_names(node)
+    handles = _open_handles(node)
     for sub in ast.walk(node):
         if isinstance(sub, ast.Compare) and any(isinstance(op, (ast.In, ast.NotIn)) for op in sub.ops):
-            if any(_is_text_source(operand, direct_names) for operand in (sub.left, *sub.comparators)):
+            if any(
+                _is_text_source(operand, direct_names, handles)
+                for operand in (sub.left, *sub.comparators)
+            ):
                 return True
     return False
 
@@ -822,6 +927,72 @@ def test_the_inline_scan_check_finds_a_scan_written_directly_in_a_test_body(tmp_
         "            assert 'banned' not in {a.name for a in node.names}\n",
     )
     assert _inline_scan_tests(source, frozenset()) == ["test_no_banned_import_at_module_scope"]
+
+
+def test_the_inline_scan_check_knows_every_spelling_of_reading_a_real_file(tmp_path):
+    """Planted, one per spelling the first pass did not know. `read_text`
+    was the only read it recognised, so the same scan written with the
+    builtin `open`, with a `with` block, through `read_bytes().decode()`, or
+    through `inspect.getsource` was cleared — not by a documented rule, just
+    by a spelling it had not been shown (audit, 2026-09-11)."""
+    spellings = {
+        "open_chain": "    text = open('x', encoding='utf-8').read()\n",
+        "open_with": (
+            "    with open('x', encoding='utf-8') as handle:\n"
+            "        text = handle.read()\n"
+        ),
+        "read_bytes_decode": "    text = Path('x').read_bytes().decode()\n",
+        "getsource": "    text = inspect.getsource(Path)\n",
+    }
+    for label, read in spellings.items():
+        source = _write(
+            tmp_path,
+            f"test_planted_read_{label}.py",
+            "import inspect\n"
+            "from pathlib import Path\n"
+            "\n"
+            "def test_no_banned_word():\n"
+            f"{read}"
+            "    assert 'banned' not in text\n",
+        )
+        assert _inline_scan_tests(source, frozenset()) == ["test_no_banned_word"], (
+            f"reading a real file via {label} is reading a real file"
+        )
+
+
+def test_the_inline_scan_check_follows_a_slice_of_the_text_but_not_a_parse_of_it(tmp_path):
+    """The boundary the one-level rule draws, planted both ways. A `.split()`
+    of the text read is still that text — `tests/test_server.py`'s
+    `_route_post` cut was exactly this shape and went unseen — but a dict
+    `json.loads` built from it is another kind of object, and asking
+    membership of *that* is the ordinary assertion this rule must not cry
+    wolf on."""
+    sliced = _write(
+        tmp_path,
+        "test_planted_sliced_text.py",
+        "from pathlib import Path\n"
+        "\n"
+        "def test_the_post_router_names_no_export():\n"
+        "    source = Path('x').read_text(encoding='utf-8')\n"
+        "    block = source.split('def _route_post')[1].split('def _field')[0]\n"
+        "    assert 'export' not in block\n",
+    )
+    assert _inline_scan_tests(sliced, frozenset()) == ["test_the_post_router_names_no_export"]
+
+    parsed = _write(
+        tmp_path,
+        "test_planted_parsed_text.py",
+        "import json\n"
+        "from pathlib import Path\n"
+        "\n"
+        "def test_the_document_declares_a_version():\n"
+        "    loaded = json.loads(Path('x').read_text(encoding='utf-8'))\n"
+        "    assert 'version' in loaded['project']\n",
+    )
+    assert _inline_scan_tests(parsed, frozenset()) == [], (
+        "a dict parsed out of the text is not the text; a rule that reported "
+        "this gets an allow-list bolted to it and stops meaning anything"
+    )
 
 
 def test_the_inline_scan_check_does_not_fire_on_a_string_the_test_built(tmp_path):
