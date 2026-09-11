@@ -129,6 +129,28 @@ def test_no_composed_field_is_above_l4_so_none_can_deny_on_egress(store):
     assert pack.FIELDS["number"] is Rung.L5
 
 
+def test_the_composed_rung_check_fires_on_a_planted_l5_field(store):
+    """The rung check above had never been shown to catch anything: it reads
+    the real `_OPTIONAL_FIELDS`, which is L4 today and would be L4 under a
+    check that did nothing. Planted — `number` added to the tuple — the
+    composition must read `L5`, which is what makes the assertion above a
+    guard rather than a restatement of today's table.
+
+    Planted in a local tuple rather than by patching the module: what is
+    being proven is that the *arithmetic* rises, and a monkeypatched module
+    constant would prove the same thing while leaving a torn `schedules`
+    behind if the test failed midway."""
+    from homestead.keep.rungs import compose as _compose_rungs
+
+    from homestead_ledger.packs import accounts as pack
+
+    planted = ("kind", *schedules._OPTIONAL_FIELDS, "number")
+    assert _compose_rungs(*(pack.FIELDS[f] for f in planted)) is Rung.L5, (
+        "an L5 field in the composition must raise the composed rung to L5 — "
+        "otherwise the check above cannot notice one being added"
+    )
+
+
 # ── two surfaces, two dispositions ──────────────────────────────────────────
 
 
