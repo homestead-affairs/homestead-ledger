@@ -386,7 +386,7 @@ usage: homestead-ledger transaction add <date> <amount> <description> --account 
        homestead-ledger transaction tag <fingerprint> [--category C] [--note N]
                                         [--merchant M] [--do-not-use] [--replace]
   e.g.: homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account chk-main
-        homestead-ledger transaction tag a1b2c3d4e5f6 --category groceries
+        homestead-ledger transaction tag a1b2c3d4e5f6 --category groceries  (a prefix is enough)
   (a whole statement: python -m homestead_ledger --import FILE.csv --account <label>)
   <label> is a registered account instance — `account add` first, `account
   list` to see what's on file. The account number and kind live on the
@@ -394,10 +394,12 @@ usage: homestead-ledger transaction add <date> <amount> <description> --account 
   --gaps lists rows whose stored date is not ISO (YYYY-MM-DD) — pre-existing
   rows from before fix: G2c-importer-dates will not dedup against a re-import
   in the new ISO form; there is no migration (v1 is synthetic-only)
-  `tag` names a fingerprint already on the books (`transaction list` shows
-  it) — a category is a closed-shape word, raised automatically wherever it
-  names a protected matter (medical, legal, …); --do-not-use excludes the
-  transaction from recurring detection, budget envelopes and every export.
+  `tag` names a fingerprint already on the books — the whole one, or the
+  twelve characters `transaction list` prints (a prefix naming two rows is
+  refused, never guessed). A category is a closed-shape word, raised
+  automatically wherever it names a protected matter (medical, legal, …);
+  --do-not-use excludes the transaction from recurring detection, budget
+  envelopes and every export, and is set here, never cleared.
 """
 
 
@@ -438,7 +440,10 @@ def _cmd_transaction_tag(rest: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
-    print(f"  tagged: {overlay.MATTER}/{fingerprint[:12]}…  ({', '.join(sorted(written))})")
+    # The *resolved* fingerprint, read back off a written ref — a prefix the
+    # operator typed is not the key anything was written under.
+    resolved = next(iter(written.values()))[0][2]
+    print(f"  tagged: {overlay.MATTER}/{resolved[:12]}…  ({', '.join(sorted(written))})")
     return 0
 
 

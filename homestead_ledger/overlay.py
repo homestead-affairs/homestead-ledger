@@ -41,7 +41,8 @@ from homestead_ledger.store import Canonical, RecordExists, Ref, Replaced, Sidec
 
 __all__ = [
     "MATTER", "FIELDS", "PROTECTED_CATEGORY_WORDS",
-    "unknown_fingerprint", "tag", "tags_of", "excluded_fingerprints",
+    "unknown_fingerprint", "ambiguous_fingerprint",
+    "tag", "tags_of", "excluded_fingerprints",
 ]
 
 MATTER = pack.MATTER
@@ -57,6 +58,18 @@ _TAG_FIELDS = ("category", "confirmed_merchant", "note")
 #: (`obligations._ID`, `accounts._ID`).
 _CATEGORY = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 
+#: What a free-text field will hold. A field with no ceiling is a place to
+#: paste a bank statement into, and an `L4` note that holds a statement is a
+#: statement classified as a note. `confirmed_merchant` is a *name* and gets
+#: a name's length; `note` is a sentence or two about one row.
+_TEXT_LIMITS = {"confirmed_merchant": 120, "note": 2000}
+
+#: The shortest prefix `tag` will resolve to a whole fingerprint. `cli.py`'s
+#: `transaction list` shows twelve characters and the browser row carries the
+#: whole thing in `data-fp`, so eight is already shorter than anything a
+#: surface offers to copy; below that a string is a typo, not a reference.
+_MIN_PREFIX = 8
+
 
 def unknown_fingerprint(fingerprint: str) -> str:
     """The "no such transaction" refusal. Names the fingerprint the operator
@@ -69,15 +82,58 @@ def unknown_fingerprint(fingerprint: str) -> str:
     )
 
 
-def _on_file(canonical: Canonical, sidecar: Sidecar, fingerprint: str) -> bool:
-    """Whether `fingerprint` names a real transaction on *any* registered
-    account instance. A fingerprint carries no account of its own — `tag`
-    takes only the fingerprint, as `obligations.mark_paid` already does for
-    its own — so confirming it exists means checking every instance
-    (`accounts.instances`), the same posture `/api/subscriptions` already
-    takes. A household holds a handful of accounts; this is not CSV import's
-    hot path."""
-    return any(canonical.has(label, "date", fingerprint) for label in accounts.instances(sidecar))
+def ambiguous_fingerprint(prefix: str, count: int) -> str:
+    """The "that prefix names more than one transaction" refusal. Names the
+    prefix the operator typed and *how many* rows begin with it — a count is
+    not a row (I-15) — never which rows, never a date, amount or description
+    of either."""
+    return (
+        f"{prefix!r}: {count} transactions on the books begin with that. A "
+        "prefix has to name exactly one row: type more of the fingerprint "
+        "(the whole one always works) and tag again."
+    )
+
+
+def _resolve(canonical: Canonical, sidecar: Sidecar, fingerprint: str) -> str:
+    """The **whole** fingerprint `fingerprint` names, or a refusal.
+
+    Two rules, and they are the bite's ruling on truncated ids:
+
+    1. **A key is always the whole fingerprint.** The item id this module
+       writes under is the same 64-hex sha256 `books.import_transaction`
+       keys the canonical row under — never a truncation of one. The engine's
+       `keep.store.key` puts no length or alphabet on an item id (it refuses a
+       separator, a `..`, a NUL and surrounding whitespace, and nothing else),
+       so the whole digest is a valid id and there is nothing to shorten.
+       Truncation would *create* the collision that hashing rules out.
+    2. **Only what the operator types may be short.** `transaction list`
+       prints twelve characters, so a prefix is what a household actually has
+       to hand; it is resolved here, against the books, to the one whole
+       fingerprint it names. A prefix matching two rows is **refused by name**
+       (`ambiguous_fingerprint`) rather than resolved to the first — the only
+       place a shortened id could ever pick the wrong row, closed.
+
+    Checks every registered instance (`accounts.instances`): a fingerprint
+    carries no account of its own — `tag` takes only the fingerprint, as
+    `obligations.mark_paid` already does for its own. A household holds a
+    handful of accounts; this is not CSV import's hot path.
+    """
+    labels = accounts.instances(sidecar)
+    if any(canonical.has(label, "date", fingerprint) for label in labels):
+        return fingerprint
+    if len(fingerprint) < _MIN_PREFIX:
+        raise ValueError(unknown_fingerprint(fingerprint))
+    matches = sorted({
+        item_id
+        for label in labels
+        for (_, field, item_id), _record in canonical.records(label)
+        if field == "date" and item_id.startswith(fingerprint)
+    })
+    if not matches:
+        raise ValueError(unknown_fingerprint(fingerprint))
+    if len(matches) > 1:
+        raise ValueError(ambiguous_fingerprint(fingerprint, len(matches)))
+    return matches[0]
 
 
 def _category(value: object) -> str:
@@ -92,16 +148,39 @@ def _category(value: object) -> str:
 
 
 def _is_protected(category: str) -> bool:
-    """Substring containment, not an exact match: `medical-copay` contains
-    `medical` — the false-negative direction is the one this must not take
-    (see `packs/overlay.py`)."""
+    """Whether the category *string* contains a `PROTECTED_CATEGORY_WORDS`
+    word as a **substring** — not whether one of its `-`-separated tokens
+    equals one.
+
+    The rule and the reason are pinned in `packs/overlay.py`: substring
+    containment over-classifies (`medically-unrelated-shop` contains
+    `medical` and is raised) and never under-classifies, and over-classifying
+    is the direction "argue up, never down" permits. A token rule would leave
+    `medically-unrelated-shop` on the list at `L3`; this one does not."""
     return any(word in category for word in PROTECTED_CATEGORY_WORDS)
 
 
 def _text(value: object, *, field: str) -> str:
+    """One free-text field's value: non-empty, under `_TEXT_LIMITS[field]`,
+    and — for a merchant *name* — one line of ordinary text. The refusals
+    name the field and the limit, never the value (I-15)."""
+    name = field.replace("_", " ")
     text = str(value).strip()
     if not text:
-        raise ValueError(f"a {field.replace('_', ' ')}, if given, is not empty")
+        raise ValueError(f"a {name}, if given, is not empty")
+    if len(text) > _TEXT_LIMITS[field]:
+        raise ValueError(
+            f"a {name} is at most {_TEXT_LIMITS[field]} characters — the "
+            "overlay says something about a transaction; it is not a place "
+            "to keep a document"
+        )
+    if any(ord(ch) < 32 and ch != "\n" for ch in text) or (
+        field == "confirmed_merchant" and "\n" in text
+    ):
+        raise ValueError(
+            f"a {name} is plain text — a control character is not part of "
+            "a name a household would recognise"
+        )
     return text
 
 
@@ -122,8 +201,14 @@ def tag(
 
     `fingerprint` must already be on the books — refused **by name**, before
     anything is written, when it is not (`unknown_fingerprint`), never
-    echoing a row this happened to find while looking. `canonical` defaults
-    to `Canonical()`; a caller passes one only to point at another database.
+    echoing a row this happened to find while looking. It may be the whole
+    64-hex fingerprint or a prefix of at least `_MIN_PREFIX` characters (what
+    `transaction list` prints); a prefix that names two rows is refused
+    (`ambiguous_fingerprint`), never resolved to the first — see `_resolve`,
+    which is also this bite's ruling on truncated ids. **The record is always
+    keyed by the whole fingerprint**, whatever was typed. `canonical`
+    defaults to `Canonical()`; a caller passes one only to point at another
+    database.
 
     At least one of `category`/`note`/`confirmed_merchant`/`do_not_use` must
     be given.
@@ -143,12 +228,20 @@ def tag(
     `category` containing a `PROTECTED_CATEGORY_WORDS` word is written at
     `L4`, never the declared `L3` floor — see the module docstring.
     """
-    fp = str(fingerprint).strip()
-    if not fp:
+    typed = str(fingerprint).strip()
+    if not typed:
         raise ValueError("a fingerprint is required")
+    if do_not_use is False:
+        # Not the same as leaving it out. There is no un-tag path in this
+        # bite, so a `False` that quietly wrote nothing would read to the
+        # caller as "cleared" — fail closed and say so (I-11).
+        raise ValueError(
+            "do_not_use is set here, never cleared: there is no un-tag path "
+            "yet, so passing it as false would silently do nothing. Leave it "
+            "out instead."
+        )
     canon = canonical if canonical is not None else Canonical()
-    if not _on_file(canon, store, fp):
-        raise ValueError(unknown_fingerprint(fp))
+    fp = _resolve(canon, store, typed)
 
     values: dict[str, Classified] = {}
     if category is not None:

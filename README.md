@@ -204,19 +204,25 @@ say things *about* one transaction without ever touching the row itself:
 Records tab). The fingerprint is what `transaction add`/`--import` already
 print and `transaction list` already shows by reference — a transaction must
 already be on the books before it can be tagged, and an unknown fingerprint
-is refused by name, never by echoing what a lookup happened to find.
+is refused by name, never by echoing what a lookup happened to find. The
+whole fingerprint or a prefix of it (the twelve characters `transaction list`
+prints) both work; a prefix that names two rows is refused rather than
+resolved to one of them, and the record is keyed by the whole fingerprint
+whatever was typed.
 
 - **`--category`** is a short, closed-shape word (lowercase letters, digits
   and hyphens — `groceries`, `medical-copay`): **L3**, so an ordinary one
   renders on the list. A category whose text *contains* a word from a closed,
-  hand-reviewed list — `medical`, `therapy`, `pharmacy`, `attorney`, `legal`,
-  `court`, `bankruptcy`, `child-support`, `union`, `church`, `donation`,
-  `political` — is written at **L4** instead, automatically: the list renders
-  "a category is on file" rather than the word itself, and the real word is
-  there only once the transaction's detail is opened. **This advisory only
-  ever raises a category's rung, never lowers one** — there is no path that
-  takes an already-flagged category back down, the same "argue up, never
-  down" rule the engine's own content-shape advisory follows.
+  hand-reviewed list — health and care, legal process, insolvency, family,
+  belief, association, political activity, immigration status; the list
+  itself is `PROTECTED_CATEGORY_WORDS` in `homestead_ledger/packs/overlay.py`
+  and is the one copy — is written at **L4** instead, automatically: the list
+  renders "a category is on file" rather than the word itself, and the real
+  word is there only once the transaction's detail is opened. Matching is
+  substring, not whole-word, so it over-classifies and never under-classifies.
+  **This advisory only ever raises a category's rung, never lowers one** —
+  there is no path that takes an already-flagged category back down, the same
+  "argue up, never down" rule the engine's own content-shape advisory follows.
 - **`--merchant`** confirms a resolved payee name (L3, renders).
 - **`--note`** is free text (L4 always — open text can name anything, so it
   is classified at the ceiling from the start, unlike `--category`'s floor):
@@ -227,7 +233,9 @@ is refused by name, never by echoing what a lookup happened to find.
   and export: a household's own transfer, a duplicate import, or a row that
   should never shape a pattern. It marks by reference on the list (a
   `do-not-use` flag), never a value read off the field. Transfers and the
-  budget pass are later consumers of this same exclusion.
+  budget pass are later consumers of this same exclusion. It is set, never
+  cleared: there is no un-tag path yet, and a `--do-not-use` passed as false
+  is refused rather than quietly ignored.
 
 Each of the four fields is its own record, independently gated (I-9): setting
 `--category` today does not occupy `--note` for next month, and re-tagging an

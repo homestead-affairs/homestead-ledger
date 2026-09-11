@@ -317,3 +317,161 @@ def test_the_visible_log_carries_a_reference_never_the_tagged_content(tmp_path, 
     # exercised directly rather than assumed)
     with pytest.raises(TypeError):
         VisibleLog().record("tagged", ref=(overlay.MATTER, fp))
+
+
+# ── the protected list is held to the categories a step 1 would name ───────
+
+#: One ordinary way a household writes each protected category a rung
+#: procedure's step 1 names. Every one of these must land at `L4`: a word
+#: dropped from `PROTECTED_CATEGORY_WORDS` shows up here as a category
+#: sitting at `L3`, which is a category *rendered on the list* — the exact
+#: failure the list exists to prevent, and one no other test in this file
+#: would notice (the parametrized test above only checks the words that are
+#: already on the list, so it can never catch one that is missing).
+PROTECTED_CATEGORIES = (
+    "medical-copay", "health-insurance", "therapy-session", "pharmacy",
+    "clinic-visit", "hospital-bill", "dental-work", "doctor-visit",
+    "psych-eval", "rehab-program",
+    "attorney-retainer", "legal-fees", "counseling", "counsel-retainer",
+    "court-filing", "bankruptcy-trustee", "trustee-payment",
+    "child-support", "custody-evaluator",
+    "church-offering", "religious-school", "mosque-donation",
+    "synagogue-dues", "temple-fees", "tithe",
+    "union-dues", "political-donation", "immigration-attorney",
+)
+
+
+@pytest.mark.parametrize("category", PROTECTED_CATEGORIES)
+def test_every_protected_category_a_household_would_write_lands_at_l4(
+    tmp_path, monkeypatch, make_account, store, category,
+):
+    fp = _seed(monkeypatch, tmp_path, make_account, description=f"row for {category}")
+    overlay.tag(store, fp, category=category)
+    assert store.get(overlay.MATTER, "category", fp).rung is Rung.L4
+    # and therefore never the word itself on the list
+    assert overlay.tags_of(store, fp)["category"] == pack.SCHEMA["category"]["derived"]
+
+
+def test_the_matching_rule_is_substring_not_whole_word(tmp_path, monkeypatch, make_account, store):
+    """Pinned, because the two rules disagree and only one of them is safe:
+    `medically-unrelated-shop` contains `medical` but has no `-`-separated
+    token equal to it. Substring containment raises it (over-classifies);
+    a whole-word rule would leave it at `L3`, rendered on the list. The
+    advisory argues up, never down, so over-classification is the side this
+    is allowed to be wrong on."""
+    assert overlay._is_protected("medically-unrelated-shop") is True
+    assert overlay._is_protected("legalize-parking") is True
+    # …and a category naming nothing on the list is untouched, so the rule
+    # is not simply "everything is L4".
+    assert overlay._is_protected("groceries") is False
+    fp = _seed(monkeypatch, tmp_path, make_account)
+    overlay.tag(store, fp, category="medically-unrelated-shop")
+    assert store.get(overlay.MATTER, "category", fp).rung is Rung.L4
+
+
+# ── the item id is the whole fingerprint; a typed prefix is resolved ───────
+
+def test_the_record_is_keyed_by_the_whole_fingerprint_never_a_truncation(
+    tmp_path, monkeypatch, make_account, store,
+):
+    """The bite's ruling on truncated ids: the engine's `keep.store.key` puts
+    no length or alphabet on an item id, so the 64-hex digest is a valid id
+    and there is nothing to shorten — truncation would *create* the collision
+    hashing rules out."""
+    fp = _seed(monkeypatch, tmp_path, make_account)
+    assert len(fp) == 64
+    engine_key(overlay.MATTER, "category", fp)          # a valid key as it stands
+    overlay.tag(store, fp[:12], category="groceries")   # typed short…
+    assert store.has(overlay.MATTER, "category", fp)    # …written long
+    assert not store.has(overlay.MATTER, "category", fp[:12])
+    assert overlay.excluded_fingerprints(store) == frozenset()
+
+
+def test_a_prefix_shorter_than_the_minimum_is_refused_by_name(tmp_path, monkeypatch, make_account, store):
+    fp = _seed(monkeypatch, tmp_path, make_account)
+    with pytest.raises(ValueError) as exc:
+        overlay.tag(store, fp[:4], category="groceries")
+    assert "no such transaction" in str(exc.value)
+
+
+def test_an_ambiguous_prefix_is_refused_never_resolved_to_the_first(
+    tmp_path, monkeypatch, make_account, store,
+):
+    """Planted, because two sha256 digests sharing eight hex characters
+    cannot be found by searching for them: two canonical rows are written
+    straight through the adapter under ids that *do* collide on a prefix, and
+    the refusal has to fire rather than pick one."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    make_account("checking", label=LABEL, number="9821")
+    adapter = SQLiteAdapter(paths.home() / "homestead-ledger.db")
+    blob = json.dumps({"rung": "L2", "payload": "2020-01-01", "derived": None})
+    ids = ["abc12345" + "0" * 56, "abc12345" + "1" * 56]
+    for item_id in ids:
+        assert adapter.insert(CANONICAL, engine_key(LABEL, "date", item_id), blob) is True
+
+    with pytest.raises(ValueError) as exc:
+        overlay.tag(store, "abc12345", category="groceries")
+    message = str(exc.value)
+    assert "abc12345" in message and "2 transactions" in message
+    # a count, never which rows (I-15)
+    assert ids[0] not in message and ids[1] not in message
+    assert list(store.records(overlay.MATTER)) == []
+
+    # the whole id still resolves to exactly its own row
+    overlay.tag(store, ids[0], category="groceries")
+    assert store.has(overlay.MATTER, "category", ids[0])
+    assert not store.has(overlay.MATTER, "category", ids[1])
+
+
+# ── free text has a ceiling, and do_not_use is set, never cleared ──────────
+
+@pytest.mark.parametrize("field,value", [
+    ("note", "x" * 2001),
+    ("confirmed_merchant", "x" * 121),
+    ("confirmed_merchant", "Wells Fargo\nWire Desk"),
+    ("note", "a note with a \x00 in it"),
+])
+def test_free_text_that_is_not_a_note_or_a_name_is_refused(
+    tmp_path, monkeypatch, make_account, store, field, value,
+):
+    """An `L4` field with no ceiling is a place to paste a bank statement
+    into, and a statement pasted into a note is a statement classified as a
+    note. The refusal names the field and the limit, never the value."""
+    fp = _seed(monkeypatch, tmp_path, make_account)
+    with pytest.raises(ValueError) as exc:
+        overlay.tag(store, fp, **{field: value})
+    assert value not in str(exc.value)
+    assert overlay.tags_of(store, fp, surface=Surface.S1_DETAIL) == {}
+
+
+def test_do_not_use_false_is_refused_rather_than_silently_ignored(
+    tmp_path, monkeypatch, make_account, store,
+):
+    """There is no un-tag path in this bite, so a `False` that quietly wrote
+    nothing would read to the caller as "cleared" (I-11)."""
+    fp = _seed(monkeypatch, tmp_path, make_account)
+    overlay.tag(store, fp, do_not_use=True)
+    with pytest.raises(ValueError) as exc:
+        overlay.tag(store, fp, do_not_use=False, replace=True)
+    assert "never cleared" in str(exc.value)
+    assert fp in overlay.excluded_fingerprints(store)
+
+
+# ── I-23: the discovery attribute is what keeps this pack out (planted) ────
+
+def test_the_registry_would_find_this_pack_if_it_declared_one(monkeypatch):
+    """The absence asserted above is only load-bearing if `ACCOUNT` /
+    `OBLIGATION` is what the scan actually reads. Plant each on the overlay
+    pack and the matching registry finds it — so leaving them off is the
+    thing keeping the sidecar out, not luck."""
+    monkeypatch.setattr(pack, "ACCOUNT", "overlay", raising=False)
+    assert registry._discover_packs().get("overlay") is pack
+    monkeypatch.delattr(pack, "ACCOUNT")
+
+    monkeypatch.setattr(pack, "OBLIGATION", "overlay", raising=False)
+    assert registry._discover_obligation_packs().get("overlay") is pack
+    monkeypatch.delattr(pack, "OBLIGATION")
+
+    # and with the plants removed the sidecar is invisible again
+    assert "overlay" not in registry._discover_packs()
+    assert "overlay" not in registry._discover_obligation_packs()

@@ -52,15 +52,38 @@ __all__ = ["MATTER", "SCHEMA", "FIELDS", "PROTECTED_CATEGORY_WORDS"]
 #: name in `all_accounts()`/`all_obligations()` (see the module docstring).
 MATTER = "overlay"
 
-#: The closed, hand-reviewed list a category is held against. Substring
-#: containment (`overlay._is_protected`), not an exact match: `medical-copay`
-#: contains `medical`, and a category that merely *contains* a protected
-#: word is exactly the case the advisory must not talk itself out of
-#: raising — the false-negative direction is the one that costs someone the
-#: L4 they needed.
+#: The closed, hand-reviewed list a category is held against.
+#:
+#: **The matching rule, pinned.** `overlay._is_protected` asks whether the
+#: category *string* contains any of these as a **substring** — not whether
+#: one of its `-`-separated tokens equals one. The two differ, and the
+#: difference is deliberate: `medically-unrelated-shop` contains `medical`
+#: and is raised to `L4` under this rule where an exact-token rule would
+#: leave it at `L3`. That is the direction this is allowed to be wrong in.
+#: Over-classifying costs the household one extra click to see its own word;
+#: under-classifying puts `therapy-copay` on a list somebody can read over a
+#: shoulder. The advisory argues **up, never down** (`homestead.keep.advise`),
+#: so a substring rule is the one that fails in the safe direction, and
+#: `tests/test_overlay.py` pins both halves of it.
+#:
+#: **What is on the list is a classification judgement, not a vocabulary.**
+#: One word per protected *category* a rung procedure's step 1 would name —
+#: health and care, legal process, insolvency, family, belief, association,
+#: political activity, immigration status — chosen so that the ordinary way a
+#: household writes the category contains it. A word is added here when a
+#: category naming a protected matter would otherwise sit at `L3`; a word is
+#: never removed to make a list read better.
 PROTECTED_CATEGORY_WORDS: frozenset[str] = frozenset({
-    "medical", "therapy", "pharmacy", "attorney", "legal", "court",
-    "bankruptcy", "child-support", "union", "church", "donation", "political",
+    # health and care (a category naming any of these is a health record)
+    "medical", "health", "therapy", "pharmacy", "clinic", "hospital",
+    "dental", "doctor", "psych", "rehab",
+    # legal process and insolvency
+    "attorney", "legal", "counsel", "court", "bankruptcy", "trustee",
+    # family
+    "child-support", "custody",
+    # belief, association, political activity, immigration status
+    "church", "religious", "mosque", "synagogue", "temple", "tithe",
+    "donation", "union", "political", "immigration",
 })
 
 
