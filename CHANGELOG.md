@@ -5,10 +5,8 @@
 
 ### Fixed
 
-* drain a refused request body before the socket closes ([afbf3c0](https://github.com/homestead-affairs/homestead-ledger/commit/afbf3c032ccb724ab55a4a86499e8009df93c782))
 * drain a refused request body before the socket closes ([8ffd7c1](https://github.com/homestead-affairs/homestead-ledger/commit/8ffd7c19cee3065740a1ac7342d45cd7354b59f5))
 * let the declared bank date format win, and stop echoing the cell ([b437790](https://github.com/homestead-affairs/homestead-ledger/commit/b4377906b3c47e66bd1db274f4f6decac0948539))
-* parse CSV dates to ISO at import, with a declared per-bank format and a gaps list ([a149082](https://github.com/homestead-affairs/homestead-ledger/commit/a149082bbf8133b2eb9f30a1a7996b55aea3f717))
 * parse importer dates to ISO with a per-bank format table ([0e710dc](https://github.com/homestead-affairs/homestead-ledger/commit/0e710dc755dbe7b65c91feeca9f3a421e1895001))
 
 ## [0.2.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.1.1...v0.2.0) (2026-09-11)
