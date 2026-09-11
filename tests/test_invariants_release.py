@@ -48,6 +48,7 @@ _CONFIG = _REPO / "release-please-config.json"
 _MANIFEST = _REPO / ".release-please-manifest.json"
 _RELEASE_WF = _REPO / ".github" / "workflows" / "release.yml"
 _RP_WF = _REPO / ".github" / "workflows" / "release-please.yml"
+_CI_WF = _REPO / ".github" / "workflows" / "ci.yml"
 
 
 def _json(path: Path) -> dict:
@@ -269,4 +270,57 @@ def test_a_breaking_change_below_1_0_cuts_1_0_0_rather_than_a_minor():
     assert version.startswith("0."), (
         f"manifest is {version} — past 1.0 both flags are dead weight, because "
         "`isPreMajor` gates them and it is false from 1.0.0 on. Remove them."
+    )
+
+
+# ── G9b-fleet-ci-leg: a leg that installs psycopg, and the gate needs it ────
+
+def _fleet_leg_wired(jobs: dict) -> tuple[bool, bool]:
+    """(some job installs psycopg, the `test` gate needs every such job)."""
+    def installs(job: str) -> str:
+        return " ".join(str(s.get("run", "")) for s in jobs[job].get("steps", []))
+
+    with_psycopg = [j for j in jobs if j != "test" and "psycopg" in installs(j)]
+    gate_needs = set(jobs.get("test", {}).get("needs", []))
+    return bool(with_psycopg), bool(with_psycopg) and set(with_psycopg) <= gate_needs
+
+
+def test_a_ci_leg_installs_psycopg_and_the_aggregate_gate_needs_it():
+    """`tests/test_sync.py::
+    test_the_fleet_ingest_of_a_structured_pair_fails_only_at_the_dial`
+    importorskips `psycopg`, and until this bite no job in this workflow
+    ever installed it — the `invariants` matrix stays cold on purpose
+    (I-27) — so that test, and the fleet dial path it guards, had been
+    silently skipped on every OS since G7b-floor-0.13. A scan that has
+    never fired has not been shown to check anything: both halves of the
+    check below are shown here to actually catch the regression, planted
+    on a copy of the real workflow text, not merely to pass on the file as
+    it stands today."""
+    text = _CI_WF.read_text()
+    jobs = _yaml(_CI_WF)["jobs"]
+
+    installs_it, gate_needs_it = _fleet_leg_wired(jobs)
+    assert installs_it, "no CI leg installs psycopg — the fleet dial test is skipped everywhere"
+    assert "psycopg" not in " ".join(
+        str(s.get("run", "")) for s in jobs["invariants"].get("steps", [])
+    ), "the cold `invariants` matrix must stay psycopg-free (I-27)"
+    assert gate_needs_it, "a leg the `test` gate does not need cannot block a merge"
+
+    # Plant 1: the psycopg-installing job is removed entirely.
+    without_job = re.sub(r"\n  fleet:\n(?:(?: {4}.*)?\n)*", "\n", text, count=1)
+    assert "psycopg" not in without_job, "the plant did not remove the job — fix the regex"
+    assert not _fleet_leg_wired(yaml.safe_load(without_job)["jobs"])[0], (
+        "removing the psycopg-installing job went undetected"
+    )
+
+    # Plant 2: the job survives, but the `test` gate stops depending on it.
+    without_needs = text.replace(
+        "needs: [invariants, release-wiring, fleet, artifact]",
+        "needs: [invariants, release-wiring, artifact]",
+    )
+    assert without_needs != text, "the plant did not change the needs line — fix the literal"
+    jobs_ungated = yaml.safe_load(without_needs)["jobs"]
+    assert _fleet_leg_wired(jobs_ungated)[0], "sanity: the job itself is still there"
+    assert not _fleet_leg_wired(jobs_ungated)[1], (
+        "dropping `fleet` from the `test` gate's needs went undetected"
     )
