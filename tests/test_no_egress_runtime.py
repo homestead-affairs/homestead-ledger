@@ -105,7 +105,7 @@ def test_compose_store_over_a_real_import_completes_with_no_network_egress(
     ledger = view.compose_store()
 
     assert ledger.demo is False
-    assert ledger.canonical.records(view.checking.ACCOUNT) != []
+    assert ledger.canonical.records("checking") != []
 
 
 def test_compose_store_demo_fallback_completes_with_no_network_egress(

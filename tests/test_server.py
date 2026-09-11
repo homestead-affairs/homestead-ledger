@@ -164,13 +164,52 @@ def test_transaction_round_trip_and_the_l5_never_shows(ui):
 def test_transaction_refusals_at_entry(ui):
     base = {"date": "2026-08-01", "amount": "-84.23", "description": "x", "account_number": "1"}
     for key, value in (("date", "yesterday"), ("amount", "lots"), ("description", ""),
-                       ("account_number", ""), ("account", "savings")):
+                       ("account_number", ""), ("account", "brokerage")):
         status, data = ui.json("/api/transaction", {**base, key: value})
         assert status == 400, (key, value)
     status, data = ui.json("/api/transactions")
     assert data["rows"] == []
-    status, data = ui.json("/api/transactions?account=savings")
+    status, data = ui.json("/api/transactions?account=brokerage")
     assert status == 400
+
+
+def test_the_account_select_is_the_registry_and_drives_the_list(ui):
+    """The transaction pane names one account in its `<select>` and lists the
+    rows of one account below it; if picking a kind in the select does not
+    redraw the list, the pane shows `checking`'s rows under the word
+    `credit_card` — the two halves of one pane disagreeing about which
+    account the operator is looking at. The options come from the registry
+    (`/api/status`), and the list is drawn only once they exist."""
+    from homestead_ledger import registry
+
+    status, data = ui.json("/api/status")
+    assert status == 200
+    assert data["accounts"] == list(registry.all_accounts())
+
+    page = server._PAGE
+    assert "<select id=\"taccount\"" in page
+    assert "sel.onchange=loadTransactions" in page
+    # the list is drawn from inside loadAccounts' resolution, not next to the
+    # call, so it cannot read an empty select and fall back to something.
+    assert "loadAccounts();loadObligations();" in page
+    assert "loadAccounts();loadObligations();loadTransactions();" not in page
+
+
+def test_no_account_name_is_hardcoded_as_a_default_in_the_page(ui):
+    """I-23 on this surface, and I-11's fail-closed: the page must not carry
+    a literal account name to fall back on when `/api/status` has not
+    answered — a hardcoded `||'checking'` posts a transaction to, and lists,
+    an account the operator never chose."""
+    from homestead_ledger import registry
+
+    page = server._PAGE
+    for name in registry.all_accounts():
+        for literal in (f"'{name}'", f'"{name}"'):
+            assert literal not in page, (
+                f"{literal} is hardcoded in the page — read the account from "
+                "currentAccount() (the registry-filled select) instead."
+            )
+    assert "function currentAccount()" in page
 
 
 def test_subscriptions_run_over_the_real_books(ui):

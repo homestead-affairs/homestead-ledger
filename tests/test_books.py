@@ -26,6 +26,7 @@ from homestead_ledger.store import Canonical
 def _txn(**overrides) -> Transaction:
     base = dict(
         account="checking",
+        kind="checking",
         date="2026-08-01",
         amount="-84.23",
         description="Whole Foods Market",
@@ -138,6 +139,111 @@ def test_canonical_still_exposes_no_write_method():
     test_canonical_is_read_only_by_type."""
     for forbidden in ("put", "write", "update", "delete", "insert"):
         assert not hasattr(Canonical, forbidden)
+
+
+# ── bite 2a — classification is registry-driven, not `checking`-shaped ─────
+
+def test_import_classifies_by_the_registered_kind_not_checking(tmp_path, monkeypatch):
+    """A `credit_card` import must derive the *card's* words for its amount
+    ("a charge is on file"), not checking's ("a debit is on file") — proof
+    that `import_transaction` reads the pack `txn.kind` names, never the one
+    pack this module used to import by name."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    txn = _txn(
+        account="credit_card", kind="credit_card", amount="-42.00",
+        description="Hardware Store",
+    )
+    item_id = import_transaction(txn)
+
+    canonical = Canonical()
+    amount = canonical.get("credit_card", "amount", item_id)
+    assert amount.rung is Rung.L4
+    assert amount.derived == "a charge is on file"
+    assert amount.derived != "a debit is on file"
+
+    payment = _txn(
+        account="credit_card", kind="credit_card", date="2026-08-02",
+        amount="42.00", description="Payment Received",
+    )
+    payment_id = import_transaction(payment)
+    assert canonical.get("credit_card", "amount", payment_id).derived == (
+        "a payment or credit is on file"
+    )
+
+
+def test_an_unregistered_kind_is_refused_by_name(tmp_path, monkeypatch):
+    """A phantom kind must never reach the store — refused by name, as a
+    `ValueError` naming `all_accounts()`, before any row is written."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    from homestead_ledger import registry
+
+    txn = _txn(account="brokerage", kind="brokerage")
+    with pytest.raises(ValueError) as exc:
+        import_transaction(txn)
+    assert "brokerage" in str(exc.value)
+    for name in registry.all_accounts():
+        assert name in str(exc.value)
+
+    # and nothing landed on the books for the refused kind.
+    assert Canonical().records("brokerage") == []
+
+
+def _transaction_calls_missing_kind(tree) -> list[int]:
+    """Line numbers of every `Transaction(...)` construction in `tree` that
+    does not pass `kind=` explicitly."""
+    import ast
+
+    missing = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name != "Transaction":
+            continue
+        if not any(kw.arg == "kind" for kw in node.keywords):
+            missing.append(node.lineno)
+    return missing
+
+
+def test_every_transaction_in_the_package_says_which_kind_it_is():
+    """`Transaction.kind` defaults to `checking` so bite 1's callers keep
+    working — which means a caller that forgets it does not fail, it
+    classifies a card's or a loan's fields against the *checking* pack and
+    writes "a debit is on file" over a charge. Nothing silent about it is
+    visible at the call site, so the call sites are held here: every
+    `Transaction(...)` built inside the package names its kind."""
+    import ast
+    from pathlib import Path
+
+    pkg = Path(__file__).resolve().parent.parent / "homestead_ledger"
+    offenders = []
+    for mod in sorted(pkg.rglob("*.py")):
+        if "__pycache__" in mod.parts:
+            continue
+        for lineno in _transaction_calls_missing_kind(ast.parse(mod.read_text("utf-8"))):
+            offenders.append(f"{mod.relative_to(pkg.parent)}:{lineno}")
+    assert not offenders, (
+        f"a Transaction is built without naming its kind at {offenders} — it "
+        "would be classified against the checking pack whatever account it "
+        "is filed under."
+    )
+
+
+def test_the_kind_scan_catches_a_planted_call_without_it():
+    """A scan that has never fired has not been shown to check anything."""
+    import ast
+
+    planted = ast.parse(
+        "books.Transaction(account='credit_card', date='2026-08-01', "
+        "amount='-42.00', description='x', account_number='1')\n"
+    )
+    assert _transaction_calls_missing_kind(planted) == [1]
+    clean = ast.parse(
+        "books.Transaction(account='credit_card', kind='credit_card', "
+        "date='2026-08-01', amount='-42.00', description='x', account_number='1')\n"
+    )
+    assert _transaction_calls_missing_kind(clean) == []
 
 
 def test_import_transaction_bypasses_canonical_and_sidecar_deliberately(tmp_path, monkeypatch):

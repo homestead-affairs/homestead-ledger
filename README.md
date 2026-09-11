@@ -55,6 +55,8 @@ homestead-ledger queue                                           # what's due
 homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account-number 9821
 homestead-ledger transaction list                                # the books, through the gate — the account number is never a row
 python -m homestead_ledger --import statement.csv --account-number 9821   # a whole statement
+python -m homestead_ledger --import card.csv --account-number 4242 --account credit_card \
+  --kind credit_card --liability-columns debit,credit                    # a card statement
 python -m homestead_ledger --import statement.csv --account-number 9821 --bank chase   # a slashed date column
 homestead-ledger transaction list --gaps                        # rows whose stored date predates this fix
 python -m homestead_ledger                                       # the window, on these books (the demo only if empty)
@@ -90,7 +92,15 @@ and fills a form with one click, the *Queue*, and *Subscriptions* — the
 recurring-charge pass over the real books. Merchant resolution, reconciliation
 and the ledger check need `pip install 'homestead-ledger[entity]'` and say so
 when it is missing. `--account` names an account kind the registry knows
-(`checking` today); an unregistered name is refused rather than quietly grown.
+(`checking`, `savings`, `credit_card`, `loan`); an unregistered name is refused
+rather than quietly grown. An amount is signed from the household's own side on
+every kind — money leaving is negative, money arriving is positive — so on a
+credit card or a loan a charge is negative and a payment positive, and the
+running balance is read back as what is *owed* (`balance.running_balance(...,
+liability=True)`). A card or loan statement whose columns are a `Debit`/`Credit`
+split is refused unless `--liability-columns CHARGE,PAYMENT` says which column
+means which: an issuer's own column names do not say, and guessing would
+misstate a debt.
 
 ## The method
 

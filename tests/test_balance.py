@@ -62,6 +62,31 @@ def test_running_balance_writes_nothing(tmp_path, monkeypatch):
     assert len(canonical_rows) == 12
 
 
+def test_a_liability_balance_is_reported_as_owed(tmp_path, monkeypatch):
+    """A charge is negative on the books (the same sign a debit gets); a
+    payment is positive (the same sign a credit gets). Summed raw, that
+    reads as a *negative* balance for a household in debt — arithmetically
+    correct and not what "owed" means. `liability=True` must report the
+    positive amount actually owed at each point instead."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    import_transaction(Transaction(
+        account="credit_card", kind="credit_card", date="2026-08-01",
+        amount="-50.00", description="Hardware Store", account_number="4242",
+    ))
+    import_transaction(Transaction(
+        account="credit_card", kind="credit_card", date="2026-08-05",
+        amount="20.00", description="Payment", account_number="4242",
+    ))
+
+    owed_points = running_balance(Canonical(), "credit_card", liability=True)
+    assert [p.running for p in owed_points] == [50.00, 30.00]
+    # the raw per-transaction amount is never flipped, only the running total
+    assert [p.amount for p in owed_points] == [-50.00, 20.00]
+
+    raw_points = running_balance(Canonical(), "credit_card")
+    assert [p.running for p in raw_points] == [-50.00, -30.00]
+
+
 def test_transaction_tuples_hand_the_recurring_pass_the_real_numbers(tmp_path, monkeypatch):
     """The recurring-charge detector takes plain `(date, amount, description)`
     tuples; this read at the payload boundary is what feeds it from the real
