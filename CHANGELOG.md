@@ -5,7 +5,7 @@
 
 ### Added
 
-* sync a consented scope of the books to the fleet — CLI and Sync tab ([e8101e6](https://github.com/homestead-affairs/homestead-ledger/commit/e8101e69195d337f13c611a3f694a9b66d0158c5))
+* sync a consented scope of the books to the fleet — CLI and Sync tab ([a10d5fc](https://github.com/homestead-affairs/homestead-ledger/commit/a10d5fccc89d6e611d01b2b23277be224068652e))
 
 
 ### Fixed
