@@ -349,7 +349,10 @@ nothing whether or not one is configured, an account's bank-issued number
 never crosses at any ceiling, and a transaction tagged do-not-use never
 crosses either — not as its own rows, not as its overlay tags, and not as
 the transfer pairing that names it. A scope that matches no record at all is
-refused by name rather than delivered as an envelope of nothing.
+refused by name rather than delivered as an envelope of nothing. A transfer
+pairing itself — an `L2` mapping, not a bare string — crosses to the fleet
+as a structured value since engine 0.13.0, which stores it as canonical
+JSON text rather than refusing the row.
 
 ## The method
 
