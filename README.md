@@ -242,6 +242,23 @@ Each of the four fields is its own record, independently gated (I-9): setting
 already-tagged field needs `--replace` to say so explicitly. A tag never
 rewrites, reorders, or removes the transaction it describes.
 
+## Budgets
+
+`budget set <category> <YYYY-MM> <amount> [--replace]` records a per-category
+spending limit for one calendar month, and `budget show [--month YYYY-MM]`
+lists every category's state against it — within limit, over limit, no limit
+set, or no spend — never the limit or the amount spent, alongside a count of
+transactions still waiting on a category and a count of rows whose date no
+calendar can read (those join no month at all; `transaction list --gaps`
+finds them). A month's spending is net of what came back: a refund on a
+categorised row subtracts from that category, so a purchase you returned
+stops counting against the limit. An uncategorised deposit — a paycheck — is
+not spending and is ignored. The comparison is computed fresh from the books
+and the limits on record every time it is asked, and nothing about it is
+stored on its own. A protected category's name derives on this
+list exactly as it does when tagging a transaction, and a transaction marked
+do-not-use, or paired as a transfer, never counts toward it.
+
 ## Transfers between your accounts
 
 A transfer between two of your own accounts posts twice on the real books —
