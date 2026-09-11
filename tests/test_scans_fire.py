@@ -1058,13 +1058,28 @@ def _calls_any_by_name(node: ast.AST, names: frozenset[str]) -> bool:
     return False
 
 
-def _is_inline_scan(node: ast.FunctionDef, global_helpers: frozenset[str]) -> bool:
+def _is_inline_scan(node: ast.AST, global_helpers: frozenset[str]) -> bool:
     """A test body counts as an inline scan when it reads a real file and,
     in its own body — not by calling a scan helper `tests/` already defines
     somewhere — walks source and judges it directly (`ast.parse`/`ast.walk`
     plus an `isinstance` against an `ast.*` type), matches a pattern, or asks
-    a membership question of the text it read."""
-    if not (isinstance(node, ast.FunctionDef) and node.name.startswith("test_")):
+    a membership question of the text it read.
+
+    **Delegation clears the whole test, deliberately.** A test that calls a
+    known scan helper is not reported even if it also asks its own `in`
+    question of the text it read, because in this suite that second question
+    is the fixture precondition of the first, every time it occurs:
+    `test_i44_no_drafting.py` asserts `"Purpose.EXPORT" in source` before
+    planting the edit, `test_docs_drift.py` asserts the README still carries
+    its struck-through original floor, and both would be reported by a
+    stricter rule. The cost is real and named: an unplanted inline `in`
+    hidden behind a delegated call is not seen. The alternative pushes those
+    preconditions out of sight, which is worse.
+    """
+    if not (
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+    ):
         return False
     if _is_fixture(node):
         return False
@@ -1079,14 +1094,28 @@ def _is_inline_scan(node: ast.FunctionDef, global_helpers: frozenset[str]) -> bo
     )
 
 
+def _test_functions(tree: ast.Module):
+    """Every test function in a module, by the name a failure would report
+    it as: module-level `def test_*`/`async def test_*`, and the methods of
+    a `class Test*` — `tests/test_intake.py` writes eight classes of them,
+    and a rule that read only `tree.body` could never see a scan in one."""
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield node.name, node
+        elif isinstance(node, ast.ClassDef):
+            for method in node.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    yield f"{node.name}::{method.name}", method
+
+
 def _inline_scan_tests(source: str, global_helpers: frozenset[str]) -> list[str]:
-    """Every `test_*` function in one tests module whose own body is itself
-    a scan by the rule above."""
+    """Every test function in one tests module whose own body is itself a
+    scan by the rule above."""
     tree = ast.parse(source)
     return sorted(
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and _is_inline_scan(node, global_helpers)
+        name
+        for name, node in _test_functions(tree)
+        if _is_inline_scan(node, global_helpers)
     )
 
 
@@ -1297,6 +1326,61 @@ def test_the_inline_scan_check_clears_a_test_that_delegates_to_a_known_helper(tm
         "    assert 'homestead' not in imported\n",
     )
     assert _inline_scan_tests(source, frozenset({"_toplevel_and_nested_imports"})) == []
+
+
+def test_the_inline_scan_check_reads_class_methods_and_async_tests_too(tmp_path):
+    """Planted: the two shapes a `tree.body`-only walk cannot see. This
+    suite writes eight test classes in `tests/test_intake.py`, so a scan in
+    a method was never reportable; an `async def test_*` would be the same
+    blind spot the day one is written."""
+    in_a_class = _write(
+        tmp_path,
+        "test_planted_class_scan.py",
+        "from pathlib import Path\n"
+        "\n"
+        "class TestTheTree:\n"
+        "    def test_no_banned_word(self):\n"
+        "        text = Path('x').read_text(encoding='utf-8')\n"
+        "        assert 'banned' not in text\n",
+    )
+    assert _inline_scan_tests(in_a_class, frozenset()) == [
+        "TestTheTree::test_no_banned_word"
+    ], "a scan in a test class's method is still a scan, and is named as one"
+
+    awaited = _write(
+        tmp_path,
+        "test_planted_async_scan.py",
+        "from pathlib import Path\n"
+        "\n"
+        "async def test_no_banned_word():\n"
+        "    text = Path('x').read_text(encoding='utf-8')\n"
+        "    assert 'banned' not in text\n",
+    )
+    assert _inline_scan_tests(awaited, frozenset()) == ["test_no_banned_word"]
+
+
+def test_delegating_clears_a_test_that_also_asks_its_own_question(tmp_path):
+    """The boundary this rule draws, pinned rather than left to be
+    rediscovered: a test that calls a known scan helper is cleared *whole*,
+    including an `in` of its own on the same text. Three real tests here
+    depend on it — the `in` beside the delegated call is the precondition
+    that keeps the plant honest ("the fixture really does carry the thing I
+    am about to change"), and reporting those would push preconditions out
+    of sight for no gain."""
+    source = _write(
+        tmp_path,
+        "test_planted_delegate_and_check.py",
+        "from pathlib import Path\n"
+        "\n"
+        "def test_the_planted_purpose_is_reported():\n"
+        "    source = Path('x').read_text(encoding='utf-8')\n"
+        "    assert 'Purpose.EXPORT' in source\n"
+        "    assert _drafting_or_filing_reaches(source)\n",
+    )
+    assert _inline_scan_tests(source, frozenset({"_drafting_or_filing_reaches"})) == []
+    assert _inline_scan_tests(source, frozenset()) == [
+        "test_the_planted_purpose_is_reported"
+    ], "and with no helper behind it, the same body is an inline scan"
 
 
 def test_the_inline_scan_check_does_not_fire_on_the_real_tree():

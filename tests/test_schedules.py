@@ -405,7 +405,7 @@ def test_an_absolute_out_dir_under_the_home_is_honoured_and_never_clobbers(
     )
     folder = tmp_path / "for-the-attorney"
     first = schedules.export(store, confirm=lambda w: True, out_dir=folder)
-    assert {folder} & set(first.artifact.parents)
+    assert folder in first.artifact.parents
     kept = first.artifact.read_bytes()
 
     second = schedules.export(store, confirm=lambda w: True, out_dir=folder)
