@@ -7,8 +7,10 @@ it, so its store is embedded **SQLite** — a linked library, not a server (the
 face's 2026-08-04 "no listening socket" decision holds; SQLite binds no port).
 The record layer is the engine's: `store.py` is a thin binding —
 `homestead.keep.store`'s adapter contract on a SQLite backing, in the ledger
-database. It **pins the engine from PyPI** — `homestead-affairs>=0.1.0,<1.0` (the
-distribution name; `import homestead` is unchanged) — and shares the
+database. It **pins the engine from PyPI** — currently `homestead-affairs>=0.11.0,<1.0`
+(see `pyproject.toml`'s own dependency comment for why that number and not a
+lower one; the distribution name is `homestead-affairs`, `import homestead` is
+unchanged) — and shares the
 `~/.homestead` root with homestead-law, because a household's affairs are one
 thing.
 
@@ -32,11 +34,50 @@ through the egress gate — never a runtime dependency of the shipped app. Sync 
 an **S4 egress**: an `L5` record never crosses, and what lands in the shared store
 is only what the household chose to expose.
 
-> **Status: bite 0 — the seat is bound.** The store binding
+> ~~**Status: bite 0 — the seat is bound.** The store binding
 > (`homestead.keep.store` on a SQLite ledger db), a no-egress AST guard over this
 > package (I-17 — a money ledger must never dial out), CI (cold checkout, engine
 > from PyPI, three OSes), and the build plan (`docs/build-plan.md`). The books,
-> the "what's due" queue, CSV import, and the app land in the bites that follow.
+> the "what's due" queue, CSV import, and the app land in the bites that follow.~~
+> *(X7-drift correction: this was the truth on the day bite 0 shipped and was
+> never updated after — every capability it deferred to "the bites that
+> follow" is below, on this page, several releases later. See "## Module
+> status" for what shipped and when.)*
+
+## Module status
+
+One row per capability, not per file — several files serve one capability
+(`cli.py`/`server.py` are entry surfaces for more than one row below).
+`tests/test_docs_drift.py`'s scan (a planted omission fails it) checks every
+`homestead_ledger/*.py` file is named somewhere below, save the
+package-scaffolding files it excludes by basename (`__init__.py`,
+`__main__.py`).
+
+**Since** is the release a capability first *shipped in*, read off
+`CHANGELOG.md` against the commit that added the file — not the release that
+happened to be current when it was written. A second guard in the same test
+file holds every number in this column to a version `CHANGELOG.md` actually
+released.
+
+| Capability | Module(s) | Since |
+|---|---|---|
+| Store binding, no-egress guard (I-17) | `store.py` | 0.1.0 |
+| The books — accounts+transactions pack, registry, content-fingerprint identity, derived running balance | `books.py`, `registry.py`, `fingerprint.py`, `balance.py`, `packs/checking.py` | 0.1.0 |
+| What's due — the obligations pack, the queue, the pure recurring-charge detector | `packs/obligations.py`, `queue.py`, `recurring.py` | 0.1.0 |
+| The desktop app — tkinter cover→list→detail, the what's-due queue, headless `--demo` | `app/window.py`, `app/view.py`, `app/cover.py`, `app/demo.py` | 0.1.0 |
+| CSV import — header auto-detect, fingerprint-seam dedup, `--dry-run` | `importer.py` | 0.1.0 (import) / 0.2.1 (dates parsed to ISO at import) |
+| Household entry — CLI, browser server, intake extraction, money helpers | `cli.py`, `server.py`, `intake.py`, `money.py` | 0.2.0 |
+| Obligation records a household enters itself — add/list/show/paid | `obligations.py` | 0.2.0 |
+| Entity resolution & Nestor ledger check (`entity` extra) | `nestor_seam.py`, `nestor_store.py` | 0.1.1 (seam) / 0.2.0 (store) |
+| Account packs — `savings`/`credit_card`/`loan`, registry-driven classification, the liability sign convention | `packs/savings.py`, `packs/credit_card.py`, `packs/loan.py` | 0.3.0 |
+| Cadence — closed cadence set, due-date roll-forward, paid-by tracking | `cadence.py` | 0.4.0 |
+| Account instances — a label, never a kind, one account-number record (I-43) | `accounts.py`, `packs/accounts.py` | 0.5.0 |
+| Exporting your liabilities — the Chapter 13 debt schedule | `schedules.py` | 0.6.0 |
+| Transfers between your accounts | `transfers.py`, `packs/transfers.py`, `transfers_boundary.py` | 0.7.0 |
+| Tagging a transaction — category, note, confirmed merchant, do-not-use | `overlay.py`, `packs/overlay.py` | 0.8.0 |
+| Budgets — per-category monthly limits, derived envelopes | `budget.py`, `packs/budget.py` | 0.9.0 |
+| Sync — a consented scope of the books to the fleet | `sync.py` | 0.10.0 |
+| Business books — business/restricted account instances, aggregates that exclude them by default, the grant report, commingling by reference | `grant_report.py` | unreleased as of this sweep (G8-business-books; on this branch, not yet merged to `main` or released — see `docs/PLAN-affairs-face.md`) |
 
 ## Entering your own information
 

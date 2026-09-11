@@ -493,13 +493,15 @@ def cover(store: Sidecar) -> dict[str, int]:
     never adds to what the cover shows, the same posture every other
     aggregate takes by default."""
     labels = household_labels(store)
-    # G5 hand-off: the engine grows `cover_counts(..., by_matter=...)` in
-    # 0.7.0 (E4-cover-distribution), where a count must also be spread over
-    # at least two matters each contributing at least one. This module does
-    # not pass it: this package's floor is `homestead-affairs>=0.3.0`
-    # (`pyproject.toml`), which has no such parameter, and a keyword the
-    # installed engine does not take is a `TypeError` at the resting cover.
-    # When the floor rises, the distribution to pass here is the per-label
-    # transaction counts — `{label: len(canonical.records(label))}` — so a
-    # single busy account cannot carry an "instances" count on its own.
+    # X7-drift correction: this comment used to say the engine's
+    # `cover_counts(..., by_matter=...)` (0.7.0, E4-cover-distribution) could
+    # not be passed here because this package's floor was still 0.3.0 — true
+    # when this function was written, stale since G5-sync raised the floor to
+    # `homestead-affairs>=0.11.0` (`pyproject.toml`), comfortably past 0.7.0.
+    # `by_matter` is available in the installed engine now; this function
+    # simply has not been wired to pass it. That wiring — the per-label
+    # transaction counts, `{label: len(canonical.records(label))}`, so a
+    # single busy account cannot carry an "instances" count on its own — is
+    # an open item, not a floor block; left out here to keep this sweep to
+    # documentation and never-fired scans rather than new behaviour.
     return cover_counts(labels, instances=len(labels))

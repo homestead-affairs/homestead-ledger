@@ -29,11 +29,35 @@ system cannot see* — surfaced only as structure, never as content.
 | **3 — the app** | ✅ done | tkinter S1 view (cover→list→detail), the stdlib `ttk` surface theme, PyInstaller packaging + a CI artifact job. **Theme follow-on complete:** the theme was hoisted into the engine (`homestead.app.theme`, released as 0.1.0) and both this module and `homestead-law` repointed to it — one shared copy, no drift. |
 | **4 — import + wire + guard** | ✅ done | **CSV import** (`importer.py` — header-auto-detect for single-amount and debit/credit-split, fingerprint-seam dedup, `--dry-run`; routes every write through `books.import_transaction`, names no `CANONICAL`). **App wired to the real books** — `view.compose_store()` opens the window on the operator's own `~/.homestead` store so an imported statement appears in the list/detail/cover/queue, with a clearly-labelled throwaway-demo fallback on an empty first run (the real root is never seeded). **No-egress confirmed end-to-end** — a runtime guard (`test_no_egress_runtime.py`) poisons `socket` and proves the real import + app-compose paths never dial out, atop the static AST sweep. Outward bridge **deferred to v2** (see below). |
 
-**Suite: 195 passed.** Licensed **Apache-2.0** (matching the engine and the fleet).
-Pins `homestead-affairs>=0.1.0,<1.0` from PyPI (0.1.0 is where the shared
-`homestead.app.theme` landed — the floor this view needs; the `<1.0` cap is a
-real compatibility range — the engine bumps the minor for a feat, so every
-pre-1.0 release resolves, and reserves 1.0.0 for the first breaking change).
+**X7-drift addendum (2026-09-11): bites 5 and up.** This table stops at bite
+4 because that is where the Homestead · Affairs face's own bite numbering
+(0–4) ends; everything since is a `G<n>` bite from that plan
+(`so-lets-plan-it-sparkling-shell.md`), each released and each holding its
+own tests: account instances and the one-record account number (G2b,
+0.5.0), cadence-driven due-date roll-forward (G3, 0.4.0), the Chapter 13
+debt schedule export (G4-schedules-export, 0.6.0), transfers between the
+household's own accounts (G4-transfers, 0.7.0), the per-transaction overlay
+— category, note, confirmed merchant, do-not-use (G4-overlay, 0.8.0),
+per-category budgets (G4-budget, 0.9.0), fleet sync (G5-sync, 0.10.0), and
+business-owned/restricted accounts with a grant report (G8-business-books,
+unreleased as of this sweep — see `docs/PLAN-affairs-face.md`). README's own
+"## Module status" table is the accurate, kept-current row-per-capability
+record now; this file's narrative is not re-derived here to avoid two copies
+saying the same thing on two different days.
+
+~~**Suite: 195 passed.**~~ *(X7-drift correction: a literal count in prose is
+a number the next added test makes false again — it already has, more than
+once, and the exact figure differs with and without the optional `entity`
+extra installed. Described qualitatively instead: green on `pytest -q`, cold
+and on both legs.)* Licensed **Apache-2.0** (matching the engine and the
+fleet). ~~Pins `homestead-affairs>=0.1.0,<1.0` from PyPI (0.1.0 is where the
+shared `homestead.app.theme` landed — the floor this view needs...)~~
+*(X7-drift correction: the floor has moved twice since — 0.3.0 for the
+account packs (G2a), then `>=0.11.0,<1.0` for G5-sync's `homestead.keep.sync`
+— see `pyproject.toml`'s own dependency comment for the current floor and
+why. The `<1.0` cap reasoning is unchanged: a real compatibility range — the
+engine bumps the minor for a feat, so every pre-1.0 release resolves, and
+1.0.0 is reserved for the first breaking change.)*
 
 ## What it is
 
