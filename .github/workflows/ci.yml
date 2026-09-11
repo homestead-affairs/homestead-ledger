@@ -78,6 +78,40 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -q tests/test_invariants_release.py
 
+  fleet:
+    # G9b-fleet-ci-leg: `tests/test_sync.py::
+    # test_the_fleet_ingest_of_a_structured_pair_fails_only_at_the_dial`
+    # importorskips `psycopg`, and the `invariants` matrix above stays
+    # psycopg-free on purpose (I-27) — so nowhere in this repo's CI ever
+    # installed it, and that test (and the fleet path it guards) has been
+    # silently skipped on every OS since it landed (G7b-floor-0.13). One
+    # cold leg, the `fleet` package extra only, no Postgres service: the
+    # test dials `127.0.0.1` on a port nothing here listens on and asserts
+    # the refused connect, mirroring the engine's own `fleet` job
+    # (`homestead/.github/workflows/ci.yml`) minus the `services: postgres`
+    # block that job needs and this one does not.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.12" }
+      # `pytest` is not a dependency of this package (it is dev-only, and this
+      # leg deliberately does not take the whole `dev` extra), and
+      # `setup-python` puts a bare interpreter first on PATH — so pytest has
+      # to be installed by name here, exactly as the `invariants` job above
+      # does it and as the engine's own `fleet` leg does. Without this line
+      # the job dies at `pytest: command not found` and the leg proves
+      # nothing about psycopg at all.
+      - run: pip install pytest
+      - run: pip install -e . "psycopg[binary]>=3.1,<4"
+      # The whole suite, not just test_sync.py: psycopg's presence is what
+      # this leg exists to exercise, and the rest of the suite has never
+      # run with it installed either.
+      - run: pytest -q
+
   artifact:
     # bite 3's deliverable is a *double-clickable artifact*, so CI builds it
     # and runs it. Without this job a spec that dies on startup (imports
@@ -116,7 +150,7 @@ jobs:
   # mattered. The result is asserted explicitly rather than inferred from this
   # job having run.
   test:
-    needs: [invariants, release-wiring, artifact]
+    needs: [invariants, release-wiring, fleet, artifact]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -129,8 +163,9 @@ jobs:
         run: |
           echo "invariants=${{ needs.invariants.result }}"
           echo "release-wiring=${{ needs.release-wiring.result }}"
+          echo "fleet=${{ needs.fleet.result }}"
           echo "artifact=${{ needs.artifact.result }}"
           echo "::error::a required job did not succeed — see the results above"
           exit 1
 
-      - run: echo "invariants, release-wiring, and the artifact build are green"
+      - run: echo "invariants, release-wiring, fleet, and the artifact build are green"

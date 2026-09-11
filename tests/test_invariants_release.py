@@ -48,6 +48,7 @@ _CONFIG = _REPO / "release-please-config.json"
 _MANIFEST = _REPO / ".release-please-manifest.json"
 _RELEASE_WF = _REPO / ".github" / "workflows" / "release.yml"
 _RP_WF = _REPO / ".github" / "workflows" / "release-please.yml"
+_CI_WF = _REPO / ".github" / "workflows" / "ci.yml"
 
 
 def _json(path: Path) -> dict:
@@ -292,4 +293,96 @@ def test_a_breaking_change_below_1_0_cuts_1_0_0_rather_than_a_minor():
     assert version.startswith("0."), (
         f"manifest is {version} — past 1.0 both flags are dead weight, because "
         "`isPreMajor` gates them and it is false from 1.0.0 on. Remove them."
+    )
+
+
+# ── G9b-fleet-ci-leg: a leg that installs psycopg, and the gate needs it ────
+
+# A `pip install` line that names pytest, as opposed to the `pytest -q` that
+# runs it: `"pytest" in run` would be satisfied by the run step alone, which
+# is the half that cannot work without the other.
+_PIP_INSTALLS_PYTEST = re.compile(r"pip install\b[^\n]*\bpytest\b")
+
+
+def _fleet_leg_wired(jobs: dict) -> tuple[bool, bool, bool]:
+    """(some job installs psycopg, the `test` gate needs every such job,
+    every such job also installs pytest)."""
+    def installs(job: str) -> str:
+        # Newline-joined, not space-joined: `_PIP_INSTALLS_PYTEST` is anchored
+        # within one line, and on a single line `pip install -e .` from one
+        # step and `pytest -q` from the next would read as one install.
+        return "\n".join(str(s.get("run", "")) for s in jobs[job].get("steps", []))
+
+    with_psycopg = [j for j in jobs if j != "test" and "psycopg" in installs(j)]
+    gate_needs = set(jobs.get("test", {}).get("needs", []))
+    return (
+        bool(with_psycopg),
+        bool(with_psycopg) and set(with_psycopg) <= gate_needs,
+        bool(with_psycopg)
+        and all(_PIP_INSTALLS_PYTEST.search(installs(j)) for j in with_psycopg),
+    )
+
+
+def test_a_ci_leg_installs_psycopg_and_the_aggregate_gate_needs_it():
+    """`tests/test_sync.py::
+    test_the_fleet_ingest_of_a_structured_pair_fails_only_at_the_dial`
+    importorskips `psycopg`, and until this bite no job in this workflow
+    ever installed it — the `invariants` matrix stays cold on purpose
+    (I-27) — so that test, and the fleet dial path it guards, had been
+    silently skipped on every OS since G7b-floor-0.13. A scan that has
+    never fired has not been shown to check anything: every half of the
+    check below — the leg exists, the gate needs it, and it installs the
+    pytest that runs it (the third found missing by the G9b audit) — is
+    shown here to actually catch its own regression, planted on a copy of
+    the real workflow text, not merely to pass on the file as it stands
+    today."""
+    text = _CI_WF.read_text()
+    jobs = _yaml(_CI_WF)["jobs"]
+
+    installs_it, gate_needs_it, has_pytest = _fleet_leg_wired(jobs)
+    assert installs_it, "no CI leg installs psycopg — the fleet dial test is skipped everywhere"
+    assert "psycopg" not in " ".join(
+        str(s.get("run", "")) for s in jobs["invariants"].get("steps", [])
+    ), "the cold `invariants` matrix must stay psycopg-free (I-27)"
+    assert gate_needs_it, "a leg the `test` gate does not need cannot block a merge"
+
+    # Plant 1: the psycopg-installing job is removed entirely.
+    without_job = re.sub(r"\n  fleet:\n(?:(?: {4}.*)?\n)*", "\n", text, count=1)
+    assert "psycopg" not in without_job, "the plant did not remove the job — fix the regex"
+    assert not _fleet_leg_wired(yaml.safe_load(without_job)["jobs"])[0], (
+        "removing the psycopg-installing job went undetected"
+    )
+
+    # Plant 2: the job survives, but the `test` gate stops depending on it.
+    without_needs = text.replace(
+        "needs: [invariants, release-wiring, fleet, artifact]",
+        "needs: [invariants, release-wiring, artifact]",
+    )
+    assert without_needs != text, "the plant did not change the needs line — fix the literal"
+    jobs_ungated = yaml.safe_load(without_needs)["jobs"]
+    assert _fleet_leg_wired(jobs_ungated)[0], "sanity: the job itself is still there"
+    assert not _fleet_leg_wired(jobs_ungated)[1], (
+        "dropping `fleet` from the `test` gate's needs went undetected"
+    )
+
+    # Plant 3: the job and the gate are both intact, but the leg stops
+    # installing pytest. `pytest` is dev-only here (pyproject: it is in the
+    # `dev` extra, not in `dependencies`) and `actions/setup-python` puts a
+    # bare interpreter first on PATH, so a leg that installs only the package
+    # and psycopg dies at `pytest: command not found` — a leg that runs
+    # nothing, which is the failure this whole bite exists to end. Audit
+    # finding, G9b (the leg shipped without this line).
+    assert has_pytest, (
+        "a leg installs psycopg but never installs pytest — it cannot run the suite"
+    )
+    # Anchored to the psycopg line that follows it — the `invariants` job
+    # installs pytest with the same words, and this plant is about the leg
+    # that would otherwise have no pytest at all.
+    _both = '      - run: pip install pytest\n      - run: pip install -e . "psycopg'
+    without_pytest = text.replace(_both, '      - run: pip install -e . "psycopg')
+    assert without_pytest != text, "the plant did not drop the install — fix the literal"
+    jobs_bare = yaml.safe_load(without_pytest)["jobs"]
+    assert _fleet_leg_wired(jobs_bare)[0], "sanity: the job itself is still there"
+    assert not _fleet_leg_wired(jobs_bare)[2], (
+        "a psycopg leg that installs no pytest went undetected"
     )
