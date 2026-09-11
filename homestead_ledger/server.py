@@ -511,10 +511,11 @@ function loadTransactions() {
     data.rows.forEach(function(r){
       // `data-fp` is the fingerprint as *data*, never spliced into an
       // onclick string (the `data-oid` posture above).
+      var xfer=r.transfer_to?(' &middot; transfer &rarr; '+esc(r.transfer_to)):'';
       html+='<div class="qi rw" data-fp="'+attr(r.item_id)+'">'
         +'<span class="rb r-'+attr(r.rung)+'">'+esc(r.rung)+'</span>'
         +'<span class="rk">'+esc(r.item_id.slice(0,12))+' &middot; '+esc(r.field)+'</span>'
-        +'<span class="qs">'+esc(r.text)+'</span>'
+        +'<span class="qs">'+esc(r.text)+xfer+'</span>'
         +(r.category?'<span class="sm">'+esc(r.category)+'</span>':'')
         +(r.note?'<span class="sm">'+esc(r.note)+'</span>':'')
         +(r.do_not_use?'<span class="sm s-err">do-not-use</span>':'')
@@ -709,7 +710,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
 
     from homestead_ledger import (
         accounts, balance, books, money, nestor_seam, obligations, overlay,
-        registry, schedules,
+        registry, schedules, transfers,
     )
     from homestead_ledger.app.window import Window
     from homestead_ledger.cadence import UnknownCadence
@@ -851,6 +852,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._get_resolve(qs)
             if p.path == "/api/subscriptions":
                 return self._get_subscriptions()
+            if p.path == "/api/transaction/transfers/suggest":
+                return self._get_transfer_suggestions()
             self.send_error(404)
 
         def _get_queue(self):
@@ -925,6 +928,7 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                     "item_id": r.ref[2], "field": r.ref[1], "rung": r.rung.value,
                     "text": r.text, "category": tags.get("category"),
                     "note": tags.get("note"), "do_not_use": r.ref[2] in excluded,
+                    "transfer_to": transfers.other_label(sidecar, r.ref[2]),
                 })
             self._json({"rows": out_rows})
 
@@ -943,11 +947,25 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 self._json({"error": str(exc)}, 500)
 
         def _get_subscriptions(self):
-            # The recurring pass over the real books. Bite 4: a transaction
-            # marked `do_not_use` is filtered out here, at the caller —
-            # `recurring.py` never learns the overlay exists.
+            # The recurring pass over the real books — the household's own
+            # numbers, reflected. The detector is a pure function over plain
+            # tuples; every exclusion happens **here, at the caller**, and
+            # neither `balance.py` nor `recurring.py` learns that an overlay
+            # or a transfer exists.
+            #
+            # **One set, by fingerprint.** G4-transfers' two legs and bite 4's
+            # `do_not_use` rows are excluded the same way, unioned before the
+            # scan: `balance.dated_transactions` keeps the item id alongside
+            # each tuple, so the filter is by reference. That is the union
+            # `transfers.exclude_from` names in its own docstring as the
+            # honest filter once both bites are on main — it had to match
+            # paired rows by *content* while no id reached this seam, and
+            # counting identical tuples is what it did instead.
             today = dt.date.today()
-            excluded = overlay.excluded_fingerprints(sidecar)
+            excluded = (
+                overlay.excluded_fingerprints(sidecar)
+                | transfers.paired_fingerprints(sidecar)
+            )
             found = []
             for label in accounts.instances(sidecar):
                 txns = [
@@ -962,6 +980,17 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                  "next_expected": c.next_expected, "confidence": c.confidence,
                  "status": c.status}
                 for c in found
+            ]})
+
+        def _get_transfer_suggestions(self):
+            # References only: two fingerprints and whether the match is the
+            # only one that fits. No amount and no date crosses this door
+            # (I-15) — a suggestion is a proposal to look at two rows, not a
+            # second way to read what they say.
+            found = transfers.suggest(sidecar)
+            self._json({"pairs": [
+                {"fp_out": fp_out, "fp_in": fp_in, "ambiguous": ambiguous}
+                for fp_out, fp_in, ambiguous in found
             ]})
 
         # ── POST ──────────────────────────────────────────────────────
@@ -997,6 +1026,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 return self._post_transaction(body)
             if p == "/api/transaction/tag":
                 return self._post_transaction_tag(body)
+            if p == "/api/transaction/transfer":
+                return self._post_transfer(body)
             self.send_error(404)
 
         def _field(self, body, name):
@@ -1182,6 +1213,19 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             except ValueError as exc:
                 return self._json({"ok": False, "error": str(exc)}, 400)
             self._json({"ok": True, "fields": sorted(written)})
+
+        def _post_transfer(self, body):
+            # JSON `true` and nothing else — the same I-9 posture every other
+            # `replace` checkbox on this door already carries.
+            replace = body.get("replace") is True
+            fp_out = self._field(body, "fp_out")
+            fp_in = self._field(body, "fp_in")
+            try:
+                ref, replaced = transfers.pair(sidecar, fp_out, fp_in, replace=replace)
+            except (ValueError, RecordExists) as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
+            self._json({"ok": True, "fp_out": ref[2], "fp_in": fp_in,
+                        "replaced": replaced is not None})
 
     return http.server.HTTPServer((host, port), _H)
 
