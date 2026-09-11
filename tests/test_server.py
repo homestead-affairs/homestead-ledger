@@ -18,6 +18,13 @@ import pytest
 
 from homestead_ledger import server
 
+# How long the test client waits for one response. The Windows CI runner has
+# answered a first request in more than five seconds (ledger #48, 2026-09-11)
+# — the server is single-threaded and each door writes through the integrity
+# log — so the bound is generous; it exists so a hung server fails the test
+# instead of hanging the suite, not to measure the server.
+CLIENT_TIMEOUT_SECONDS = 60
+
 
 @pytest.fixture
 def ui(tmp_path, monkeypatch):
@@ -30,7 +37,7 @@ def ui(tmp_path, monkeypatch):
         host, port = srv.server_address[0], srv.server_address[1]
 
         def get(self, path):
-            conn = http.client.HTTPConnection(self.host, self.port, timeout=5)
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=CLIENT_TIMEOUT_SECONDS)
             conn.request("GET", path)
             resp = conn.getresponse()
             body = resp.read()
@@ -38,7 +45,7 @@ def ui(tmp_path, monkeypatch):
             return resp.status, body
 
         def json(self, path, payload=None):
-            conn = http.client.HTTPConnection(self.host, self.port, timeout=5)
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=CLIENT_TIMEOUT_SECONDS)
             if payload is None:
                 conn.request("GET", path)
             else:
@@ -64,7 +71,7 @@ def ui(tmp_path, monkeypatch):
                 lines.append(f"Content-Length: {length}")
             lines.append("Connection: close")
             request = ("\r\n".join(lines) + "\r\n\r\n").encode() + payload
-            sock = _socket.create_connection((self.host, self.port), timeout=5)
+            sock = _socket.create_connection((self.host, self.port), timeout=CLIENT_TIMEOUT_SECONDS)
             try:
                 sock.sendall(request)
                 chunks = []
@@ -1058,7 +1065,7 @@ def test_there_is_no_export_door_on_the_server(ui):
     for path in ("/api/schedules/export", "/api/schedule/export"):
         status, _ = ui.get(path)
         assert status == 404, path
-        conn = http.client.HTTPConnection(ui.host, ui.port, timeout=5)
+        conn = http.client.HTTPConnection(ui.host, ui.port, timeout=CLIENT_TIMEOUT_SECONDS)
         conn.request("POST", path, body="{}",
                      headers={"Content-Type": "application/json"})
         assert conn.getresponse().status == 404, path
@@ -1127,7 +1134,7 @@ def sync_ui(tmp_path, monkeypatch):
         host, port = srv.server_address[0], srv.server_address[1]
 
         def json(self, path, payload=None):
-            conn = http.client.HTTPConnection(self.host, self.port, timeout=5)
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=CLIENT_TIMEOUT_SECONDS)
             if payload is None:
                 conn.request("GET", path)
             else:
