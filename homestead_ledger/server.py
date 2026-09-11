@@ -286,6 +286,13 @@ function storeObligation() {
 }
 
 function loadAccountsForPaid() {
+  // The same source as the transaction form's select: `/api/status`, whose
+  // `accounts` is `registry.all_accounts()` — the registry is the only
+  // enumeration (I-23), on this surface too. Today those are the four
+  // account *kinds* (checking, savings, credit_card, loan); bite
+  // G2b-account-instances makes them the household's own account *labels*,
+  // at which point this select starts naming instances with no change here,
+  // because it never held a list of its own.
   var sel=document.getElementById('paccount');
   fetch('/api/status').then(function(r){return r.json()}).then(function(data){
     sel.innerHTML='';
@@ -306,7 +313,10 @@ function markPaid() {
   fetch('/api/obligation/paid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
   .then(function(r){return r.json()}).then(function(data){
     if(data.ok){
-      msg.innerHTML='<span class="sm s-ok">'+(data.new_due?('Due date rolled to '+esc(data.new_due)):'Resolved &mdash; a one-time obligation')+'</span>';
+      var said = data.rolled===false
+        ? 'Recorded &mdash; a later payment is already on file, so the due date stands at '+esc(data.old_due)
+        : (data.new_due?('Due date rolled to '+esc(data.new_due)):'Resolved &mdash; a one-time obligation');
+      msg.innerHTML='<span class="sm s-ok">'+said+'</span>';
       ['poid','pfp','pon'].forEach(function(id){document.getElementById(id).value='';});
       document.getElementById('preplace').checked=false;
       loadObligations();
@@ -371,8 +381,13 @@ function loadObligations() {
     data.rows.forEach(function(o){
       // `o.paid_on` and `o.resolved` are references (a date, a flag) — never
       // the account or fingerprint a paid-by record also carries (I-15).
+      // The tick is gated on `paid_current`, which the server computes:
+      // "there is a payment on file" and "this period is paid" are different
+      // claims, and a row that ticks July's payment beside an August due
+      // date makes the wrong one.
       var paid='';
-      if(o.paid_on){paid+='<span class="sm s-ok">paid &#10003; '+esc(o.paid_on)+'</span>';}
+      if(o.paid_current){paid+='<span class="sm s-ok">paid &#10003; '+esc(o.paid_on)+'</span>';}
+      else if(o.paid_on){paid+='<span class="sm">last paid '+esc(o.paid_on)+'</span>';}
       if(o.resolved){paid+='<span class="sm s-ok">resolved</span>';}
       html+='<div class="qi rw" data-oid="'+attr(o.id)+'">'
         +'<span class="rb r-'+attr(o.rung)+'">'+esc(o.rung)+'</span>'
@@ -732,8 +747,9 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
             self._json({"rows": [
                 {"id": r.item_id, "name": r.name, "due_date": r.due_date,
                  "cadence": r.cadence, "amount": r.amount, "rung": r.rung.value,
-                 "gap": r.gap, "paid_on": r.paid_on, "resolved": r.resolved}
-                for r in obligations.rows(sidecar)
+                 "gap": r.gap, "paid_on": r.paid_on, "resolved": r.resolved,
+                 "paid_current": r.paid_current}
+                for r in obligations.rows(sidecar, today=dt.date.today().isoformat())
             ]})
 
         def _get_obligation(self, qs):
@@ -903,7 +919,8 @@ def build_server(*, host: str = "127.0.0.1", port: int = 8385):
                 # amount — `mark_paid` itself never names either in a
                 # message, so there is nothing here to accidentally repeat.
                 return self._json({"ok": False, "error": str(exc)}, 400)
-            self._json({"ok": True, "new_due": rolled.new_due, "old_due": rolled.old_due})
+            self._json({"ok": True, "new_due": rolled.new_due,
+                        "old_due": rolled.old_due, "rolled": rolled.rolled})
 
         def _post_transaction(self, body):
             # I-23: the registry is the only enumeration, and this door is the

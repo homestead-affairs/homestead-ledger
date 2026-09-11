@@ -170,7 +170,7 @@ def _cmd_obligation(argv: list[str]) -> int:
         return 0
 
     if sub == "list":
-        found = obligations.rows(sidecar)
+        found = obligations.rows(sidecar, today=dt.date.today().isoformat())
         if not found:
             print("  no obligations on file — `homestead-ledger obligation add <id> <payee> <amount> <due-date> <cadence>`")
             return 0
@@ -179,10 +179,20 @@ def _cmd_obligation(argv: list[str]) -> int:
             mark = "  [incomplete — a field is not on file]" if row.gap else ""
             # `row.paid_on` is a reference — the date the paid-by record is
             # keyed under — never the account or fingerprint it also carries
-            # (I-15). `resolved` (a `once` obligation already paid) is its
-            # own flag rather than folded into `paid`, since a resolved
-            # obligation still lists here.
-            paid = f"  paid ✓ {row.paid_on}" if row.paid_on else ""
+            # (I-15). The ✓ is gated on `paid_current`, not on there being a
+            # payment at all: a monthly bill paid in July and due again in
+            # August has a payment on file and an *open* period, and a row
+            # that ticks it says the household has paid when it has not.
+            # Out of period, the date still reads — as "last paid", a fact —
+            # but without the mark. `resolved` (a `once` obligation already
+            # paid) is its own flag rather than folded into `paid`, since a
+            # resolved obligation still lists here.
+            if row.paid_current:
+                paid = f"  paid ✓ {row.paid_on}"
+            elif row.paid_on:
+                paid = f"  last paid {row.paid_on}"
+            else:
+                paid = ""
             if row.resolved:
                 paid += "  [resolved]"
             print(f"  [{row.rung.value}]  {row.item_id}: {row.name}  ·  due {row.due_date}  ·  {row.cadence}  ·  {row.amount}{mark}{paid}")
@@ -212,7 +222,13 @@ def _cmd_obligation(argv: list[str]) -> int:
             print(f"  refused: {exc}", file=sys.stderr)
             return 1
         print(f"  stored: {obligations.KIND}/{paid_ref[2]}")
-        if rolled.new_due is not None:
+        if not rolled.rolled:
+            print(
+                f"  recorded, schedule unchanged (still due {rolled.old_due}) — "
+                "a later payment is already on file, so this one closes a "
+                "period that is already closed"
+            )
+        elif rolled.new_due is not None:
             print(f"  due date rolled forward: {rolled.old_due} -> {rolled.new_due}")
         else:
             print(f"  resolved — {item_id} was a one-time obligation, now paid ({rolled.old_due})")

@@ -45,19 +45,24 @@ having fewer of them. This module instead computes every step from the
 step past several lapsed periods to clear `paid_on`, Jan 31 → Feb 28 → **Mar
 31**: the month that has a 31st gets it back.
 
-**What this does not fix, stated because the gap is the useful part.** This
-function has no memory beyond its own arguments. Across *separate* calls —
-an obligation's ordinary month-by-month life: pay January, the store now
-holds Feb 28; pay February a month later and `roll_forward` is handed that
-Feb 28, not the original Jan 31 — the anchor really has been lost by the
-time the next call runs, and the next result is Mar 28: the exact drift
-this function refuses *within* one call. Recovering the day-of-month across
-separate months would need the obligation to persist it somewhere this
-function never touches (an anchor field this bite does not add); until
-then, a month-end due date that has ever clamped stays clamped on its
-ordinary cadence, and only a lapsed multi-period catch-up — one call,
-several periods, exactly the shape this function was written for — restores
-it.
+**The anchor is persisted, so it survives across calls.** This function has
+no memory beyond its own arguments, and for one bite it had none at all:
+across *separate* calls — an obligation's ordinary month-by-month life: pay
+January, the store now holds Feb 28; pay February a month later and
+`roll_forward` is handed that Feb 28, not the original Jan 31 — the anchor
+really was lost by the time the next call ran, and the household's rent day
+drifted from the 31st to the 28th and stayed there forever. That is a wrong
+date, not a documentation note. `obligations.add_obligation` now writes the
+first due date's day of month as its own record (`(obligations, "due_day",
+<id>)`, L2) and `mark_paid` reads it back and passes it here as
+`anchor_day`; every `_add_months` step clamps against *that* day, not
+against whatever the previous roll clamped down to. Jan 31 → Feb 28 → **Mar
+31** → Apr 30 → **May 31**, one on-time payment at a time.
+
+`anchor_day=None` keeps the old behaviour — clamp against `due.day` — which
+is what an obligation written before the anchor record existed falls back
+to (`mark_paid` documents that fallback), and what every day-length cadence
+gets, since a week has no month-end to clamp to.
 
 **`once` has no next date.** A one-time obligation paid is not due again;
 `roll_forward` returns `None` for it, and the caller (`mark_paid`) reads that
@@ -75,7 +80,7 @@ from __future__ import annotations
 import calendar
 from datetime import date, timedelta
 
-__all__ = ["CADENCES", "UnknownCadence", "roll_forward"]
+__all__ = ["CADENCES", "UnknownCadence", "previous_due", "roll_forward"]
 
 #: The closed set of words an obligation's `cadence` field may hold. Ordered
 #: shortest-interval first, purely for anything that prints them (the CLI
@@ -89,18 +94,21 @@ class UnknownCadence(ValueError):
     as the nearest bucket or silently defaulted to `monthly`."""
 
 
-def _add_months(base: date, months: int) -> date:
-    """`base` advanced by exactly `months` calendar months, clamped to the
-    target month's real length. Always computed from `base` directly — a
-    caller that needs several steps calls this once per step with the
-    cumulative month count, never by chaining this function's own output
-    back through itself, which is what would let the clamp compound (see the
-    module docstring's Jan 31 → Feb 28 → Mar 28 failure this avoids)."""
+def _add_months(base: date, months: int, anchor_day: int | None = None) -> date:
+    """`base` advanced by exactly `months` calendar months, landing on
+    `anchor_day` (default `base.day`) clamped to the target month's real
+    length. Always computed from `base` directly — a caller that needs
+    several steps calls this once per step with the cumulative month count,
+    never by chaining this function's own output back through itself, which
+    is what would let the clamp compound (see the module docstring's Jan 31
+    → Feb 28 → Mar 28 failure this avoids). `anchor_day` is the other half
+    of that avoidance: it carries the *original* day of month across calls,
+    where `base.day` alone has already been clamped."""
     total = base.month - 1 + months
     year = base.year + total // 12
     month = total % 12 + 1
     last_day = calendar.monthrange(year, month)[1]
-    return date(year, month, min(base.day, last_day))
+    return date(year, month, min(anchor_day or base.day, last_day))
 
 
 #: One step function per month-length cadence: `(due, k) -> due advanced by
@@ -111,13 +119,52 @@ _MONTH_STEPS: dict[str, int] = {"monthly": 1, "quarterly": 3, "yearly": 12}
 _DAY_STEPS: dict[str, int] = {"weekly": 7, "biweekly": 14}
 
 
-def _advance(due: date, cadence: str, periods: int) -> date:
+def _advance(due: date, cadence: str, periods: int, anchor_day: int | None) -> date:
     if cadence in _MONTH_STEPS:
-        return _add_months(due, _MONTH_STEPS[cadence] * periods)
+        return _add_months(due, _MONTH_STEPS[cadence] * periods, anchor_day)
     return due + timedelta(days=_DAY_STEPS[cadence] * periods)
 
 
-def roll_forward(due: date, cadence: str, paid_on: date) -> date | None:
+def _check(due: date, cadence: str, *others: tuple[str, object]) -> str:
+    """Shared argument discipline for the two public functions: dates are
+    `datetime.date`, the cadence is in `CADENCES`. Returns the normalised
+    cadence name."""
+    for name, value in (("due", due), *others):
+        if not isinstance(value, date):
+            raise TypeError(
+                f"{name!r} must be a datetime.date, not "
+                f"{type(value).__name__} — parse a date string once, at "
+                "the edge, before calling this"
+            )
+    name = str(cadence).strip()
+    if name not in CADENCES:
+        raise UnknownCadence(f"cadence must be one of: {', '.join(CADENCES)}")
+    return name
+
+
+def previous_due(due: date, cadence: str, *, anchor_day: int | None = None) -> date | None:
+    """The due date one period *before* `due` — the start of the period
+    that ends on `due`.
+
+    The list surfaces need this to answer a question `roll_forward` does
+    not: is the payment on file the one for the period that is open now,
+    or last month's? A row that shows `paid ✓ 2026-07-01` beside a due
+    date of 2026-08-01 says the household has paid when it has not.
+    `obligations.rows()` compares the latest paid-by date against this
+    and shows the mark only when the payment is on or after it.
+
+    Returns `None` for `once` — a one-time obligation has no previous
+    period; whether it is paid is the `resolved` record, not a window.
+    """
+    name = _check(due, cadence)
+    if name == "once":
+        return None
+    return _advance(due, name, -1, anchor_day)
+
+
+def roll_forward(
+    due: date, cadence: str, paid_on: date, *, anchor_day: int | None = None
+) -> date | None:
     """The due date that replaces `due` once it has been paid on `paid_on`.
 
     Advances from `due` — never from `paid_on` — one cadence period at a
@@ -125,6 +172,13 @@ def roll_forward(due: date, cadence: str, paid_on: date) -> date | None:
     docstring for why that means a due date paid early still moves by
     exactly one period and a due date paid long after it lapsed moves by
     however many periods separate it from `paid_on`, never fewer.
+
+    `anchor_day` is the obligation's *original* day of month, persisted by
+    `obligations.add_obligation` and handed back here so a month-end due
+    date that clamped down in February climbs back to the 31st in March
+    instead of drifting there forever (see the module docstring). Omit it
+    and every step clamps against `due.day`, which is right for a fresh
+    obligation and for every day-length cadence.
 
     Returns `None` for `cadence == "once"` — there is no next date; the
     obligation is resolved, not rescheduled.
@@ -134,24 +188,13 @@ def roll_forward(due: date, cadence: str, paid_on: date) -> date | None:
     dates, never date text; parsing (and its own refusal, `UnparseableDate`)
     happens once, at the edge, before this is ever called.
     """
-    for name, value in (("due", due), ("paid_on", paid_on)):
-        if not isinstance(value, date):
-            raise TypeError(
-                f"roll_forward's {name!r} argument must be a datetime.date, "
-                f"not {type(value).__name__} — parse a date string once, at "
-                "the edge, before calling this"
-            )
-    name = str(cadence).strip()
-    if name not in CADENCES:
-        raise UnknownCadence(
-            f"cadence must be one of: {', '.join(CADENCES)}"
-        )
+    name = _check(due, cadence, ("paid_on", paid_on))
     if name == "once":
         return None
 
     periods = 1
     while True:
-        candidate = _advance(due, name, periods)
+        candidate = _advance(due, name, periods, anchor_day)
         if candidate > paid_on:
             return candidate
         periods += 1

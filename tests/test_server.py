@@ -109,7 +109,8 @@ def test_obligation_round_trip_through_the_gate(ui):
     status, data = ui.json("/api/obligations")
     assert data["rows"] == [{"id": "rent", "name": "Sunrise", "due_date": "2099-10-01",
                              "cadence": "monthly", "amount": "a payment is due", "rung": "L4",
-                             "gap": False, "paid_on": None, "resolved": False}]
+                             "gap": False, "paid_on": None, "resolved": False,
+                             "paid_current": False}]
 
     status, data = ui.json("/api/obligation?id=rent")
     assert data["fields"]["amount"] == {"rung": "L4", "value": "1450.00"}
@@ -595,3 +596,88 @@ def test_obligation_paid_replace_true_only_as_a_json_boolean(ui):
         "replace": "false",
     })
     assert status == 400 and "overwrite" in data["error"]
+
+
+def test_obligation_paid_reports_a_back_dated_entry_without_rolling(ui):
+    """A receipt for a period a later payment already closed is recorded and
+    the schedule stands still (`rolled: false`) — otherwise the due date
+    walks forward once per receipt and a period the household still owes
+    disappears."""
+    _add_rent(ui, due_date="2026-08-05")
+    status, first = ui.json("/api/obligation/paid", {
+        "id": "rent", "account": "checking", "fingerprint": "fp-1", "paid_on": "2026-08-05"})
+    assert status == 200 and first["new_due"] == "2026-09-05" and first["rolled"] is True
+
+    status, back = ui.json("/api/obligation/paid", {
+        "id": "rent", "account": "checking", "fingerprint": "fp-0", "paid_on": "2026-07-05"})
+    assert status == 200 and back["rolled"] is False
+    assert back["old_due"] == back["new_due"] == "2026-09-05"
+
+    status, data = ui.json("/api/obligations")
+    assert data["rows"][0]["due_date"] == "2026-09-05"
+
+
+def test_no_obligation_surface_ever_carries_the_account_or_fingerprint(ui):
+    """I-15 on the JSON doors: a `paid_by` record holds `{account,
+    fingerprint}` and every surface shows it *by reference* — the date the
+    record is keyed under — so neither value may appear in a list row, in an
+    opened detail, in the queue, or in the served page. Both are planted
+    with values nothing else on these surfaces could produce."""
+    _add_rent(ui)
+    status, data = ui.json("/api/obligation/paid", {
+        "id": "rent", "account": "checking",
+        "fingerprint": "f1nG3rpr1nt-pl4nt", "paid_on": "2026-08-07"})
+    assert status == 200
+
+    for path in ("/api/obligations", "/api/obligation?id=rent", "/api/queue"):
+        status, data = ui.json(path)
+        assert status == 200
+        blob = json.dumps(data)
+        assert "f1nG3rpr1nt-pl4nt" not in blob, path
+        assert "paid_by" not in blob, path
+    # the row does carry the reference, which is the point
+    status, data = ui.json("/api/obligations")
+    assert data["rows"][0]["paid_on"] == "2026-08-07"
+
+    status, body = ui.get("/")
+    assert b"f1nG3rpr1nt-pl4nt" not in body
+
+
+def test_the_list_row_ticks_only_a_current_period(ui):
+    """`paid_current` is a separate field from `paid_on` and the page's JS
+    draws the ✓ from it — "there is a payment on file" and "this period is
+    paid" are different claims."""
+    _add_rent(ui, due_date="2020-08-05")   # long lapsed on any real clock
+    status, _ = ui.json("/api/obligation/paid", {
+        "id": "rent", "account": "checking", "fingerprint": "fp-1", "paid_on": "2020-08-05"})
+    assert status == 200
+
+    status, data = ui.json("/api/obligations")
+    row = data["rows"][0]
+    assert row["paid_on"] == "2020-08-05" and row["paid_current"] is False
+
+    status, body = ui.get("/")
+    page = body.decode()
+    assert "if(o.paid_current)" in page
+    # and the tick is not drawn from the bare presence of a payment
+    assert "if(o.paid_on){paid+='<span class=\"sm s-ok\">paid" not in page
+
+
+def test_the_mark_paid_form_takes_its_accounts_from_the_status_door(ui):
+    """No second hand-kept account list on this surface (I-23): the select is
+    empty in the markup and filled from `/api/status`, whose `accounts` is
+    `registry.all_accounts()`. Options are built as DOM nodes with
+    `textContent`, so an account label is never concatenated into HTML."""
+    status, body = ui.get("/")
+    page = body.decode()
+    assert '<select id="paccount"></select>' in page
+    m = re.search(r"function loadAccountsForPaid\(\) \{(.*?)\n\}", page, re.S)
+    assert m is not None
+    fn = m.group(1)
+    assert "/api/status" in fn
+    assert "createElement('option')" in fn and "textContent" in fn
+    assert "innerHTML='<option" not in fn
+
+    status, data = ui.json("/api/status")
+    from homestead_ledger import registry
+    assert data["accounts"] == list(registry.all_accounts())

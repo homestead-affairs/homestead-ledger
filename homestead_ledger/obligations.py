@@ -45,7 +45,7 @@ from homestead.keep.logs import Event, VisibleLog
 from homestead.keep.rungs import Classified, Disposition, Rung, Surface, compose, serve
 
 from homestead_ledger import money, registry
-from homestead_ledger.cadence import CADENCES, UnknownCadence, roll_forward
+from homestead_ledger.cadence import CADENCES, UnknownCadence, previous_due, roll_forward
 from homestead_ledger.packs import obligations as pack
 from homestead_ledger.store import InvalidKey, RecordExists, Ref, Replaced, Sidecar, key
 
@@ -76,6 +76,30 @@ SEALED = "(sealed)"
 #: the de-duplication gate (the same posture `books.py` gives `date`).
 _ORDER = ("due_date", "name", "amount", "cadence")
 
+#: The **anchor**: the day of month the obligation's *first* due date fell
+#: on, kept as its own record (`(obligations, "due_day", <id>)`, L2) rather
+#: than re-derived from `due_date` every time.
+#:
+#: Without it a month-end obligation drifts and never comes back. Rent due
+#: the 31st, paid on time, rolls to Feb 28 — and next month `mark_paid` is
+#: handed *that* Feb 28 as the only day it knows, so it rolls to Mar 28, Apr
+#: 28, … and the household's rent day has quietly become the 28th forever.
+#: `cadence.roll_forward`'s clamp is anchored on this record instead, so the
+#: sequence is Jan 31 → Feb 28 → Mar 31 → Apr 30 → May 31: the month that
+#: has a 31st gets it back.
+#:
+#: It is *not* one of `_ORDER`'s pack fields — it is bookkeeping this module
+#: keeps for its own arithmetic, not a field the household typed — so
+#: `rows()` skips it the way it skips `paid_by` and `resolved`, and a torn
+#: write that loses it is harmless for a fresh obligation (see
+#: `add_obligation`).
+_ANCHOR = "due_day"
+
+#: The paid-by record's own field name, and the resolved marker's. Named
+#: once here because three functions key on them.
+_PAID_BY = "paid_by"
+_RESOLVED = "resolved"
+
 #: The closed id shape. Lowercase because the id is a key segment and a
 #: reference an operator retypes; hyphens because `car-insurance` is how a
 #: household names a bill; no dot, so a future `<instance>.<sub>` id stays
@@ -94,7 +118,36 @@ class ObligationRow:
     fingerprint}` payload) — or `None` if the obligation has never been
     marked paid. `resolved` is `True` once a `once` obligation has been paid
     (a `(obligations, "resolved", id)` record exists); a resolved obligation
-    still lists here (this is not the queue, which drops it), only marked."""
+    still lists here (this is not the queue, which drops it), only marked.
+
+    **`paid_current` is the one a surface may draw a ✓ from**, and it is a
+    narrower claim than `paid_on is not None`. Two ways a payment on file
+    fails to say "this is paid up", both of which a bare `paid ✓ <date>`
+    would say anyway:
+
+    * The payment is older than the period now open. A due date of
+      2026-08-01 with the latest payment on 2026-05-15 is an obligation that
+      lapsed two periods ago, not one that is paid. The mark is shown only
+      when the latest payment falls on or after the previous due date
+      (`cadence.previous_due`) — inside the period that ended at the due
+      date now on file.
+    * The due date has arrived. `mark_paid` always rolls past the payment
+      that triggered it, so every paid obligation shows a due date in its
+      own future; once *today* reaches it, the open period is unpaid again
+      and last month's receipt stops being an answer. A caller that passes
+      `today` gets that second test too — `paid ✓ 2026-07-01` beside
+      `due 2026-08-01` is honest on 20 July and a lie on 15 August, and
+      only the caller knows which day it is. Omit `today` and only the
+      first test applies.
+
+    A `resolved` obligation is always marked: a `once` obligation that has
+    been paid has no next period to fall behind on. Where the due date or
+    cadence cannot be read (sealed, missing, corrupt) there is no period to
+    test against and the answer is `False`: no claim beats a wrong one
+    (I-11).
+
+    `paid_on` itself is left as it is either way, so a surface that wants to
+    say "last paid …" without claiming the period still can."""
 
     item_id: str
     name: str
@@ -105,6 +158,7 @@ class ObligationRow:
     gap: bool
     paid_on: str | None = None
     resolved: bool = False
+    paid_current: bool = False
 
 
 def _identifier(item_id: object) -> str:
@@ -163,7 +217,10 @@ def add_obligation(
         raise ValueError("an obligation names who is owed")
     how_often = str(cadence).strip()
     if not how_often:
-        raise ValueError("an obligation says how often it recurs (monthly, annual, …)")
+        raise ValueError(
+            "an obligation says how often it recurs — one of: "
+            f"{', '.join(CADENCES)}"
+        )
     if how_often not in CADENCES:
         # I-23's reasoning applied to a household-typed word rather than a
         # matter/account name: `cadence.CADENCES` is the one enumeration
@@ -178,22 +235,36 @@ def add_obligation(
         "cadence": how_often,
     }
     replaced: Replaced | None = None
-    for index, field in enumerate(_ORDER):
-        record = Classified(FIELDS[field], values[field], DERIVED.get(field))
-        first = index == 0
-        if first and not replace:
-            try:
-                store.put(KIND, field, ident, record, overwrite=False)
-            except RecordExists:
-                raise RecordExists(
-                    f"{KIND}/{ident} already exists. A write never silently "
-                    "overwrites (I-9): pass --replace (the CLI) or "
-                    '"replace": true (the UI) to replace it.'
-                ) from None
-            continue
-        result = store.put(KIND, field, ident, record, overwrite=True)
-        if first:
-            replaced = result
+    gate = Classified(FIELDS["due_date"], values["due_date"], DERIVED.get("due_date"))
+    if replace:
+        replaced = store.put(KIND, "due_date", ident, gate, overwrite=True)
+    else:
+        try:
+            store.put(KIND, "due_date", ident, gate, overwrite=False)
+        except RecordExists:
+            raise RecordExists(
+                f"{KIND}/{ident} already exists. A write never silently "
+                "overwrites (I-9): pass --replace (the CLI) or "
+                '"replace": true (the UI) to replace it.'
+            ) from None
+    # The anchor, written immediately behind the gate and before any other
+    # field, so the ordinary add path cannot produce an obligation that has a
+    # due date and no day to clamp against. It is the one write whose torn
+    # absence is *not* a gap: for an obligation that has never rolled,
+    # `due_date.day` is the anchor, which is exactly what `mark_paid` falls
+    # back to — so a crash here costs nothing until the first month-end roll,
+    # and `--replace` (which resets the due date) rewrites it.
+    store.put(
+        KIND, _ANCHOR, ident,
+        Classified(Rung.L2, str(date.fromisoformat(values["due_date"]).day)),
+        overwrite=True,
+    )
+    for field in _ORDER[1:]:
+        store.put(
+            KIND, field, ident,
+            Classified(FIELDS[field], values[field], DERIVED.get(field)),
+            overwrite=True,
+        )
     return ref, replaced
 
 
@@ -206,10 +277,71 @@ class DueRolled:
     module already read through the gate (`_served`) before computing
     `roll_forward` — never a `.payload` reach, and this pair is what
     `add_obligation`'s `Replaced` reports for `--replace`, restated for an
-    act that moves a date instead of overwriting a whole record."""
+    act that moves a date instead of overwriting a whole record.
+
+    `rolled` is `False` for the one case where the payment is recorded and
+    the schedule deliberately stands still: a **back-dated** entry, a
+    payment for a period a later payment already closed. `new_due` is then
+    the unchanged due date, not a new one — see `mark_paid`."""
 
     old_due: str
     new_due: str | None
+    rolled: bool = True
+
+
+def _anchor_day(store: Sidecar, ident: str, due_date: date) -> int:
+    """The obligation's anchor day of month.
+
+    **The fallback is the documented one.** An obligation written before
+    this module kept an anchor — or one whose add was torn between the
+    due-date gate and the anchor write — has no `due_day` record, and there
+    is nothing to recover it from: the *original* day is gone the moment a
+    month-end due date has clamped. So it falls back to the day the due date
+    currently holds, which is the old behaviour exactly (I-11: the fallback
+    is named and bounded, not a guess at what the day "probably" was), and
+    `obligation add --replace` is how an operator restores a drifted
+    anchor. A stored value that is not a day of month is treated the same
+    way: refusing to mark a payment because a bookkeeping record is
+    corrupt would be worse than rolling by the date on file, and the
+    corruption is visible in the detail pane.
+    """
+    try:
+        record = store.get(KIND, _ANCHOR, ident)
+    except KeyError:
+        return due_date.day
+    shown = _served(record, Surface.S1_LIST)
+    if shown is None or not shown.strip().isdigit():
+        return due_date.day
+    day = int(shown.strip())
+    return day if 1 <= day <= 31 else due_date.day
+
+
+def _paid_dates(store: Sidecar, ident: str) -> list[date]:
+    """Every `paid_by` date on file for `ident`, parsed, oldest first.
+
+    Read by reference — the *key* each paid-by record is filed under, never
+    its `{account, fingerprint}` payload (I-15) — so this function never
+    needs the gate and never touches a value.
+    """
+    out: list[date] = []
+    prefix = f"{ident}."
+    for (_, field, item_id), _record in store.records(KIND):
+        if field != _PAID_BY or not item_id.startswith(prefix):
+            continue
+        try:
+            out.append(date.fromisoformat(item_id[len(prefix):]))
+        except ValueError:
+            continue
+    out.sort()
+    return out
+
+
+def _latest_paid(
+    store: Sidecar, ident: str, *, excluding: date | None = None
+) -> date | None:
+    """The most recent payment on file for `ident`, ignoring `excluding`."""
+    dates = [d for d in _paid_dates(store, ident) if d != excluding]
+    return dates[-1] if dates else None
 
 
 def _served(record: Classified, surface: Surface) -> str | None:
@@ -237,11 +369,20 @@ def mark_paid(
     `(id, paid_on)` is refused by the store's atomic insert, not by a
     `has()` check a second racing caller could see stale (I-9).
 
-    Then advances `due_date` via `cadence.roll_forward`, or — for a `once`
-    obligation, which has no next date — writes `(obligations, "resolved",
-    "<id>")` at `Rung.L2` instead, so `queue()` stops surfacing it. Logs
-    `Event.ITEM_RESOLVED` with the reference `(obligations, id)` only — never
-    the account, the fingerprint, or either date (I-15).
+    Then advances `due_date` via `cadence.roll_forward`, clamped against
+    the obligation's persisted anchor day (`due_day`) so a month-end
+    schedule does not drift — or, for a `once` obligation, which has no next
+    date, writes `(obligations, "resolved", "<id>")` at `Rung.L2` instead,
+    so `queue()` stops surfacing it. Logs `Event.ITEM_RESOLVED` with the
+    reference `(obligations, id)` only — never the account, the
+    fingerprint, or either date (I-15).
+
+    **It advances only for the newest payment.** A back-dated entry — a
+    `paid_on` older than a payment already on file, or a `--replace` of a
+    date already recorded — writes its paid-by record and leaves `due_date`
+    alone (`DueRolled.rolled is False`). The alternative is a due date that
+    walks forward once per *receipt* rather than once per *period*, so
+    entering last December's payment in January would skip February.
 
     Refuses, before writing anything:
     * `obligation_id` unknown (no `due_date`/`cadence` on file for it).
@@ -303,14 +444,22 @@ def mark_paid(
             f"{', '.join(CADENCES)} — fix the obligation before marking it paid"
         )
 
+    anchor_day = _anchor_day(store, ident, due_date)
+
+    # Everything the schedule decision needs, read *before* this call's own
+    # write lands, so "is there already a later payment on file?" is asked of
+    # the store as it was, not of the record we are about to add.
+    latest_other = _latest_paid(store, ident, excluding=paid_date)
+    already_recorded = store.has(KIND, _PAID_BY, f"{ident}.{paid_date.isoformat()}")
+
     paid_item_id = f"{ident}.{paid_date.isoformat()}"
-    paid_ref = key(KIND, "paid_by", paid_item_id)
+    paid_ref = key(KIND, _PAID_BY, paid_item_id)
     paid_record = Classified(Rung.L2, {"account": account, "fingerprint": fp})
     if replace:
-        store.put(KIND, "paid_by", paid_item_id, paid_record, overwrite=True)
+        store.put(KIND, _PAID_BY, paid_item_id, paid_record, overwrite=True)
     else:
         try:
-            store.put(KIND, "paid_by", paid_item_id, paid_record, overwrite=False)
+            store.put(KIND, _PAID_BY, paid_item_id, paid_record, overwrite=False)
         except RecordExists:
             raise RecordExists(
                 f"{paid_item_id}: this obligation is already marked paid for "
@@ -319,21 +468,83 @@ def mark_paid(
                 "UI) to record it again."
             ) from None
 
-    next_due = roll_forward(due_date, cadence_value, paid_date)
-    if next_due is None:
-        store.put(KIND, "resolved", ident, Classified(Rung.L2, "resolved"), overwrite=True)
-        rolled = DueRolled(old_due=due_date.isoformat(), new_due=None)
-    else:
-        store.put(
-            KIND, "due_date", ident, Classified(Rung.L2, next_due.isoformat()), overwrite=True
+    # A back-dated entry — a receipt for a period a later payment already
+    # closed — is a *fact*, recorded above, and not an instruction to move
+    # the schedule. `due_date` on file is already the date that later
+    # payment rolled it to; advancing again from there would skip a period
+    # the household still owes (rent due Jan 1, paid Jan 1 → Feb 1; then
+    # last December's receipt entered → Mar 1, and February silently
+    # vanishes). Re-recording a date already on file (`--replace`) does not
+    # advance either: the original write already did.
+    advance = not already_recorded and (latest_other is None or paid_date > latest_other)
+    if not advance:
+        rolled = DueRolled(
+            old_due=due_date.isoformat(), new_due=due_date.isoformat(), rolled=False
         )
-        rolled = DueRolled(old_due=due_date.isoformat(), new_due=next_due.isoformat())
+    else:
+        next_due = roll_forward(
+            due_date, cadence_value, paid_date, anchor_day=anchor_day
+        )
+        if next_due is None:
+            store.put(
+                KIND, _RESOLVED, ident, Classified(Rung.L2, "resolved"), overwrite=True
+            )
+            rolled = DueRolled(old_due=due_date.isoformat(), new_due=None)
+        else:
+            store.put(
+                KIND, "due_date", ident,
+                Classified(Rung.L2, next_due.isoformat()), overwrite=True,
+            )
+            rolled = DueRolled(old_due=due_date.isoformat(), new_due=next_due.isoformat())
 
     VisibleLog().record(Event.ITEM_RESOLVED, ref=(KIND, ident))
     return paid_ref, rolled
 
 
-def rows(store: Sidecar) -> list[ObligationRow]:
+def _covers_current_period(
+    *,
+    paid: str | None,
+    due: str | None,
+    cadence: str | None,
+    anchor: Classified | None,
+    resolved: bool,
+    today: date | None,
+) -> bool:
+    """Whether the latest payment closes the period the due date now on file
+    ends — the one question a `paid ✓` mark is allowed to answer.
+
+    See `ObligationRow.paid_current`. Every unreadable input answers `False`:
+    a mark that might be a month stale is worse than no mark at all.
+    """
+    if paid is None:
+        return False
+    if resolved:
+        return True
+    if due is None or cadence is None or cadence.strip() not in CADENCES:
+        return False
+    try:
+        due_date = date.fromisoformat(parse_deadline(due).iso)
+        paid_date = date.fromisoformat(paid)
+    except (UnparseableDate, ValueError):
+        return False
+    anchor_day = None
+    if anchor is not None:
+        text = _served(anchor, Surface.S1_LIST)
+        if text is not None and text.strip().isdigit():
+            day = int(text.strip())
+            anchor_day = day if 1 <= day <= 31 else None
+    if today is not None and today >= due_date:
+        # The due date has arrived: whatever was paid for the last period,
+        # this one is open and unpaid.
+        return False
+    start = previous_due(due_date, cadence.strip(), anchor_day=anchor_day)
+    if start is None:
+        # `once`, and not resolved — nothing has closed its single period.
+        return False
+    return paid_date >= start
+
+
+def rows(store: Sidecar, *, today: str | None = None) -> list[ObligationRow]:
     """Every obligation on file, as the list pane shows it, by id.
 
     A row's rung is `compose()` — the engine's one composition (I-12), and the
@@ -342,24 +553,42 @@ def rows(store: Sidecar) -> list[ObligationRow]:
     happens to hold in the alphabet; that is a rung being read as a sortable
     string, which is the shape I-14 names outright.
 
-    `paid_by` and `resolved` records are not obligation *fields* — they are
-    keyed under their own item ids (`paid_by`'s under `<id>.<date>`,
-    `resolved`'s under `<id>` itself but a different field name) — so they
-    are read out into `last_paid`/`resolved` here rather than folded into
-    `by_id`'s per-field map, which would otherwise mint a bogus row for
-    every `<id>.<date>` pseudo-id `paid_by` writes under.
+    `today` (ISO) is optional and only sharpens `paid_current`; see
+    `ObligationRow`. Nothing else on a row depends on the date, so a caller
+    with no clock still gets every field.
+
+    `paid_by`, `resolved` and `due_day` records are not obligation *fields*
+    — `paid_by`'s are keyed under `<id>.<date>`, the other two under `<id>`
+    itself but a different field name — so they are read out into
+    `last_paid`/`resolved`/`anchors` here rather than folded into `by_id`'s
+    per-field map, which would otherwise mint a bogus row for every
+    `<id>.<date>` pseudo-id `paid_by` writes under and count the anchor as a
+    fifth field the row must show.
     """
+    now: date | None = None
+    if today is not None:
+        try:
+            now = date.fromisoformat(str(today).strip())
+        except ValueError:
+            # A caller's own clock string it could not spell is not a reason
+            # to refuse to list the household's obligations; it is a reason
+            # to make the weaker claim (I-11).
+            now = None
     by_id: dict[str, dict[str, Classified]] = {}
     last_paid: dict[str, str] = {}
     resolved_ids: set[str] = set()
+    anchors: dict[str, Classified] = {}
     for (_, field, item_id), record in store.records(KIND):
-        if field == "paid_by":
+        if field == _PAID_BY:
             ident, _dot, paid = item_id.partition(".")
             if paid and paid > last_paid.get(ident, ""):
                 last_paid[ident] = paid
             continue
-        if field == "resolved":
+        if field == _RESOLVED:
             resolved_ids.add(item_id)
+            continue
+        if field == _ANCHOR:
+            anchors[item_id] = record
             continue
         by_id.setdefault(item_id, {})[field] = record
     out: list[ObligationRow] = []
@@ -383,6 +612,14 @@ def rows(store: Sidecar) -> list[ObligationRow]:
             gap=any(f not in fields for f in _ORDER),
             paid_on=last_paid.get(item_id),
             resolved=item_id in resolved_ids,
+            paid_current=_covers_current_period(
+                paid=last_paid.get(item_id),
+                due=shown.get("due_date"),
+                cadence=shown.get("cadence"),
+                anchor=anchors.get(item_id),
+                resolved=item_id in resolved_ids,
+                today=now,
+            ),
         ))
     return out
 

@@ -7,8 +7,9 @@ gap → require a minimum occurrence count → score confidence → derive
 next-expected/monthly-equivalent/annualized/status), adapted to this bite's
 plain-tuple interface (no `category` field — housing/rent/mortgage/debt/loan
 is excluded by matching the description text instead) and to
-`docs/build-plan.md`'s cadence set (weekly/monthly/quarterly/annual, plus
-`biweekly` added by G3-cadence-paidby).
+`cadence.CADENCES` (weekly/biweekly/monthly/quarterly/yearly; `biweekly`
+added by G3-cadence-paidby, and ~~`annual`~~ renamed `yearly` in the same
+bite so the detector and the obligations form name the same cadences).
 """
 from __future__ import annotations
 
@@ -92,7 +93,7 @@ def test_quarterly_subscription_detected():
     assert subs["quarterly box club"].cadence == "quarterly"
 
 
-def test_annual_renewal_detected_with_only_two_occurrences():
+def test_yearly_renewal_detected_with_only_two_occurrences():
     txns = [
         ("2024-06-10", -14.99, "NAMECHEAP DOMAIN RENEWAL"),
         ("2025-06-11", -14.99, "NAMECHEAP DOMAIN RENEWAL"),
@@ -100,12 +101,12 @@ def test_annual_renewal_detected_with_only_two_occurrences():
     subs = _by_merchant(detect_recurring(txns, today=TODAY))
     assert "namecheap domain renewal" in subs
     dom = subs["namecheap domain renewal"]
-    assert dom.cadence == "annual"
+    assert dom.cadence == "yearly"
     assert dom.occurrences == 2
 
 
 def test_two_monthly_occurrences_are_not_enough():
-    """The default minimum is 3 occurrences except for annual (2) — two
+    """The default minimum is 3 occurrences except for yearly (2) — two
     monthly charges do not yet make a detected subscription."""
     txns = _monthly("NEW STREAMING CO", -12.00, (2026, 6), 2)
     subs = detect_recurring(txns, today=TODAY)
