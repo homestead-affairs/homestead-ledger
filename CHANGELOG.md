@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/homestead-affairs/homestead-ledger/compare/v0.11.0...v0.11.1) (2026-09-11)
+
+
+### Fixed
+
+* the cover's second gate reads the household's spread, not the roster's shape ([1f94e27](https://github.com/homestead-affairs/homestead-ledger/commit/1f94e2751015cee2b026509a2803fab82f24cdd0))
+
 ## [0.11.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.10.0...v0.11.0) (2026-09-11)
 
 
