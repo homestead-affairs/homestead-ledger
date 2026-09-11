@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.11.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.10.0...v0.11.0) (2026-09-11)
+
+
+### Added
+
+* business-owned and restricted accounts — aggregates exclude them, grant report by allowable use, commingling by reference ([940c43f](https://github.com/homestead-affairs/homestead-ledger/commit/940c43fac664bb3ded71a9406b54e616ea48b396))
+* business-owned and restricted accounts — aggregates exclude them, grant report by allowable use, commingling by reference ([73c2d6b](https://github.com/homestead-affairs/homestead-ledger/commit/73c2d6b701c37054bc88c4f05a1af6fe13a9934a))
+
+
+### Fixed
+
+* a notice states this export's own state, and a use total is net of refunds ([824c221](https://github.com/homestead-affairs/homestead-ledger/commit/824c221ad38eb5d5c8a78350f8c1fc07be5f1af1))
+
+
+### Build
+
+* **deps:** floor homestead-affairs at 0.13.0 ([bcfa718](https://github.com/homestead-affairs/homestead-ledger/commit/bcfa718459d515fc569975ddac4706eba0d5914c))
+* **deps:** floor homestead-affairs at 0.13.0 — a transfer pair crosses to the fleet as a structured value ([7471598](https://github.com/homestead-affairs/homestead-ledger/commit/7471598c7df56a2bea116d4bbdd15d0c7a5e5f89))
+
 ## [0.10.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.9.0...v0.10.0) (2026-09-11)
 
 
