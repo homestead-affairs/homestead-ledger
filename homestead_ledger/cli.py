@@ -383,6 +383,8 @@ def _cmd_account(argv: list[str]) -> int:
 _TRANSACTION_USAGE = """\
 usage: homestead-ledger transaction add <date> <amount> <description> --account <label>
        homestead-ledger transaction list --account <label> [--gaps]
+       homestead-ledger transaction transfer <fp_out> <fp_in> [--replace]
+       homestead-ledger transaction transfer --suggest
   e.g.: homestead-ledger transaction add 2026-08-01 -84.23 "Whole Foods Market" --account chk-main
   (a whole statement: python -m homestead_ledger --import FILE.csv --account <label>)
   <label> is a registered account instance — `account add` first, `account
@@ -391,15 +393,64 @@ usage: homestead-ledger transaction add <date> <amount> <description> --account 
   --gaps lists rows whose stored date is not ISO (YYYY-MM-DD) — pre-existing
   rows from before fix: G2c-importer-dates will not dedup against a re-import
   in the new ISO form; there is no migration (v1 is synthetic-only)
+  transfer pairs an outgoing fingerprint with an incoming one — equal and
+  opposite amounts, on two different accounts, within 5 days of each other —
+  and excludes both from recurring detection and every household aggregate.
+  --suggest proposes candidate pairs without writing anything.
 """
 
 
+_TRANSFER_USAGE = """\
+usage: homestead-ledger transaction transfer <fp_out> <fp_in> [--replace]
+       homestead-ledger transaction transfer --suggest
+  <fp_out>/<fp_in> are full transaction fingerprints (`transaction list`
+  shows the first 12 characters of each).
+"""
+
+
+def _cmd_transaction_transfer(rest: list[str]) -> int:
+    """transaction transfer <fp_out> <fp_in> [--replace] | --suggest."""
+    from homestead.keep.store import RecordExists
+
+    from homestead_ledger import transfers
+    from homestead_ledger.store import Sidecar
+
+    _boot()
+    sidecar = Sidecar()
+    if "--suggest" in rest:
+        found = transfers.suggest(sidecar)
+        if not found:
+            print("  no candidate transfers found")
+            return 0
+        print(f"  {len(found)} candidate pair(s) — nothing written:")
+        for fp_out, fp_in in found:
+            print(f"  {fp_out[:12]}…  ->  {fp_in[:12]}…")
+        return 0
+
+    replace = "--replace" in rest
+    rest = [a for a in rest if a != "--replace"]
+    if len(rest) != 2:
+        print(_TRANSFER_USAGE, end="", file=sys.stderr)
+        return 2
+    fp_out, fp_in = rest
+    try:
+        ref, replaced = transfers.pair(sidecar, fp_out, fp_in, replace=replace)
+    except (ValueError, RecordExists) as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return 1
+    print(f"  paired: {ref[2][:12]}…  ->  {fp_in[:12]}…")
+    if replaced is not None:
+        print("  (replaced the previous pairing for this fingerprint)")
+    return 0
+
+
 def _cmd_transaction(argv: list[str]) -> int:
-    """transaction <add|list> — one transaction into the books, or the account listed."""
+    """transaction <add|list|transfer> — one transaction into the books, the
+    account listed, or two transactions paired as a transfer."""
     from homestead.keep.dates import UnparseableDate, parse_deadline
     from homestead.keep.store import RecordExists
 
-    from homestead_ledger import accounts, balance, books, money
+    from homestead_ledger import accounts, balance, books, money, transfers
     from homestead_ledger.app.window import Window
     from homestead_ledger.store import Canonical, Sidecar
 
@@ -408,6 +459,11 @@ def _cmd_transaction(argv: list[str]) -> int:
         print(_TRANSACTION_USAGE, end="", file=sys.stderr)
         return 2
     sub, rest = args[0], args[1:]
+    if sub == "transfer":
+        # `transfer` names two fingerprints, not `--account <label>` — it
+        # takes the branch before the account handling below ever looks for
+        # one.
+        return _cmd_transaction_transfer(rest)
     rest, account = _flag(rest, "--account")
     gaps_only = "--gaps" in rest
     rest = [a for a in rest if a != "--gaps"]
@@ -516,10 +572,12 @@ def _cmd_transaction(argv: list[str]) -> int:
         print(f"  {account}: {len(rows)} row(s) (each transaction is a date, a description and an amount)")
         for row in rows:
             _, field, item_id = row.ref
-            print(f"  [{row.rung.value}]  {item_id[:12]}  {field}: {row.text}")
+            other = transfers.other_label(sidecar, item_id)
+            tag = f"  (transfer → {other})" if other else ""
+            print(f"  [{row.rung.value}]  {item_id[:12]}  {field}: {row.text}{tag}")
         return 0
 
-    print(f"unknown subcommand {sub!r} — one of: add, list", file=sys.stderr)
+    print(f"unknown subcommand {sub!r} — one of: add, list, transfer", file=sys.stderr)
     return 2
 
 
@@ -588,7 +646,7 @@ def _cmd_ui(argv: list[str]) -> int:
 COMMANDS: dict[str, tuple] = {
     "account":     (_cmd_account,     "account <add|list|show> — real accounts"),
     "obligation":  (_cmd_obligation,  "obligation <add|list|show|paid> — recurring obligations"),
-    "transaction": (_cmd_transaction, "transaction <add|list> — the books"),
+    "transaction": (_cmd_transaction, "transaction <add|list|transfer> — the books"),
     "resolve":     (_cmd_resolve,     "resolve <surface> — merchant entity resolution"),
     "reconcile":   (_cmd_reconcile,   "reconcile <baseline> <observed> — compare amounts"),
     "put":         (_cmd_put,         "put — retired; use obligation add / transaction add"),

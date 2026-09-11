@@ -38,11 +38,18 @@ from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent / "homestead_ledger"
 
-BOOKS = PKG / "books.py"      # serializes a payload to import; the only canonical writer
-BALANCE = PKG / "balance.py"  # arithmetic over the household's own numbers — not a surface
+BOOKS = PKG / "books.py"          # serializes a payload to import; the only canonical writer
+BALANCE = PKG / "balance.py"      # arithmetic over the household's own numbers — not a surface
+#: G4-transfers: pairing two transactions needs their real `amount`/`date` —
+#: `amount` is L4 and derives on S1_LIST, so equal-and-opposite cannot be
+#: checked through the ordinary gate. `transfers._compatible`/`exclude_from`
+#: are the reach; see `transfers.py`'s own module docstring and
+#: `tests/test_transfers.py`'s scope test holding `_compatible` to exactly
+#: two rows and two fields.
+TRANSFERS = PKG / "transfers.py"
 #: The payload boundary. Everything else goes through the gate and receives a
 #: served, derived form.
-ALLOWED_PAYLOAD = {BOOKS, BALANCE}
+ALLOWED_PAYLOAD = {BOOKS, BALANCE, TRANSFERS}
 #: "Mirror, not judge": only the import writes the household's books.
 ALLOWED_CANONICAL = {BOOKS}
 
