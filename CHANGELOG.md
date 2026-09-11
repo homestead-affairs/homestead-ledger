@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.7.0...v0.8.0) (2026-09-11)
+
+
+### Added
+
+* overlay a transaction — category, note, confirmed merchant, do-not-use ([fca92a7](https://github.com/homestead-affairs/homestead-ledger/commit/fca92a79a4349ff520263d8d59a03a60f37be73a))
+
+
+### Fixed
+
+* close the overlay's protected-word gaps, resolve a typed fingerprint prefix, and cap free text ([6f07c00](https://github.com/homestead-affairs/homestead-ledger/commit/6f07c008734afcb8e1cbd0a9f7d03dccfeea7412))
+
 ## [0.7.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.6.0...v0.7.0) (2026-09-11)
 
 
