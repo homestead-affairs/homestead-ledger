@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.7.0...v0.8.0) (2026-09-11)
+
+
+### Added
+
+* overlay a transaction — category, note, confirmed merchant, do-not-use ([bd8effc](https://github.com/homestead-affairs/homestead-ledger/commit/bd8effc0e25118c22ec1bfaf64f448e967fc1f2f))
+
 ## [0.7.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.6.0...v0.7.0) (2026-09-11)
 
 
