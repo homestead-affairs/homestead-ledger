@@ -257,3 +257,77 @@ def test_a_racing_second_add_is_refused_at_the_cli_too(capsys):
     assert run_cli(["obligation", "show", "rent"]) == 0
     out = capsys.readouterr().out
     assert "name: Sunrise" in out and "Interloper" not in out
+
+
+# ── bite 2b, audit: a retired flag is refused, never written into the books ──
+
+_NUMBER_PLANT = "4111222233334444"
+
+
+def test_a_retired_flag_on_transaction_add_is_refused_and_never_reaches_a_row(capsys):
+    """`transaction add`'s description is positional — everything from the
+    third argument on is joined into it — so a flag this bite retired is not
+    merely ignored, it is written into the books as part of the payee.
+
+    `--account-number 4111…` landed the bank-issued number in the row's
+    **L3** `description`, where `transaction list` renders it in full: the
+    one crossing I-43 ("an account number lives in exactly one record") and
+    I-13 ("L5 has no override anywhere") exist to stop, reached by typing
+    the flag the README documented until this bite. `__main__.py` refused
+    both flags on the `--import` path already, but that check sits *after*
+    the sub-command routing, so `transaction add` never saw it.
+    """
+    from homestead_ledger.store import Canonical
+
+    label = _add_account("visa-chase", "credit_card", _NUMBER_PLANT)
+    capsys.readouterr()
+
+    for retired in ("--account-number", "--kind"):
+        argv = ["transaction", "add", "2026-08-01", "-1.00", "Coffee",
+                "--account", label, retired, _NUMBER_PLANT]
+        assert run_cli(argv) == 2, argv
+        err = capsys.readouterr().err
+        assert retired in err and "retired" in err
+        assert "account add" in err
+        # I-15: the refusal names the flag, never the value it was given
+        assert _NUMBER_PLANT not in err
+
+    # …and no row was written at all, so nothing carries the plant
+    assert Canonical().records(label) == []
+
+    # the same flag with no --account at all is still refused by name,
+    # rather than falling through to the bare usage
+    assert run_cli(["transaction", "add", "2026-08-01", "-1.00", "Coffee",
+                    "--account-number", _NUMBER_PLANT]) == 2
+    assert "retired" in capsys.readouterr().err
+
+
+def test_an_unrecognized_flag_on_transaction_add_is_refused_not_joined_in(capsys):
+    """The general case behind the retired two: any leftover `--flag` would
+    be joined into the description. Refused by name with the usage, and the
+    books stay empty — the same posture `--gaps` on `transaction add`
+    already takes."""
+    from homestead_ledger.store import Canonical
+
+    label = _add_account()
+    capsys.readouterr()
+    assert run_cli(["transaction", "add", "2026-08-01", "-1.00", "Coffee",
+                    "--account", label, "--bogus", "x"]) == 2
+    err = capsys.readouterr().err
+    assert "--bogus" in err and "usage:" in err
+    assert Canonical().records(label) == []
+
+
+def test_naming_a_kind_where_a_label_belongs_points_somewhere_that_works(capsys):
+    """An operator coming from before this bite types `--account checking`,
+    the only spelling that ever worked. The refusal used to answer "`account
+    add checking --kind K --number N` first" — and `account add checking` is
+    itself refused, because a label may never equal a kind name. A refusal
+    that routes to a refusal is a dead end (I-11 asks for a refusal *by
+    name*, which means one the household can act on)."""
+    for kind in ("checking", "credit_card"):
+        assert run_cli(["transaction", "list", "--account", kind]) == 2
+        err = capsys.readouterr().err
+        assert "kind" in err
+        assert f"--kind {kind}" in err          # the way out, not `account add <kind>`
+        assert f"account add {kind} " not in err

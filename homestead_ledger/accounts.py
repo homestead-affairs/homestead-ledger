@@ -47,7 +47,8 @@ from homestead_ledger.store import InvalidKey, RecordExists, Ref, Replaced, Side
 
 __all__ = [
     "MATTER", "FIELDS", "MISSING", "SEALED", "AccountRow",
-    "add_account", "instances", "kind_of", "label_exists", "rows", "detail", "cover",
+    "add_account", "instances", "kind_of", "label_exists", "unknown_label",
+    "rows", "detail", "cover",
 ]
 
 MATTER = pack.MATTER
@@ -111,6 +112,33 @@ def _label(value: object) -> str:
             "visa-chase, …) and name the kind with --kind."
         )
     return ident
+
+
+def unknown_label(label: str) -> str:
+    """The one sentence every "no such account instance" refusal carries —
+    the CLI's, the importer's, `books.import_transaction`'s — so a household
+    reads the same guidance whichever door refused.
+
+    **It never points at a command that will refuse too.** A label equal to
+    a registered *kind* name is exactly what an operator coming from before
+    this bite types (`--account checking`), and telling them to run `account
+    add checking` sends them straight into `_label`'s own refusal. Named for
+    what it is instead, with a label they can actually use.
+    """
+    ident = str(label).strip()
+    if ident in registry.all_accounts():
+        return (
+            f"unknown account {ident!r} — that is a registered account "
+            "*kind*, not one of this household's own accounts. Register the "
+            "real account under a label of your own and name the kind: "
+            f"`account add <label> --kind {ident} --number <number>` "
+            "(chk-main, visa-chase, …), then use that label here."
+        )
+    return (
+        f"unknown account {ident!r} — no such account instance. `account "
+        f"add {ident} --kind <kind> --number <number>` first, or `account "
+        "list` to see what is on file."
+    )
 
 
 def _payment_due_day(value: object) -> str:
@@ -231,11 +259,7 @@ def kind_of(store: Sidecar, label: str) -> str:
     try:
         record = store.get(MATTER, "kind", label)
     except KeyError:
-        raise ValueError(
-            f"{label!r}: no such account instance — `account add {label} "
-            "--kind <kind> --number <number>` first, or `account list` to "
-            "see what is on file"
-        ) from None
+        raise ValueError(unknown_label(label)) from None
     served = serve(record, Surface.S1_LIST)
     if served.disposition is Disposition.DENY:
         # kind is declared L2, below every surface's plain ceiling, so this
@@ -328,4 +352,13 @@ def cover(store: Sidecar) -> dict[str, int]:
     zero — a count over a single account resolves to that one account the
     instant it is read."""
     labels = instances(store)
+    # G5 hand-off: the engine grows `cover_counts(..., by_matter=...)` in
+    # 0.7.0 (E4-cover-distribution), where a count must also be spread over
+    # at least two matters each contributing at least one. This module does
+    # not pass it: this package's floor is `homestead-affairs>=0.3.0`
+    # (`pyproject.toml`), which has no such parameter, and a keyword the
+    # installed engine does not take is a `TypeError` at the resting cover.
+    # When the floor rises, the distribution to pass here is the per-label
+    # transaction counts — `{label: len(canonical.records(label))}` — so a
+    # single busy account cannot carry an "instances" count on its own.
     return cover_counts(labels, instances=len(labels))

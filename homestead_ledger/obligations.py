@@ -44,7 +44,7 @@ from homestead.keep.dates import UnparseableDate, parse_deadline
 from homestead.keep.logs import Event, VisibleLog
 from homestead.keep.rungs import Classified, Disposition, Rung, Surface, compose, serve
 
-from homestead_ledger import accounts, money, registry
+from homestead_ledger import accounts, money
 from homestead_ledger.cadence import CADENCES, UnknownCadence, previous_due, roll_forward
 from homestead_ledger.packs import obligations as pack
 from homestead_ledger.store import InvalidKey, RecordExists, Ref, Replaced, Sidecar, key
@@ -418,11 +418,7 @@ def mark_paid(
     # `/api/status` instances the transaction form uses, would offer labels
     # this function refuses.
     if not account or not accounts.label_exists(store, account):
-        raise ValueError(
-            f"unknown account instance {account!r} — `account add {account} "
-            "--kind <kind> --number <number>` first, or `account list` to "
-            "see what is on file"
-        )
+        raise ValueError(accounts.unknown_label(account))
     fp = str(fingerprint).strip()
     if not fp:
         raise ValueError("a paid-by record names the transaction fingerprint")

@@ -64,6 +64,33 @@ def _flag(args: list[str], name: str) -> tuple[list[str], str | None]:
     return rest, value
 
 
+#: The flags bite 2b retired from `transaction add` and `--import`: the
+#: account number and the kind live on the account instance now. Kept as
+#: data so the refusal and `__main__.py`'s own say the same thing.
+_RETIRED_TRANSACTION_FLAGS = ("--account-number", "--kind")
+
+
+def _stray_flags(rest: list[str]) -> list[str]:
+    """Every ``--flag`` token still in ``rest`` after the known flags were
+    pulled out by `_flag`.
+
+    Worth refusing rather than ignoring, and on this sub-command worth more
+    than that: `transaction add`'s description is *positional* — everything
+    from the third argument on is joined into it — so an unconsumed flag is
+    not dropped, it is **written into the books** as part of the payee.
+    `transaction add … --account --account-number 4111…` stored the bank
+    number in the row's L3 `description` and rendered it on `transaction
+    list`, which is the one crossing I-43 and I-13 exist to stop. The same
+    shape `--gaps` on `transaction add` is already refused for: a flag that
+    looks honoured and is not.
+
+    The cost is that a description token may not itself begin with ``--``;
+    a payee name that does is not a thing a bank statement produces, and a
+    refusal an operator can see beats a silent rewrite of what they typed.
+    """
+    return [token for token in rest if token.startswith("--")]
+
+
 def _cmd_resolve(argv: list[str]) -> int:
     """resolve <surface> — resolve a merchant name."""
     if len(argv) < 2:
@@ -394,6 +421,26 @@ def _cmd_transaction(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
+    stray = _stray_flags(rest)
+    if stray:
+        retired = [flag for flag in stray if flag in _RETIRED_TRANSACTION_FLAGS]
+        if retired:
+            print(
+                f"  {retired[0]} is retired — the account number and kind "
+                "live on the account instance now (`account add <label> "
+                "--kind K --number N`); pass --account <label> naming the "
+                "instance instead",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"  unrecognized flag {stray[0]} for `transaction {sub}` — "
+                "see the usage below (a description is positional, and an "
+                "unrecognized flag would otherwise be written into it)",
+                file=sys.stderr,
+            )
+            print(_TRANSACTION_USAGE, end="", file=sys.stderr)
+        return 2
     if not account:
         print(_TRANSACTION_USAGE, end="", file=sys.stderr)
         return 2
@@ -405,11 +452,7 @@ def _cmd_transaction(argv: list[str]) -> int:
     # iterates `accounts.instances()` (the subscription pass, the window)
     # would ever reach. Refused by name, never created.
     if not accounts.label_exists(sidecar, account):
-        print(
-            f"  unknown account {account!r} — `account add {account} --kind "
-            "K --number N` first, or `account list` to see what is on file",
-            file=sys.stderr,
-        )
+        print(f"  {accounts.unknown_label(account)}", file=sys.stderr)
         return 2
 
     if sub == "add":
