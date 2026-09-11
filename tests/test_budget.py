@@ -174,9 +174,10 @@ def test_the_visible_log_never_carries_the_amount(store):
 
 def test_terms_found_catches_a_planted_leak():
     """Planted: `tests/_scans.py::terms_found` is the shared I-15 grep half
-    every "log/document never carries X" test in this suite calls (15 of
-    them, across 8 modules, as of G9d-inline-scans) — proven once here
-    rather than re-derived at every call site."""
+    every "log/document never carries X" test in this suite calls (21 call
+    sites across 8 modules, as of G9d-inline-scans) — proven once here
+    rather than re-derived at every call site. `tests/test_scans_fire.py`
+    sweeps the shared module against this plant."""
     from tests._scans import terms_found as tf
 
     assert tf("a line naming the fingerprint 12345", ("12345", "76543")) == ["12345"]

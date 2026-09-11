@@ -108,11 +108,10 @@ _MATCH_CALLS = frozenset(
 #: scan, in the spelling this suite reaches for first.
 _TEXT_READS = frozenset({"read_text", "read_bytes"})
 
-#: The same read through an already-open handle — `open(p).read()`, and the
-#: `with open(p) as f: f.read()` this suite would write it as. A rule that
-#: knew only `_TEXT_READS` cleared a scan written with the builtin, which is
-#: not a documented boundary, just a spelling it had not been shown (audit,
-#: 2026-09-11).
+#: The same read through an already-open handle — `open(p).read()` and the
+#: `with open(p) as f: f.read()` spelling of it. A rule that knew only
+#: `_TEXT_READS` cleared those, which was never a documented boundary — only
+#: a spelling it had not been shown (audit, 2026-09-11).
 _HANDLE_READS = frozenset({"read", "readlines", "readline"})
 
 #: Wrappers a read may be decoded or normalised through before the
@@ -120,11 +119,10 @@ _HANDLE_READS = frozenset({"read", "readlines", "readline"})
 #: of the same file, and the text it yields is the text actually read.
 _TEXT_WRAPPERS = frozenset({"decode", "strip", "lower", "upper", "casefold"})
 
-#: Reading a module's source without touching the filesystem by hand.
-#: `inspect.getsource(obj)` returns the real file's text — a membership
-#: question of it is a scan of the tree by any honest reading, and
-#: `tests/test_server.py` had exactly one (a `_route_post` slice asserted not
-#: to name "schedule") that no rule here could see (audit, 2026-09-11).
+#: Reading a module's source without naming a path. `inspect.getsource(obj)`
+#: returns the real file's text, and `tests/test_server.py` had exactly one
+#: scan of it (a `_route_post` slice asserted not to name "schedule") that no
+#: rule here could see (audit, 2026-09-11).
 _SOURCE_READS = frozenset({"getsource", "getsourcelines"})
 
 
@@ -273,13 +271,12 @@ def _filters_by_membership(node: ast.AST) -> bool:
     (or are not) *in* something else — `[term for term in terms if term in
     haystack]`.
 
-    The `_scans_a_word_list` rule above requires the iterable to be a
-    module-level constant, which is right for a helper that owns its own
-    forbidden list. A helper handed the terms as an argument is the same
-    grep with the list hoisted to the caller, and `tests/_scans.py::
-    terms_found` — one helper, twenty-one call sites across eight modules —
-    is exactly that and was matched by none of the four shapes (audit,
-    2026-09-11). The rule stays narrow the same way: the membership question
+    `_scans_a_word_list` above wants the iterable to be a module-level
+    constant, which is right for a helper owning its own forbidden list. A
+    helper handed the terms as an argument is the same grep with the list
+    hoisted to the caller: `tests/_scans.py::terms_found` — twenty-one call
+    sites in eight modules — is exactly that and matched none of the four
+    shapes (audit, 2026-09-11). Narrow the same way: the membership question
     must be asked *of the loop variable itself*, so iterating a table and
     asserting something about a result is still not a scan.
     """
@@ -310,11 +307,9 @@ def _is_fixture(node: ast.FunctionDef) -> bool:
     """`@pytest.fixture` — setup, not a scan, whatever it reads.
 
     Matched on the decorator's *own terminal name*, not on the word
-    "fixture" appearing anywhere in its dump. `@pytest.mark.usefixtures(...)`
-    contains that word and is not a fixture at all: read as one, it silently
-    exempted the whole decorated test from both halves of this file, so a
-    scan written inline under `@pytest.mark.usefixtures("_home")` — the
-    commonest decorator in this suite — could never be reported (audit,
+    "fixture" appearing anywhere in its dump: `@pytest.mark.usefixtures(...)`
+    carries that word and is not a fixture, and reading it as one silently
+    exempted the whole decorated test from both halves of this file (audit,
     2026-09-11).
     """
     return any(_decorator_name(dec) == "fixture" for dec in node.decorator_list)
