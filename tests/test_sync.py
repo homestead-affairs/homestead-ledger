@@ -20,7 +20,7 @@ from homestead_ledger import accounts, books, cli, overlay, schedules, sync, tra
 from homestead_ledger.cli import run_cli
 from homestead_ledger.store import Sidecar
 
-# ── the floor this bite raises: 0.11.0, where homestead.keep.sync landed ────
+# ── the floor this bite raises: 0.13.0, where the fleet took structured values ─
 
 
 def test_the_engine_floor_carries_sync_core():
@@ -28,10 +28,22 @@ def test_the_engine_floor_carries_sync_core():
     built on (E4-sync-core) — a floor below 0.11.0 would install an engine
     with no `keep/sync.py` at all, and this bite would fail at import
     rather than at `pip install`. `pyproject.toml`'s own floor is
-    `homestead-affairs>=0.11.0,<1.0` (see the dependency line's comment)."""
+    `homestead-affairs>=0.13.0,<1.0` (see the dependency line's comment)."""
     from homestead.keep.sync import Envelope, SyncScope
 
     assert SyncScope is not None and Envelope is not None
+
+
+def test_the_engine_floor_carries_fleet_structured_values():
+    """`homestead.keep.fleet_cli.MAX_VALUE_DEPTH` and `decode_value` are
+    E7b's own additions (2026-09-11) — a floor below 0.13.0 would install an
+    engine whose `fleet_cli` still refuses any mapping `value` by name, and
+    this bite's `test_the_fleet_accepts_a_structured_pair_value` would fail
+    at import rather than at `pip install`. `pyproject.toml`'s own floor is
+    `homestead-affairs>=0.13.0,<1.0` (G7b-floor-0.13)."""
+    from homestead.keep.fleet_cli import MAX_VALUE_DEPTH, decode_value
+
+    assert MAX_VALUE_DEPTH > 0 and decode_value is not None
 
 
 pytestmark = pytest.mark.usefixtures("_home")
