@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.3.0...v0.4.0) (2026-09-11)
+
+
+### Added
+
+* a closed cadence set, roll-forward on payment, and marking an obligation paid by reference ([ab7a123](https://github.com/homestead-affairs/homestead-ledger/commit/ab7a12354db52e24f2a123791de7fc4a6273b8fb))
+* cadence-driven due-date roll-forward and obligation paid-by tracking ([f23a1d8](https://github.com/homestead-affairs/homestead-ledger/commit/f23a1d8cbeef74bf996bd8d0d4b04c343dcc81f9))
+
+
+### Fixed
+
+* anchor a month-end obligation's due day, and stop a stale paid mark ([d2c53e9](https://github.com/homestead-affairs/homestead-ledger/commit/d2c53e9468ae114d14d60a8f766c300313362dd3))
+
 ## [0.3.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.2.1...v0.3.0) (2026-09-11)
 
 
