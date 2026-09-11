@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.2.1...v0.3.0) (2026-09-11)
+
+
+### Added
+
+* three account packs, registry-driven classification, and a liability sign convention ([e106f56](https://github.com/homestead-affairs/homestead-ledger/commit/e106f5649feaa81bf822d5b776ebe78c3fb236e9))
+
+
+### Fixed
+
+* refuse the declarations this bite added but never read ([1a5f8b9](https://github.com/homestead-affairs/homestead-ledger/commit/1a5f8b9e9a20c69f40b23765d2af5d5a5c7d9797))
+
 ## [0.2.1](https://github.com/homestead-affairs/homestead-ledger/compare/v0.2.0...v0.2.1) (2026-09-11)
 
 
