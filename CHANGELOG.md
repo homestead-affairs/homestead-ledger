@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.8.0...v0.9.0) (2026-09-11)
+
+
+### Added
+
+* budget limits per category and month, envelopes derived on the list ([5f39ae8](https://github.com/homestead-affairs/homestead-ledger/commit/5f39ae8a8de4de8dcd59f697984cb84b48fa9e0e))
+
+
+### Fixed
+
+* net a month's refunds, refuse a non-ISO date into a month, drop the unwritten budget note ([f9e6160](https://github.com/homestead-affairs/homestead-ledger/commit/f9e61609495cb64d9621cf04abace9518853f6d5))
+
 ## [0.8.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.7.0...v0.8.0) (2026-09-11)
 
 
