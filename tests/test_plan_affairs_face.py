@@ -12,10 +12,16 @@ has *not* landed reads as if nothing is outstanding. The ledger bites the
 Homestead · Affairs plan names are W0-LEDGER, G2a-account-packs,
 G2c-importer-dates, G2b-account-instances, G3-cadence-paidby, G4-overlay,
 G4-transfers, G4-budget, G4-schedules-export, G5-sync, G7b-floor-0.13,
-G8-business-books and X7-drift-ledger; the first ten landed, the last three
-have not (G7b waits on an engine release that has not shipped; G8 has
-merged but not released; this bite cannot strike itself before its own PR
-merges), and all thirteen must be named here.
+G8-business-books and X7-drift-ledger; twelve have landed (G8 as #45 and
+G7b as #47, both released together in 0.11.0, which #46 cut), and only
+X7-drift-ledger has not — this bite cannot strike itself before its own PR
+merges. All thirteen must be named here.
+
+Every struck PR number is also cross-checked against this repo's own
+`git log --first-parent`, so a number typed from memory fails rather than
+reading as proof. That check skips itself where there is no usable history
+to read (an sdist, a depth-1 checkout), because a guard that turns red on a
+shallow clone gets deleted rather than fixed.
 """
 from __future__ import annotations
 
@@ -44,8 +50,9 @@ LANDED_BITES = (
     "W0-LEDGER", "G2a-account-packs", "G2c-importer-dates",
     "G2b-account-instances", "G3-cadence-paidby", "G4-overlay",
     "G4-transfers", "G4-budget", "G4-schedules-export", "G5-sync",
+    "G7b-floor-0.13", "G8-business-books",
 )
-UNLANDED_BITES = ("G7b-floor-0.13", "G8-business-books", "X7-drift-ledger")
+UNLANDED_BITES = ("X7-drift-ledger",)
 
 
 def _struck_blocks(text: str) -> list[tuple[str, str]]:
@@ -136,10 +143,8 @@ def test_every_ledger_bite_the_plan_names_has_an_entry():
 
 
 def test_no_unlanded_bite_is_struck_through():
-    """The wishful strike, held against the three bites that have not
-    landed: G7b waits on an engine release that has not shipped; G8 has
-    merged but is not yet released; this bite cannot strike itself before
-    its own PR merges."""
+    """The wishful strike, held against the one bite that has not landed:
+    this one, which cannot strike itself before its own PR merges."""
     text = PLAN_FACE.read_text(encoding="utf-8")
     wishful = _bites_struck_through(text, UNLANDED_BITES)
     assert not wishful, (
@@ -158,13 +163,100 @@ def test_the_wishful_strike_guard_fires_on_a_planted_early_strikethrough(tmp_pat
     planted = tmp_path / "PLAN-early-strike.md"
     planted.write_text(
         PLAN_FACE.read_text(encoding="utf-8").replace(
-            "**G8-business-books** ledger `feat:`",
-            "~~**G8-business-books** ledger `feat:`~~ (#99, released 9.9.9)",
+            "**X7-drift-<repo>**",
+            "~~**X7-drift-ledger**~~ (#99, released 9.9.9)",
             1,
         ),
         encoding="utf-8",
     )
     text = planted.read_text(encoding="utf-8")
-    assert _bites_struck_through(text, UNLANDED_BITES) == ["G8-business-books"], (
+    assert _bites_struck_through(text, UNLANDED_BITES) == ["X7-drift-ledger"], (
         "the plant did not apply, or the guard cannot see a struck bite name"
     )
+
+
+# ── every struck PR number is a merge this repo's history records ───────────
+
+
+def _struck_pr_numbers(text: str) -> list[str]:
+    """Every `#NN` in a struck bite's own evidence tail, deduplicated and
+    sorted numerically — the claims this face makes about what merged."""
+    found = {pr for _, tail in _struck_blocks(text) for pr in _PR_RE.findall(tail)}
+    return sorted(found, key=lambda pr: int(pr[1:]))
+
+
+def _merged_pr_numbers() -> set[str] | None:
+    """Every `#NN` this repo's history records as a merged pull request, or
+    `None` when there is no usable history to read.
+
+    Read off every reachable commit, **not** `--first-parent`. On `main`
+    those are the same set, and first-parent is the tidier read; on a branch
+    that has merged `main` back in they are not — `main`'s own merge commits
+    arrive as *second* parents, so a first-parent walk from a branch head
+    reports every PR merged since the branch point as nonexistent. That is a
+    guard that fails hardest exactly when a branch is most up to date, which
+    is backwards. Only a GitHub merge commit's subject reads "Merge pull
+    request #NN", so widening the walk adds no false positives.
+
+    `None` (rather than an empty set) is the honest answer for an sdist or a
+    depth-1 checkout — an empty set would read as "no PR ever merged" and
+    fail every struck bite at once.
+    """
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["git", "log", "--format=%s"],
+            cwd=APP, capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git
+        return None
+    if done.returncode != 0:
+        return None
+    subjects = done.stdout.splitlines()
+    if len(subjects) < len(LANDED_BITES):
+        return None  # shallow: fewer commits than there are bites to prove
+    return {
+        pr
+        for subject in subjects
+        if subject.startswith("Merge pull request ")
+        for pr in _PR_RE.findall(subject)
+    }
+
+
+def test_every_struck_pr_number_is_a_merge_this_repo_records():
+    """A PR number typed from memory is the same wishful claim a bare
+    strikethrough is, one level down. Each one must be a merge commit on
+    `main`'s first-parent line."""
+    import pytest
+
+    merged = _merged_pr_numbers()
+    if merged is None:
+        pytest.skip("no usable git history here (sdist or shallow checkout)")
+
+    claimed = _struck_pr_numbers(PLAN_FACE.read_text(encoding="utf-8"))
+    assert claimed, "no struck bite names a PR number yet"
+    unknown = [pr for pr in claimed if pr not in merged]
+    assert not unknown, (
+        "docs/PLAN-affairs-face.md strikes bites through on these PR numbers "
+        f"and this repo's first-parent history records no such merge: {unknown}"
+    )
+
+
+def test_the_pr_cross_check_fires_on_a_planted_invented_pr_number():
+    """Planted: a struck bite crediting a PR nobody opened. The check must
+    name exactly that number, and must still clear the real ones beside it —
+    a guard that reported everything would be as useless as one that
+    reported nothing."""
+    import pytest
+
+    merged = _merged_pr_numbers()
+    if merged is None:
+        pytest.skip("no usable git history here (sdist or shallow checkout)")
+
+    text = PLAN_FACE.read_text(encoding="utf-8")
+    planted = text.replace("(#43, released 0.10.0", "(#9901, released 0.10.0", 1)
+    assert planted != text, "the plant assumes G5-sync's evidence tail's shape"
+
+    claimed = _struck_pr_numbers(planted)
+    assert [pr for pr in claimed if pr not in merged] == ["#9901"]

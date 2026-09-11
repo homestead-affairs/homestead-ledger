@@ -345,9 +345,10 @@ def _unreleased_since_versions(readme_text: str) -> list[str]:
 
 def test_every_since_version_is_a_release_that_happened():
     """A "Since" that names a version this repo never cut is a claim with
-    nothing behind it. `0.10.0` (sync) is the newest real release as of this
-    sweep; `grant_report.py`'s row deliberately carries no version number at
-    all (G8 has not merged or released) rather than a phantom one."""
+    nothing behind it. `0.11.0` (business books, G8 as #45, and the
+    `>=0.13.0` engine floor, G7b as #47 — one release for both) is the newest
+    real release; the column is read against `CHANGELOG.md`, so a row written
+    ahead of its release fails here rather than reading as shipped."""
     unreleased = _unreleased_since_versions(README.read_text(encoding="utf-8"))
     assert not unreleased, (
         "README.md's '## Module status' table names these versions, and "

@@ -81,7 +81,7 @@ released.
 | Tagging a transaction — category, note, confirmed merchant, do-not-use | `overlay.py`, `packs/overlay.py` | 0.8.0 |
 | Budgets — per-category monthly limits, derived envelopes | `budget.py`, `packs/budget.py` | 0.9.0 |
 | Sync — a consented scope of the books to the fleet | `sync.py` | 0.10.0 |
-| Business books — business/restricted account instances, aggregates that exclude them by default, the grant report, commingling by reference | `grant_report.py` | unreleased as of this sweep (G8-business-books; on this branch, not yet merged to `main` or released — see `docs/PLAN-affairs-face.md`) |
+| Business books — business/restricted account instances, aggregates that exclude them by default, the grant report, commingling by reference | `grant_report.py` | 0.11.0 |
 
 ## Entering your own information
 

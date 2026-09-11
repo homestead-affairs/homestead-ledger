@@ -117,24 +117,21 @@ confirms this envelope, and nothing crosses by reference".)
 
 ## Wave 7 — drift and closure sweep (one bite per repo, `test:`/`docs:`)
 
-**G7b-floor-0.13** ledger `build(deps):` — raise the floor to the release
+~~**G7b-floor-0.13** ledger `build(deps):` — raise the floor to the release
 carrying E7b, flip the pinned refusal test to a pass, and sync a transfer
-pair end to end. *(Unlanded as of this sweep, but the engine side is
-settled: E7b shipped as engine 0.13.0 (`value` stays `TEXT`; a mapping
-crosses as canonical JSON text under a new `value_format` column). This
-package's own floor is still `>=0.11.0,<1.0` (`pyproject.toml`) and
-`tests/test_sync.py::test_the_fleet_refuses_a_structured_pair_value_by_name`
-still pins the refusal, because raising the floor and flipping that test is
-this bite's job, not this sweep's — `homestead_ledger/sync.py`'s module
-docstring narrated the engine side as still unsettled, which this sweep
-corrected (`docs/PLAN-affairs-face.md` and `tests/test_docs_drift.py`
-guard the correction) without doing G7b's own job of flipping the pinned
-test. A sibling branch, `claude/ledger-floor-013`, carries this bite and
-is expected to merge into `main` around the same time as this one; this
-sweep does not merge it directly, per its own instructions, but does merge
-`origin/main` again before pushing in case it lands first.)*
+pair end to end.~~ (#47, released 0.11.0 — "build(deps): floor
+homestead-affairs at 0.13.0", with "test: a transfer pair crosses to the
+fleet as a structured value" and "test: strike the old refusal sentence, and
+pin the pair row's rung and disposition" on the same PR. The engine side is
+E7b: `value` stays `TEXT`, a mapping crosses as canonical JSON text under a
+new `value_format` column, shipped as engine 0.13.0. `pyproject.toml` now
+declares `homestead-affairs>=0.13.0,<1.0`, and the pin is
+`tests/test_sync.py::test_the_fleet_accepts_a_structured_pair_value` — the
+refusal test, flipped, keeping its history. This sweep merged that branch
+rather than racing it, because its own corrected `sync.py` paragraph quotes
+the floor this bite raises.)
 
-**G8-business-books** ledger `feat:`, depends G2b + G4-overlay + G4-budget
+~~**G8-business-books** ledger `feat:`, depends G2b + G4-overlay + G4-budget
 — account instances gain `owner` L2 ∈ {`household`, `business`} and
 `restricted` L2 (a grant account whose spend must map to `allowable_uses`);
 every household aggregate — budget envelopes, recurring, the Chapter 13
@@ -153,16 +150,16 @@ No payroll, no tax computation, no 409A, no cap-table math: UNCERTAIN →
 refuse by name, pointing at the accountant. Audit: a business account's
 number is still one L5 record (I-43); the household schedules export
 byte-identical with and without a business account present unless the flag
-is passed; the commingling tag never carries an amount on S1_LIST. *(Merged
-— #45, `feat: business-owned and restricted accounts — aggregates exclude
+is passed; the commingling tag never carries an amount on S1_LIST.~~ (#45, released
+0.11.0 — `feat: business-owned and restricted accounts — aggregates exclude
 them, grant report by allowable use, commingling by reference`, followed by
-two audit commits on the same PR: #45's `824c221` "fix: a notice states
-this export's own state, and a use total is net of refunds" and `e8c226b`
-"test: the browser door's own G8 pins". **Not yet released**: as of this
-sweep `CHANGELOG.md`'s newest entry is still 0.10.0 and no release-please
-PR for a 0.11.0 has merged, so this stays unstruck — merged and
-audited, not yet shipped — until a release commit shows the version. Two
-open UI gaps the merged code itself carries, recorded here rather than
+two audit commits on the same PR: `824c221` "fix: a notice states this
+export's own state, and a use total is net of refunds" and `e8c226b` "test:
+the browser door's own G8 pins". The release is 0.11.0, cut by #46, which
+also carries G7b's `build(deps):` floor raise — one release, two bites,
+because #47 merged between #45 and the release-please PR.)
+
+*Two open UI gaps the merged code itself carries, recorded here rather than
 struck as done or flagged as drift (neither claim is false, both are simply
 unfinished): the browser's Add Account form (`server.py::_post_account`)
 already accepts `owner`/`restricted` in its JSON body and `add_account`
@@ -172,7 +169,7 @@ call can set them today. And `include_business` is read from every
 relevant endpoint's query string (`server.py`'s `_get_subscriptions`,
 `_get_budget`, `_get_schedules`), but no page ships an "include business
 accounts" checkbox to set it — the flag exists and is tested
-(`tests/test_business_books.py`), it just has no browser control yet.)*
+(`tests/test_business_books.py`), it just has no browser control yet.*
 
 **X7-drift-<repo>** — `tests/test_docs_drift.py` grep-guards for known
 stale sentences; the meta-scan `tests/test_scans_fire.py` (every AST-guard
@@ -184,3 +181,36 @@ orchestrator has opened and merged its PR; the strikethrough and PR number
 land in the same commit the orchestrator makes, or a follow-up on this
 branch once merged — the same posture `claude/health-drift` recorded for
 its own identical case.)*
+
+## Open items this face records
+
+Not drift (no sentence anywhere claims otherwise) and not a struck bite —
+things the tree carries unfinished, written down so the next sweep does not
+have to rediscover them.
+
+- **The two G8 UI gaps** above: `owner`/`restricted` have no field on the
+  browser's Add Account form, and `include_business` has no checkbox on any
+  page. Both are wired and tested server-side; only the HTML is missing.
+- **Inline scans the meta-scan cannot see.** `tests/test_scans_fire.py`
+  reads module-level helpers. A guard written inline in a test body is
+  invisible to it and can never be planted — the X7 audit factored out the
+  three page scans in `tests/test_server.py` and the second-copy guard in
+  `tests/test_budget.py`, but the suite still carries inline scans of this
+  shape (for example `tests/test_view.py`'s module-scope tkinter check and
+  `tests/test_nestor_seam.py`'s lazy-import check). Each is asserted against
+  the real tree and none has been shown to fire on a violation.
+- **Duplicated chokepoint scans.** `tests/test_queue.py`,
+  `tests/test_recurring.py`, `tests/test_transfers.py`,
+  `tests/test_budget.py` and `tests/test_business_books.py` each re-implement
+  the `.payload`-reach walk that `tests/test_invariants_chokepoint.py`
+  already owns and plants. The mechanism is proven once; the copies are not,
+  and a copy that drifts is the shape this whole sweep is about.
+- **Closed here, recorded so it is not re-opened as an open item:** the
+  cover's distribution gate. The sweep's first pass called
+  `accounts.cover`'s missing `by_matter` wiring an open item; the audit found
+  the package calls its own port of `cover_counts`, not the engine's, and
+  that the port had missed both of the engine's hardenings. `app/cover.py` is
+  now an adapter over the engine's one copy and `queue.cover` passes its
+  distribution — `fix:` on this branch, with the `(2, 0)`-fails /
+  `(1, 1)`-passes law at both levels. `accounts.cover` passes none, and the
+  proof that it need not is a test rather than a comment.
