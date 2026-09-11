@@ -5,11 +5,19 @@ meta-scan only proves a helper planted by a *plant test in the same file* --
 a helper shared by a dozen files would need to live somewhere, and copying it
 into each file instead is exactly the drift G9d-inline-scans closed
 (`docs/PLAN-affairs-face.md`, "Inline scans the meta-scan cannot see" /
-"Duplicated chokepoint scans"). This module is not itself a `test_*.py` file,
-so the meta-scan does not examine it directly -- each importing module keeps
-its own real plant (a specific forbidden or required value, planted and
-asserted caught through this helper), so the shape stays proven everywhere it
-is actually relied on rather than once in the abstract.
+"Duplicated chokepoint scans").
+
+This module is not a `test_*.py` file, so it holds no plant tests of its own
+and the meta-scan's same-file rule cannot reach it. It is swept all the same
+(`tests/test_scans_fire.py::_unplanted_shared_scan_helpers`, added on audit
+2026-09-11): every scan helper defined here must be reached by a
+planted-violation test *somewhere* in `tests/`, because
+`_global_scan_helper_names()` uses these helpers to clear inline scans across
+the suite and a helper that can excuse a test but can never be made to fire
+would be the one scan in the repo proving nothing. Each importing module also
+keeps its own real plant -- a specific forbidden or required value, planted
+and asserted caught through this helper -- so the shape stays proven where it
+is relied on and not only once in the abstract.
 """
 from __future__ import annotations
 

@@ -268,6 +268,44 @@ def _decorator_name(dec: ast.AST) -> str:
     return ""
 
 
+def _filters_by_membership(node: ast.AST) -> bool:
+    """True if the body loops over something and keeps the items that are
+    (or are not) *in* something else — `[term for term in terms if term in
+    haystack]`.
+
+    The `_scans_a_word_list` rule above requires the iterable to be a
+    module-level constant, which is right for a helper that owns its own
+    forbidden list. A helper handed the terms as an argument is the same
+    grep with the list hoisted to the caller, and `tests/_scans.py::
+    terms_found` — one helper, twenty-one call sites across eight modules —
+    is exactly that and was matched by none of the four shapes (audit,
+    2026-09-11). The rule stays narrow the same way: the membership question
+    must be asked *of the loop variable itself*, so iterating a table and
+    asserting something about a result is still not a scan.
+    """
+    for sub in ast.walk(node):
+        if isinstance(sub, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+            targets = {
+                gen.target.id for gen in sub.generators
+                if isinstance(gen.target, ast.Name)
+            }
+            conditions = [cond for gen in sub.generators for cond in gen.ifs]
+        elif isinstance(sub, ast.For) and isinstance(sub.target, ast.Name):
+            targets, conditions = {sub.target.id}, list(sub.body)
+        else:
+            continue
+        for condition in conditions:
+            for inner in ast.walk(condition):
+                if (
+                    isinstance(inner, ast.Compare)
+                    and any(isinstance(op, (ast.In, ast.NotIn)) for op in inner.ops)
+                    and isinstance(inner.left, ast.Name)
+                    and inner.left.id in targets
+                ):
+                    return True
+    return False
+
+
 def _is_fixture(node: ast.FunctionDef) -> bool:
     """`@pytest.fixture` — setup, not a scan, whatever it reads.
 
@@ -307,6 +345,7 @@ def _is_scan_helper(
         or _matches_text(node)
         or (_reads_file_text(node) and _tests_membership(node))
         or _scans_a_word_list(node, constants)
+        or _filters_by_membership(node)
     )
 
 
@@ -383,9 +422,91 @@ def _unplanted_scan_helpers(source: str) -> list[str]:
     return [name for name in _scan_helpers(source) if name not in exercised]
 
 
+#: The shared scan module. Not a `test_*.py` file, so it holds no plant
+#: tests of its own and the same-file rule above cannot reach it — and the
+#: first pass of this bite left it swept by nothing at all, while
+#: `_global_scan_helper_names()` happily used its helpers to *clear* inline
+#: scans elsewhere. A helper that can excuse a test and can never be made to
+#: fire is the exact asymmetry this file exists to forbid, so the shared
+#: module is swept too, against plants anywhere in `tests/` (audit,
+#: 2026-09-11).
+SHARED_SCANS = TESTS_DIR / "_scans.py"
+
+
+def _import_aliases(tree: ast.Module) -> dict[str, str]:
+    """`from tests._scans import terms_found as tf` -> `{"tf": "terms_found"}`,
+    for imports anywhere in the module, function bodies included."""
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+    return aliases
+
+
+def _called_names(node: ast.AST, aliases: dict[str, str]) -> set[str]:
+    """Every name `node` calls: bare (resolved through `aliases`) or through
+    an attribute — `helper(...)`, `tf(...)`, `module.helper(...)` are one
+    delegation by three routes."""
+    names: set[str] = set()
+    for call in _calls_in(node):
+        if isinstance(call.func, ast.Name):
+            names.add(aliases.get(call.func.id, call.func.id))
+        elif isinstance(call.func, ast.Attribute):
+            names.add(call.func.attr)
+    return names
+
+
+def _names_the_plants_call(source: str) -> frozenset[str]:
+    """Every name a planted-violation test in this module calls — directly,
+    or through the module's own helpers, whichever module actually defines
+    the name it calls."""
+    tree = ast.parse(source)
+    helpers = _module_helpers(tree)
+    aliases = _import_aliases(tree)
+    called: set[str] = set()
+    walked: set[str] = set()
+    for node in tree.body:
+        if not (isinstance(node, ast.FunctionDef) and node.name.startswith("test_")):
+            continue
+        if not _is_plant_test(node):
+            continue
+        called |= _called_names(node, aliases)
+        pending = list(_direct_calls(node, helpers))
+        while pending:
+            name = pending.pop()
+            if name in walked:
+                continue
+            walked.add(name)
+            called |= _called_names(helpers[name], aliases)
+            pending.extend(_direct_calls(helpers[name], helpers))
+    return frozenset(called)
+
+
+def _unplanted_shared_scan_helpers() -> list[str]:
+    """The scan helpers in `tests/_scans.py` that no planted-violation test
+    anywhere in `tests/` ever calls. Cross-module by construction: the
+    shared module has no plant tests of its own, and the plant that proves a
+    shared helper belongs with the caller that relies on it."""
+    if not SHARED_SCANS.exists():
+        return []
+    exercised: set[str] = set()
+    for path in sorted(TESTS_DIR.glob("test_*.py")):
+        if path.name == "test_scans_fire.py":
+            continue
+        exercised |= _names_the_plants_call(path.read_text(encoding="utf-8"))
+    return [
+        name
+        for name in _scan_helpers(SHARED_SCANS.read_text(encoding="utf-8"))
+        if name not in exercised
+    ]
+
+
 def _offenders() -> list[str]:
     """Every tests/*.py file that defines a scan helper no plant test in the
-    same file calls."""
+    same file calls — and `tests/_scans.py`, whose helpers are shared and so
+    are held to a plant anywhere in `tests/`."""
     offenders = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
         if path.name == "test_scans_fire.py":
@@ -393,6 +514,9 @@ def _offenders() -> list[str]:
         unplanted = _unplanted_scan_helpers(path.read_text(encoding="utf-8"))
         if unplanted:
             offenders.append(f"{path.name}: {unplanted}")
+    shared_unplanted = _unplanted_shared_scan_helpers()
+    if shared_unplanted:
+        offenders.append(f"{SHARED_SCANS.name}: {shared_unplanted}")
     return offenders
 
 
@@ -629,6 +753,96 @@ def test_the_word_list_rule_does_not_fire_on_ordinary_constant_use(tmp_path):
         "        assert c in ('monthly', 'weekly', 'yearly')\n",
     )
     assert _scan_helpers(source) == []
+
+
+def test_the_meta_scan_finds_a_scan_handed_its_word_list_by_the_caller(tmp_path):
+    """Planted: the fifth shape, and the one this repo's own shared module
+    is. `terms_found(haystack, terms)` walks the *caller's* list asking
+    membership of each — no module-level constant, no regex, no read, no
+    stem in its name — so all four earlier rules cleared it while twenty-one
+    call sites in eight modules leaned on it (audit, 2026-09-11)."""
+    source = _write(
+        tmp_path,
+        "test_planted_caller_word_list.py",
+        "def terms_found(haystack, terms):\n"
+        "    return [term for term in terms if term in haystack]\n"
+        "\n"
+        "def test_the_log_carries_none_of_them():\n"
+        "    assert not terms_found('a reference only', ('1234',))\n",
+    )
+    assert _scan_helpers(source) == ["terms_found"], (
+        "a helper that filters the caller's terms by membership is a scan; "
+        f"got {_scan_helpers(source)}"
+    )
+    assert _unplanted_scan_helpers(source) == ["terms_found"]
+
+
+def test_the_caller_word_list_rule_does_not_fire_on_an_ordinary_filter(tmp_path):
+    """The control the narrow half exists for: the membership question must
+    be asked *of the loop variable itself*. A helper that filters rows by a
+    field, or builds a list from a table, is ordinary code and a rule loose
+    enough to report it gets an allow-list bolted on and stops meaning
+    anything."""
+    source = _write(
+        tmp_path,
+        "test_planted_ordinary_filter.py",
+        "KNOWN = ('checking', 'savings')\n"
+        "\n"
+        "def due_rows(rows):\n"
+        "    return [row for row in rows if row[1] in KNOWN]\n"
+        "\n"
+        "def test_it():\n"
+        "    assert due_rows([]) == []\n",
+    )
+    assert _scan_helpers(source) == []
+
+
+def test_a_plant_reaches_a_shared_helper_through_an_import_alias(tmp_path):
+    """The shared module's proof is cross-module, so the reach has to follow
+    the routes a cross-module call actually takes: a bare name, an attribute
+    (`module.helper(...)`), and the `import ... as` alias a caller may bind
+    it to. A rule that only matched the bare original name would read this
+    plant as calling nothing."""
+    source = _write(
+        tmp_path,
+        "test_planted_aliased_plant.py",
+        "from tests._scans import terms_found as tf\n"
+        "from tests import _scans\n"
+        "\n"
+        "def test_the_shared_scan_catches_a_planted_leak():\n"
+        "    assert tf('a line naming 1234', ('1234',)) == ['1234']\n"
+        "    assert _scans.other_helper('x') == []\n",
+    )
+    reached = _names_the_plants_call(source)
+    assert "terms_found" in reached, "an aliased call is still a call"
+    assert "other_helper" in reached, "and so is `module.helper(...)`"
+
+    quiet = _write(
+        tmp_path,
+        "test_planted_quiet_plant.py",
+        "from tests._scans import terms_found as tf\n"
+        "\n"
+        "def test_the_shared_scan_catches_a_planted_leak():\n"
+        "    assert True\n",
+    )
+    assert _names_the_plants_call(quiet) == frozenset(), (
+        "importing a helper is not calling it; the plant word in the name is "
+        "not the evidence here either"
+    )
+
+
+def test_the_shared_scan_module_is_swept_like_every_other_file():
+    """The whole thing against the real `tests/_scans.py`: it is not a
+    `test_*.py` file, so the same-file rule cannot reach it, and its helpers
+    are nonetheless used to clear inline scans across the suite. Every scan
+    helper it defines must be reached by a planted-violation test somewhere
+    in `tests/`."""
+    assert SHARED_SCANS.exists(), "tests/_scans.py is the shared module this rule is about"
+    assert _scan_helpers(SHARED_SCANS.read_text(encoding="utf-8")), (
+        "tests/_scans.py is expected to define at least one scan helper, or "
+        "this check passes vacuously"
+    )
+    assert _unplanted_shared_scan_helpers() == []
 
 
 # ── the plant rule: "fires" in prose is not evidence of a plant ─────────────
