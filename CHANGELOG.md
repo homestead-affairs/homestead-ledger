@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/homestead-affairs/homestead-ledger/compare/v0.1.1...v0.2.0) (2026-09-11)
+
+
+### Added
+
+* obligation and transaction entry a household can use itself ([b55cd4c](https://github.com/homestead-affairs/homestead-ledger/commit/b55cd4cff1500a2ed117e1c2388b49f0aa07eeab))
+* obligation and transaction entry a household can use itself ([52610d2](https://github.com/homestead-affairs/homestead-ledger/commit/52610d2186f853c4a3d0b2d66ab3f87902400800))
+
+
+### Fixed
+
+* close the orphaned Records tab, the add-obligation race, and the doors' refusals ([0ee200e](https://github.com/homestead-affairs/homestead-ledger/commit/0ee200eb9e82273c88629158a47dafae6d9d9906))
+
 ## [0.1.1](https://github.com/homestead-affairs/homestead-ledger/compare/v0.1.0...v0.1.1) (2026-08-24)
 
 
