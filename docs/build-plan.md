@@ -52,10 +52,12 @@ extra installed. Described qualitatively instead: green on `pytest -q`, cold
 and on both legs.)* Licensed **Apache-2.0** (matching the engine and the
 fleet). ~~Pins `homestead-affairs>=0.1.0,<1.0` from PyPI (0.1.0 is where the
 shared `homestead.app.theme` landed — the floor this view needs...)~~
-*(X7-drift correction: the floor has moved twice since — 0.3.0 for the
-account packs (G2a), then `>=0.11.0,<1.0` for G5-sync's `homestead.keep.sync`
-— see `pyproject.toml`'s own dependency comment for the current floor and
-why. The `<1.0` cap reasoning is unchanged: a real compatibility range — the
+*(X7-drift correction: the floor has moved three times since — 0.3.0 for the
+account packs (G2a), `>=0.11.0,<1.0` for G5-sync's `homestead.keep.sync`, and
+`homestead-affairs>=0.13.0,<1.0` for E7b's structured fleet values
+(G7b-floor-0.13, released 0.11.0). `pyproject.toml`'s own dependency comment
+is where that number is a fact rather than a quotation, and
+`tests/test_docs_drift.py` holds this line to it. The `<1.0` cap reasoning is unchanged: a real compatibility range — the
 engine bumps the minor for a feat, so every pre-1.0 release resolves, and
 1.0.0 is reserved for the first breaking change.)*
 

@@ -146,7 +146,7 @@ def test_the_version_has_exactly_one_source():
         "nothing in this repo stores a version, so nothing needs bumping"
 
     hardcoded = [
-        f"{p.relative_to(_REPO)}:{i}"
+        f"{p.relative_to(_REPO).as_posix()}:{i}"
         for p in (_REPO / "homestead_ledger").rglob("*.py")
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
         if re.match(r"\s*__version__\s*=\s*[\"']", line)

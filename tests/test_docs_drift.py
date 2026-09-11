@@ -398,6 +398,20 @@ def _declared_engine_floor(pyproject: Path | None = None) -> str:
     return match.group(1)
 
 
+#: Every file that quotes the engine floor by number in prose. Named here
+#: rather than discovered, because the point is that this list is *complete*:
+#: the audit found `docs/build-plan.md` still saying `>=0.11.0` after
+#: `G7b-floor-0.13` raised it, precisely because the first draft of this
+#: guard only knew about the three files its author had edited.
+_FLOOR_QUOTING_FILES = (
+    "README.md",
+    "docs/build-plan.md",
+    "docs/PLAN-affairs-face.md",
+    "homestead_ledger/sync.py",
+    "homestead_ledger/accounts.py",
+)
+
+
 def _files_quoting_a_stale_floor(floor: str) -> list[str]:
     """Every prose file that quotes an engine floor other than `floor`.
 
@@ -409,7 +423,7 @@ def _files_quoting_a_stale_floor(floor: str) -> list[str]:
     quoted = re.compile(r"homestead-affairs>=(\d+\.\d+\.\d+)")
     struck = re.compile(r"~~.*?~~", re.DOTALL)
     stale = []
-    for path in (README, SYNC, PKG / "accounts.py"):
+    for path in (APP / name for name in _FLOOR_QUOTING_FILES):
         live = struck.sub("", path.read_text(encoding="utf-8"))
         if any(found != floor for found in quoted.findall(live)):
             stale.append(path.name)
@@ -429,6 +443,21 @@ def test_the_prose_quotes_the_floor_pyproject_declares():
     )
 
 
+def test_every_file_the_floor_guard_reads_exists_and_quotes_a_floor():
+    """The guard's own file list is load-bearing: a path that has moved, or
+    a file that has stopped quoting the floor, would turn the guard quiet
+    instead of red. Both are failures here, named."""
+    floor = _declared_engine_floor()
+    for name in _FLOOR_QUOTING_FILES:
+        path = APP / name
+        assert path.exists(), f"{name} is in the floor guard's list and is not here"
+        assert f"homestead-affairs>={floor}" in path.read_text(encoding="utf-8"), (
+            f"{name} no longer quotes the declared floor — either correct it "
+            "or drop it from _FLOOR_QUOTING_FILES, but do not leave the "
+            "guard reading a file it can never fire on"
+        )
+
+
 def test_the_floor_agreement_guard_fires_on_a_planted_raise(tmp_path):
     """Planted: `pyproject.toml` raised to a floor the prose does not know
     yet — exactly the shape `G7b-floor-0.13` produced against this branch's
@@ -444,9 +473,9 @@ def test_the_floor_agreement_guard_fires_on_a_planted_raise(tmp_path):
         encoding="utf-8",
     )
     assert _declared_engine_floor(planted) == "9.9.9", "the plant did not apply"
-    assert _files_quoting_a_stale_floor("9.9.9") == [
-        "README.md", "accounts.py", "sync.py",
-    ]
+    assert _files_quoting_a_stale_floor("9.9.9") == sorted(
+        Path(name).name for name in _FLOOR_QUOTING_FILES
+    ), "every file that quotes the floor must be named against a raise"
 
 
 def test_the_floor_guard_reads_only_live_prose(tmp_path):
