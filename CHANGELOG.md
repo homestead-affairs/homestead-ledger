@@ -5,7 +5,6 @@
 
 ### Added
 
-* compose and export the household's Chapter 13 debt schedule ([b55424d](https://github.com/homestead-affairs/homestead-ledger/commit/b55424df8308b9d8a9d7cafc73c46e99cb37cb88))
 * compose and export the household's Chapter 13 debt schedule ([dc7a816](https://github.com/homestead-affairs/homestead-ledger/commit/dc7a816fb69c550f7a6a421c8e81be13c4fc0660))
 
 
