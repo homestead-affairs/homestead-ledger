@@ -173,6 +173,20 @@ def test_adding_a_pack_to_the_registry_needs_no_other_code_change(monkeypatch):
     assert account(_UNBUILT).fields == {"description": Rung.L3}
 
 
+def test_the_readme_names_every_registered_account_kind():
+    """The README told the operator `--account` takes "an account kind the
+    registry knows (`checking` today)" for a whole bite after three more were
+    built — a doc claim that went stale precisely because nothing read it.
+    Every registered kind is named there, so adding one without saying so
+    fails here rather than in the operator's hands."""
+    readme = (PKG.parent / "README.md").read_text("utf-8")
+    missing = [name for name in all_accounts() if name not in readme]
+    assert not missing, (
+        f"the README does not name {missing} — it tells the operator which "
+        "account kinds `--account`/`--kind` accept."
+    )
+
+
 # ── the structural guard: the registry is the ONLY enumeration ──────────────
 
 ACCOUNT_ENUM_ALLOWED = {PKG / "registry.py"}
