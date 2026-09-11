@@ -78,31 +78,34 @@ SCHEMA: dict[str, dict[str, Any]] = {
     "date": _field(
         Rung.L2,
         "a posting date alone carries no identity and no protected category "
-        "(Rung.L2's own definition) — household activity, never a public "
-        "record the way a court calendar is, so L2 rather than L1.",
+        "(step 2 answers no, Rung.L2's own definition) — household activity, "
+        "never a public record the way a court calendar is (step 1 answers "
+        "no), so L2 rather than L1.",
     ),
     "description": _field(
         Rung.L3,
-        "the payee/merchant name as imported — resolves to a party (who was "
-        "paid), no protected category of its own. The household's *confirmed* "
-        "merchant name is a separate, sidecar concept (build-plan.md); this "
-        "field is the raw imported text.",
+        "the payee/merchant name as imported — step 2 answers yes: it "
+        "resolves to a party (who was paid), and step 3 finds no protected "
+        "category of its own, so it climbs no higher. The household's "
+        "*confirmed* merchant name is a separate, sidecar concept "
+        "(build-plan.md); this field is the raw imported text.",
         derived="a payee is on file",
     ),
     "amount": _field(
         Rung.L4,
-        "an amount tied to an account is the money category: it identifies "
-        "(this account) and carries the category the household's finances "
-        "are, the way a diagnosis carries law's medical category. "
+        "an amount tied to an account is the money category: step 2 answers "
+        "yes (it identifies this account) and step 3 answers yes too (it "
+        "carries the category the household's finances are, the way a "
+        "diagnosis carries law's medical category). "
         "docs/homestead-rungs.md's money table classifies this L4 directly; "
         "this is this bite's worked example of that table.",
         derived_by_sign={"-": "a debit is on file", "+": "a credit is on file"},
     ),
     "account_number": _field(
         Rung.L5,
-        "key material — resolves an account to its bank-issued identifier. "
-        "L5 has no override anywhere (I-13): served on no surface, in any "
-        "form, the same posture custody gives an SSN.",
+        "step 4 — key material, resolving an account to its bank-issued "
+        "identifier. L5 has no override anywhere (I-13): served on no "
+        "surface, in any form, the same posture custody gives an SSN.",
     ),
 }
 

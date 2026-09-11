@@ -46,7 +46,10 @@ names which of the two literal headers means a charge and which means a
 payment. Naming them re-points the header lookup the existing debit/credit
 reader already does — `debit` reads as negative, `credit` as positive,
 matching the sign convention exactly — rather than adding a second amount
-parser next to it.
+parser next to it. On an *asset* kind the same two column names are not
+ambiguous, so there is nothing for the mapping to re-point and passing it is
+refused rather than ignored: a flag that is accepted and never read reports a
+declaration as honoured that was never applied.
 """
 from __future__ import annotations
 
@@ -230,17 +233,44 @@ def import_csv(
     the debit/credit shape ("debit"/"credit", case-insensitive) — which
     column means a charge and which means a payment, for a debit/credit
     statement against a registered liability kind. Required in that one
-    case (see the module docstring); ignored otherwise.
+    case, and refused in every other (see the module docstring) — a mapping
+    that would not be read is a declaration reported as honoured that never
+    was.
 
     Returns an `ImportResult` tally. Raises `ValueError` immediately, before
-    reading any row, if the header names neither supported shape, or if a
-    liability kind's debit/credit statement has no `liability_columns` — an
-    unrecognized or ambiguous file is refused outright, not silently
-    misread.
+    reading any row, if `kind` is not registered, if `liability_columns` is
+    given for a kind that is not a liability, if the header names neither
+    supported shape, or if a liability kind's debit/credit statement has no
+    `liability_columns` — an unrecognized or ambiguous file is refused
+    outright, not silently misread.
     """
     path = Path(path)
     imported = skipped = errors = 0
     error_messages: list[str] = []
+
+    # Both declarations are settled before the file is opened, so an
+    # unimportable statement is refused as a whole rather than a row at a
+    # time — and so `registry.account`'s strict `KeyError` never escapes this
+    # module as an exception type no caller of `import_csv` is told to catch.
+    try:
+        account_type = registry.account(kind)
+    except KeyError:
+        raise ValueError(
+            f"{kind!r} is not a registered account kind — one of "
+            f"{registry.all_accounts()} (see registry.all_accounts())"
+        ) from None
+    if liability_columns is not None and not account_type.liability:
+        # An asset kind's "Debit"/"Credit" columns are not ambiguous (see the
+        # module docstring), so there is nothing here for a charge/payment
+        # mapping to re-point. Accepting it silently would report a
+        # declaration as honoured that was never read — including one naming
+        # columns this statement does not have.
+        raise ValueError(
+            f"--liability-columns was given for {kind!r}, which is not a "
+            "liability account — a charge/payment mapping applies only to a "
+            "liability kind's debit/credit statement. Drop the flag, or name "
+            "a liability kind with --kind."
+        )
 
     with path.open(newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
@@ -249,7 +279,7 @@ def import_csv(
         parser = _ROW_PARSERS[fmt]
         hmap = _header_map(headers)
 
-        if fmt == "debit_credit" and registry.account(kind).liability:
+        if fmt == "debit_credit" and account_type.liability:
             if liability_columns is None:
                 raise ValueError(
                     f"a debit/credit header on {kind!r} (a liability account) "

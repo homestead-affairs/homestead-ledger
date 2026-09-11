@@ -133,51 +133,64 @@ def test_derived_by_sign_never_states_a_number():
             )
 
 
-#: Which substrings a rung's `why` must name at least one of, to count as
-#: "naming its classification step" — phrased loosely enough to hold
-#: `packs/checking.py`'s bite-1 sentences (kept verbatim, predating this
-#: convention) as well as the more literal `"step N"` phrasing bite 2a's new
-#: packs use. See `test_every_why_names_a_step`'s docstring for why this
-#: bite scopes the *literal* "step N" check to the new packs only.
-_STEP_MARKERS: dict[Rung, tuple[str, ...]] = {
-    Rung.L1: ("public",),
-    Rung.L2: ("no identity", "household"),
-    Rung.L3: ("resolves to a party", "resolves a party"),
-    Rung.L4: ("money category", "categor"),
-    Rung.L5: ("key material",),
-}
-
+#: The literal citation every account pack's `why` must carry — the "(step
+#: N)" phrasing `homestead/packs/custody.py` uses, which says *which* step of
+#: the classification procedure answered, not merely that the author had a
+#: reason. Held against every registered pack, `checking` included: its
+#: bite-1 sentences were amended to cite their steps rather than be exempted,
+#: because an exemption checked only by loose keyword ("household",
+#: "categor…", "key material") is satisfied by prose that names no step at
+#: all — see `test_a_step_less_why_is_caught_in_every_registered_pack`.
 _STEP_PATTERN = re.compile(r"\bstep\s*\d\b", re.IGNORECASE)
 
 
 def test_every_why_names_a_step():
-    """bite 2a's three new packs (`savings`, `credit_card`, `loan`) write
-    `why` in the literal "step N" style `homestead/packs/custody.py` uses —
-    checked here by pattern. `checking`'s own `why` sentences predate that
-    convention and are kept verbatim per this bite's scope (they still name
-    their step in their own prose, via `_STEP_MARKERS`, so the contract they
-    satisfy is the same one, just not the same literal words)."""
-    for kind in ("savings", "credit_card", "loan"):
+    """Every registered account pack writes each field's `why` in the literal
+    "step N" style, so the sentence says which step of the procedure answered
+    and a reviewer can check the answer rather than take the rung on trust."""
+    for kind in registry.all_accounts():
         schema = registry.account(kind).schema
         for field, spec in schema.items():
             assert _STEP_PATTERN.search(spec["why"]), (
                 f"{kind}.{field}'s why does not name its step: {spec['why']!r}"
             )
 
-    for field, rung in _SETTLED_RUNGS.items():
-        why = checking.SCHEMA[field]["why"].lower()
-        assert any(marker in why for marker in _STEP_MARKERS[rung]), (
-            f"checking.{field}'s why does not name its step: {why!r}"
+
+def test_a_step_less_why_is_caught_in_every_registered_pack():
+    """A scan that has never fired has not been shown to check anything.
+    Plant, per registered pack and per field, a `why` that reads like a
+    plausible justification and cites no step — including the exact prose the
+    superseded keyword check would have accepted ("household", "money
+    category", "key material") — and confirm the check fires on each."""
+    step_less = (
+        "household activity, and the money category is obvious from the "
+        "key material on the row, so this rung is right"
+    )
+    assert not _STEP_PATTERN.search(step_less)
+    for kind in registry.all_accounts():
+        schema = registry.account(kind).schema
+        for field in schema:
+            wounded = copy.deepcopy(dict(schema))
+            wounded[field] = {**wounded[field], "why": step_less}
+            assert not all(
+                _STEP_PATTERN.search(spec["why"]) for spec in wounded.values()
+            ), f"a step-less why planted in {kind}.{field} passed the check"
+
+
+def test_a_pack_amount_whose_derived_form_states_a_value_is_caught():
+    """The other half of the derived-form rule (`docs/homestead-rungs-
+    procedure.md` § 4): the stand-in names that something exists, never its
+    magnitude. `test_derived_by_sign_never_states_a_number` asserts that of
+    the real packs; plant both shapes it is meant to catch — a magnitude, and
+    the payload restated — and confirm the digit check fires."""
+    def states_a_number(sign_forms: dict[str, str]) -> bool:
+        return any(
+            any(ch.isdigit() for ch in text) for text in sign_forms.values()
         )
 
-
-def test_a_step_less_why_fails_the_step_naming_check():
-    """A scan that has never fired has not been shown to check anything —
-    plant a why with no step language at all and confirm both checks
-    `test_every_why_names_a_step` relies on actually catch it."""
-    bad_why = "just because it seemed right"
-    assert not _STEP_PATTERN.search(bad_why)
-    assert not any(marker in bad_why for marker in _STEP_MARKERS[Rung.L4])
+    assert not states_a_number(checking.SCHEMA["amount"]["derived_by_sign"])
+    assert states_a_number({"-": "a charge of 84.23 is on file", "+": "a credit is on file"})
+    assert states_a_number({"-": "-84.23", "+": "1500.00"})
 
 
 # ── the new packs individually, mirroring checking's own contract tests ────

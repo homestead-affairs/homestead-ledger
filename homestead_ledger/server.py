@@ -271,7 +271,8 @@ function storeTransaction() {
     amount:document.getElementById('tamount').value.trim(),
     description:document.getElementById('tdesc').value.trim(),
     account_number:document.getElementById('tacct').value.trim(),
-    account:document.getElementById('taccount').value.trim()||'checking'};
+    account:currentAccount()};
+  if(!body.account){msg.innerHTML='<span class="sm s-err">No account kinds loaded &#8212; reload the page</span>';return;}
   fetch('/api/transaction',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
   .then(function(r){return r.json()}).then(function(data){
     if(data.ok){
@@ -282,17 +283,34 @@ function storeTransaction() {
   }).catch(function(){msg.innerHTML='<span class="sm s-err">Error</span>';});
 }
 
+// The one place this page reads which account it is working on. There is no
+// literal fallback: the account kinds come from the registry (/api/status)
+// and nowhere else, so a page that failed to load them says so rather than
+// posting to, or listing, whichever kind happened to be hardcoded here
+// (I-11 — absence is refused by name, never defaulted; I-23 — the registry
+// is the only enumeration, on this surface too).
+function currentAccount() {
+  return document.getElementById('taccount').value.trim();
+}
+
 function loadAccounts() {
-  // The transaction form's account field is the registry, not a hardcoded
-  // "checking" — a new account pack shows up here with no change but the
-  // pack itself (I-23: iterate all_accounts(), never keep a list by hand).
+  // The transaction form's account field is the registry, not a hand-kept
+  // list — a new account pack shows up here with no change but the pack
+  // itself. The list below is (re)drawn once the options exist and again
+  // whenever the operator picks a different kind, so the rows on screen are
+  // always the rows of the account the form names.
   var sel=document.getElementById('taccount');
-  fetch('/api/status').then(function(r){return r.json()}).then(function(data){
+  sel.onchange=loadTransactions;
+  return fetch('/api/status').then(function(r){return r.json()}).then(function(data){
     var accounts=data.accounts||[];
     sel.innerHTML=accounts.map(function(a){
       return '<option value="'+attr(a)+'">'+esc(a)+'</option>';
     }).join('');
-  }).catch(function(){/* the transaction form still posts whatever the field holds */});
+    loadTransactions();
+  }).catch(function(){
+    document.getElementById('tlist').innerHTML=
+      '<p class="sm s-err">Failed to load the account kinds</p>';
+  });
 }
 
 function loadObligations() {
@@ -336,7 +354,8 @@ function openObligation(id) {
 
 function loadTransactions() {
   var div=document.getElementById('tlist');
-  var account=document.getElementById('taccount').value.trim()||'checking';
+  var account=currentAccount();
+  if(!account){div.innerHTML='<p class="sm s-err">No account kinds loaded</p>';return;}
   fetch('/api/transactions?account='+encodeURIComponent(account)).then(function(r){return r.json()}).then(function(data){
     if(data.error){div.innerHTML='<p class="sm s-err">'+esc(data.error)+'</p>';return;}
     if(!data.rows||!data.rows.length){div.innerHTML='<p class="empty">Nothing on the books for '+esc(account)+' yet.</p>';return;}
@@ -483,7 +502,7 @@ function loadSubscriptions() {
     div.innerHTML=html;
   }).catch(function(){div.innerHTML='<p class="sm s-err">Failed to load subscriptions</p>';});
 }
-loadAccounts();loadObligations();loadTransactions();
+loadAccounts();loadObligations();
 </script>
 </body>
 </html>

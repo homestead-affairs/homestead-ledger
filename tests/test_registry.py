@@ -42,6 +42,20 @@ def test_all_accounts_iterates_the_registry_and_nothing_else():
     assert all(isinstance(name, str) for name in all_accounts())
 
 
+def test_all_accounts_order_is_pinned_because_surfaces_read_it_in_order():
+    """`all_accounts()` is an *ordered* contract, not just a set: the cover
+    draws one button per kind in this order (`app/view.account_buttons`) and
+    the browser form's `<select>` is built in it — so its **first** entry is
+    the account a transaction posts to before the operator touches anything.
+    A reordering of `REGISTRY` would silently move that default to another
+    account; it is pinned here so such a change has to be deliberate.
+    `checking` stays first because it is `books.Transaction.kind`'s default."""
+    assert all_accounts() == ("checking", "savings", "credit_card", "loan")
+    assert all_accounts()[0] == checking.ACCOUNT
+    assert all_accounts() == tuple(REGISTRY)  # insertion order, nothing re-sorted
+    assert all_accounts() == all_accounts()  # stable across calls
+
+
 def test_an_entry_ties_an_account_to_its_pack():
     entry = account("checking")
     assert isinstance(entry, AccountType)
@@ -199,10 +213,33 @@ def test_no_module_outside_the_registry_hardcodes_the_set_of_accounts():
 
 
 def test_the_structural_guard_fires_on_a_planted_enumeration(tmp_path):
-    names = {"checking", "savings", "credit_card"}
+    names = set(all_accounts())
     literal = tmp_path / "queue.py"
-    literal.write_text("ALL_ACCOUNTS = ['checking', 'savings', 'credit_card']\n", "utf-8")
+    literal.write_text(f"ALL_ACCOUNTS = {sorted(names)!r}\n", "utf-8")
     membership = tmp_path / "nav.py"
-    membership.write_text("def is_account(a):\n    return a in ('checking', 'savings')\n", "utf-8")
+    membership.write_text(
+        f"def is_account(a):\n    return a in {tuple(sorted(names))!r}\n", "utf-8"
+    )
     assert _account_name_enumerations(ast.parse(literal.read_text()), names)
     assert _account_name_enumerations(ast.parse(membership.read_text()), names)
+
+
+@pytest.mark.parametrize("name", sorted(all_accounts()))
+def test_the_structural_guard_fires_on_each_registered_name_alone(tmp_path, name):
+    """One planted name at a time, in each shape the scan reads — a list, a
+    set, a tuple and a bare `==` compare. A guard proved only on a plant
+    naming three of four kinds has not been shown to catch the fourth, which
+    is exactly the kind a later bite adds and forgets."""
+    names = set(all_accounts())
+    plants = {
+        "list": f"ACCOUNTS = [{name!r}]\n",
+        "set": f"ACCOUNTS = {{{name!r}}}\n",
+        "tuple": f"ACCOUNTS = ({name!r},)\n",
+        "compare": f"def is_it(a):\n    return a == {name!r}\n",
+    }
+    for shape, source in plants.items():
+        mod = tmp_path / f"planted_{shape}.py"
+        mod.write_text(source, "utf-8")
+        assert _account_name_enumerations(ast.parse(mod.read_text()), names), (
+            f"the guard missed {name!r} planted as a {shape}"
+        )

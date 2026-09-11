@@ -145,6 +145,19 @@ def main(argv: list[str] | None = None) -> int:
         from homestead_ledger.cli import run_cli
         return run_cli(argv)
 
+    for statement_flag in ("--kind", "--liability-columns"):
+        if statement_flag in argv and "--import" not in argv:
+            # Both flags describe *a statement being imported* — which pack
+            # its rows classify against, and which of its two amount columns
+            # means a charge. With no statement there is nothing for either
+            # to describe, and falling through to the window would run as
+            # though the declaration had been honoured. Refused by name.
+            print(
+                f"homestead-ledger: {statement_flag} only applies to --import FILE",
+                file=sys.stderr,
+            )
+            return 2
+
     if "--import" in argv:
         # Bite 4 — a bank-statement CSV import, headless, no tkinter touched.
         # Imported inside this branch so `--smoke` and every other path stay

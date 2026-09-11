@@ -127,6 +127,51 @@ def test_no_display_returns_nonzero_with_guidance(capsys, monkeypatch):
     assert "--smoke" in err
 
 
+# ── a statement flag with no statement is refused, never quietly dropped ───
+
+
+def test_kind_and_liability_columns_without_import_are_refused(capsys, monkeypatch):
+    """Both flags describe a statement being imported. With no `--import`
+    there is nothing for either to describe, and the old behaviour — fall
+    through to the window — ran as though the declaration had been honoured:
+    the operator who typed `--kind credit_card` got the default view and no
+    word that their kind was never read. Refused by name, exit 2, and the
+    window never opened."""
+    opened: list[int] = []
+    monkeypatch.setattr("homestead_ledger.app.view.run", lambda: opened.append(1) or 0)
+
+    for argv in (
+        ["--kind", "credit_card"],
+        ["--liability-columns", "debit,credit"],
+        ["--kind", "credit_card", "--liability-columns", "debit,credit"],
+    ):
+        assert main(argv) == 2, argv
+        err = capsys.readouterr().err
+        assert "--import" in err
+        assert argv[0] in err
+    assert opened == [], "the window opened despite an unhonoured declaration"
+
+
+def test_kind_and_liability_columns_are_still_honoured_with_import(tmp_path, monkeypatch, capsys):
+    """The refusal above must key on the *absence of a statement*, not on the
+    flags themselves — the same flags with `--import` still reach the
+    importer."""
+    monkeypatch.setenv("HOMESTEAD_HOME", str(tmp_path))
+    csv_path = tmp_path / "card.csv"
+    csv_path.write_text(
+        "Date,Description,Debit,Credit\n2026-08-01,Hardware Store,100.00,\n"
+        "2026-08-10,Payment,,40.00\n",
+        "utf-8",
+    )
+    rc = main([
+        "--import", str(csv_path), "--account-number", "4242",
+        "--account", "credit_card", "--kind", "credit_card",
+        "--liability-columns", "debit,credit",
+    ])
+    assert rc == 0
+    assert "imported=2" in capsys.readouterr().out
+
+
 # ── `--smoke` is the packaging proof, so it must name every runtime module ──
 #
 # `--smoke` is the only leg CI runs against the built PyInstaller artifact. A
