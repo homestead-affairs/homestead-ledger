@@ -230,6 +230,22 @@ def _is_pack(mod: Path) -> bool:
     return "packs" in mod.relative_to(PKG).parts
 
 
+def test_the_pack_exclusion_is_a_path_boundary_not_a_name_guess():
+    """Planted: `_is_pack` is what lets a real pack legitimately enumerate its
+    own account kind without tripping the scan below — every `packs/*.py`
+    module names its own `OBLIGATION`/`FIELDS` literal, so without this
+    exclusion the guard would fire on every pack in the repo. Two names that
+    have never existed on disk, one under `packs/` and one merely beside it,
+    prove the boundary is the path segment and not a hand-kept pair."""
+    assert _is_pack(PKG / "packs" / "planted_pack.py")
+    assert not _is_pack(PKG / "planted_pack.py")
+    assert not _is_pack(PKG / "app" / "planted_pack.py")
+    # "packages.py" contains "pack" as a substring but is not a path segment
+    # equal to "packs" — the guard must not be fooled by a name that merely
+    # looks like one.
+    assert not _is_pack(PKG / "packages.py")
+
+
 def test_no_module_outside_the_registry_hardcodes_the_set_of_accounts():
     names = set(all_accounts())
     offenders: list[str] = []

@@ -423,15 +423,19 @@ def exclude_from(
     of two identical tuples survives does not matter — they are identical to
     every caller of this function.
 
-    **When the overlay bite lands this counting goes away.** `overlay.py`
-    (branch `claude/ledger-overlay`, the sibling of this one) adds
-    `balance.dated_transactions`, which is `transaction_tuples` with the item
-    id still attached. Once both are on `main`, the honest filter is by
-    fingerprint on that call — `paired_fingerprints(sidecar) |
-    overlay.excluded_fingerprints(sidecar)`, the union this module's seam was
-    always for — and the content match here can go. Until then there is no
-    id at this seam to filter on, and counting is what keeps a genuine
-    duplicate visible.
+    **X7-drift correction: the overlay bite landed, and the honest filter
+    is what every real caller now uses instead of this function.**
+    `overlay.py` added `balance.dated_transactions` — `transaction_tuples`
+    with the item id still attached — and every aggregate that reads through
+    it (`budget.envelopes`, `grant_report.by_use`, `server.py`'s
+    subscriptions pass) filters by fingerprint directly:
+    `overlay.excluded_fingerprints(sidecar) | paired_fingerprints(sidecar)`,
+    the union this module's seam was always for. None of them call
+    `exclude_from` any more. This function's content-counting stays — tested
+    below, not dead code deleted out from under a caller that might still
+    reach it — for the one seam that still only has plain `(date, amount,
+    description)` tuples with no item id attached, the shape
+    `transaction_tuples` (not `dated_transactions`) still returns.
     """
     paired = paired_fingerprints(sidecar)
     if not paired:

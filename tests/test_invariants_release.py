@@ -85,6 +85,29 @@ def _names_a_non_suppressed_credential(value: object) -> bool:
     return any(c in text for c in NON_SUPPRESSED_CREDENTIALS)
 
 
+def test_the_credential_scan_fires_on_a_planted_suppressed_credential():
+    """X7-drift audit: this scan had never been shown to fire. Both assertions
+    that use it are positive ones over the real workflows — they say "the
+    accepted credential is here", which a scan that returned `True` for
+    everything would also satisfy, and a scan that returned `True` for
+    `GITHUB_TOKEN` would satisfy while missing the only failure it exists to
+    catch (the one that cost three releases).
+
+    Planted in both directions: the suppressed credential must not clear it,
+    and each accepted credential must, in the two shapes the workflows write
+    them in — a bare string and a step's whole `env` mapping."""
+    planted_suppressed = "${{ secrets.GITHUB_TOKEN }}"
+    assert not _names_a_non_suppressed_credential(planted_suppressed)
+    assert not _names_a_non_suppressed_credential({"GH_TOKEN": planted_suppressed})
+    assert not _names_a_non_suppressed_credential(None)
+    assert not _names_a_non_suppressed_credential("")
+
+    for accepted in NON_SUPPRESSED_CREDENTIALS:
+        planted = "${{ " + accepted + " }}"
+        assert _names_a_non_suppressed_credential(planted), accepted
+        assert _names_a_non_suppressed_credential({"GH_TOKEN": planted}), accepted
+
+
 def test_the_tag_release_please_creates_matches_what_release_yml_listens_for():
     """With `include-component-in-tag` unset it defaults to *true*, and the tag
     becomes `<package-name>-vX.Y.Z` — which `v*` does not match, so the publish
@@ -124,7 +147,7 @@ def test_the_version_has_exactly_one_source():
         "nothing in this repo stores a version, so nothing needs bumping"
 
     hardcoded = [
-        f"{p.relative_to(_REPO)}:{i}"
+        f"{p.relative_to(_REPO).as_posix()}:{i}"
         for p in (_REPO / "homestead_ledger").rglob("*.py")
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
         if re.match(r"\s*__version__\s*=\s*[\"']", line)
