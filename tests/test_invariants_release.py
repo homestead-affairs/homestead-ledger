@@ -130,11 +130,26 @@ def test_the_tag_release_please_creates_matches_what_release_yml_listens_for():
     )
 
 
+def _hardcoded_version_lines(package_dir: Path) -> list[str]:
+    """Every `__version__ = "..."` assignment in `package_dir`, by
+    `path:lineno` -- a second copy of the version the tag alone must hold."""
+    return [
+        f"{p.relative_to(package_dir.parent).as_posix()}:{i}"
+        for p in package_dir.rglob("*.py")
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if re.match(r"\s*__version__\s*=\s*[\"']", line)
+    ]
+
+
 def test_the_version_has_exactly_one_source():
     """The tag is the only place a version exists. `dynamic = ["version"]` plus
     hatch-vcs is what makes that true; a literal `version =` in pyproject or a
     hardcoded `__version__` in the package would quietly become a second copy to
-    drift."""
+    drift.
+
+    2026-09-11: the hardcoded-`__version__` half is now `_hardcoded_version_
+    lines`, planted below (G9d-inline-scans, "Inline scans the meta-scan
+    cannot see")."""
     pyproject = tomllib.loads((_REPO / "pyproject.toml").read_text())
     assert "version" in (pyproject["project"].get("dynamic") or []), \
         "project.version must stay dynamic — a literal is a second copy"
@@ -146,13 +161,19 @@ def test_the_version_has_exactly_one_source():
     assert not _package_config().get("extra-files"), \
         "nothing in this repo stores a version, so nothing needs bumping"
 
-    hardcoded = [
-        f"{p.relative_to(_REPO).as_posix()}:{i}"
-        for p in (_REPO / "homestead_ledger").rglob("*.py")
-        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
-        if re.match(r"\s*__version__\s*=\s*[\"']", line)
-    ]
+    hardcoded = _hardcoded_version_lines(_REPO / "homestead_ledger")
     assert not hardcoded, f"hardcoded version string(s): {hardcoded}"
+
+
+def test_the_hardcoded_version_scan_fires_on_a_planted_literal(tmp_path):
+    """Planted: a module that pins its own `__version__` -- the second copy
+    the tag-only scheme forbids."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "clean.py").write_text("x = 1\n", encoding="utf-8")
+    (pkg / "planted.py").write_text('__version__ = "9.9.9"\n', encoding="utf-8")
+    hits = _hardcoded_version_lines(pkg)
+    assert hits == ["pkg/planted.py:1"]
 
 
 def test_release_automation_uses_the_pat_everywhere():

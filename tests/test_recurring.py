@@ -216,27 +216,30 @@ def test_the_module_does_not_import_the_store_books_balance_or_homestead_engine(
     """`recurring.py` takes plain transaction data and `today` — it must not
     reach the store, books, balance, or even the engine, so it stays pure and
     testable with synthetic tuples alone, and the chokepoint/no-egress guards
-    need no allow-list change to cover it."""
+    need no allow-list change to cover it.
+
+    2026-09-11: reuses `test_no_egress`'s own `_toplevel_and_nested_imports`
+    (planted there against a direct `urlopen`) instead of re-walking the
+    import statements here."""
+    from tests.test_no_egress import _toplevel_and_nested_imports
+
     src = Path(recurring.__file__).read_text("utf-8")
-    tree = ast.parse(src)
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported |= {a.name.split(".")[0] for a in node.names}
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".")[0])
+    imported = _toplevel_and_nested_imports(ast.parse(src))
     assert "homestead" not in imported
     assert "homestead_ledger" not in imported
 
 
 def test_the_module_reaches_no_payload_and_no_canonical():
+    """2026-09-11: delegates to `test_invariants_chokepoint`'s own
+    `_payload_reaches`/`_canonical_reaches` rather than re-walking the AST
+    here — the one place that scan is owned and planted (G9d-inline-scans,
+    "Duplicated chokepoint scans")."""
+    from tests import test_invariants_chokepoint as chk
+
     src = Path(recurring.__file__).read_text("utf-8")
     tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute):
-            assert node.attr != "payload"
-        if isinstance(node, ast.Name):
-            assert node.id != "CANONICAL"
+    assert chk._payload_reaches(tree) == []
+    assert chk._canonical_reaches(tree) == []
 
 
 def test_detect_recurring_takes_plain_tuples_not_a_store():

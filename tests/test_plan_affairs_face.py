@@ -28,6 +28,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests._scans import terms_found
+
 APP = Path(__file__).resolve().parent.parent
 PLAN_FACE = APP / "docs" / "PLAN-affairs-face.md"
 
@@ -75,7 +77,18 @@ def _struck_blocks(text: str) -> list[tuple[str, str]]:
 
 def _strikes_missing_evidence(text: str) -> list[str]:
     """Every struck bite whose tail does not carry both a PR number and a
-    release version, named by what it is missing."""
+    release version, named by what it is missing.
+
+    There is no second accepted shape. G9d-inline-scans proposed one -- a
+    branch striking an open item *it* recorded, with "PR number filled in by
+    the orchestrator" in place of the number -- and it was refused on audit
+    (2026-09-11): an exemption keyed on a phrase is an exemption any future
+    sweep can type, and "a document does not mark its own landing" is the
+    whole rule this file is. A bite that closed an open item on its branch
+    leaves the bullet **unstruck** with a dated "built on <branch>" note, and
+    a `docs:` follow-up strikes it once the PR number and the release exist
+    -- the same course `homestead-law` took for the identical case on the
+    same day."""
     missing = []
     for struck, tail in _struck_blocks(text):
         lacks = []
@@ -129,13 +142,56 @@ def test_the_evidence_guard_fires_on_a_strikethrough_missing_either_half(tmp_pat
     )
 
 
+def test_a_branch_may_not_strike_the_open_item_it_closed_itself(tmp_path):
+    """Planted: the exemption this guard refused. A bite that closed an open
+    item *it* recorded, striking it on its own branch with "PR number filled
+    in by the orchestrator" where the number belongs, still claims a landing
+    the tree cannot show -- so it is reported, exactly like any other strike
+    missing its evidence. The honest shape (left unstruck, with a dated
+    "built on <branch>" note) is planted beside it and must not be."""
+    planted = tmp_path / "PLAN-planted.md"
+    planted.write_text(
+        "~~an open item this branch closed~~ (closed by G9d-inline-scans "
+        "(this branch; PR number filled in by the orchestrator))\n"
+        "\n"
+        "- **an open item this branch built** (2026-09-11: built on "
+        "`claude/ledger-inline-scans`; the orchestrator strikes it with the "
+        "PR number and the release.)\n",
+        encoding="utf-8",
+    )
+    missing = _strikes_missing_evidence(planted.read_text(encoding="utf-8"))
+    assert len(missing) == 1 and "PR number" in missing[0] and "release version" in missing[0], (
+        "a self-closure strike names neither a PR nor a release and must be "
+        f"reported for both; got {missing}"
+    )
+    assert "built" not in "".join(missing), (
+        "the unstruck note is not a strike and must not be reported at all"
+    )
+
+
+def test_the_two_g9d_open_items_are_named_and_unstruck():
+    """The refusal, held against the real document. The inline-scan and
+    duplicated-chokepoint items were built on `claude/ledger-inline-scans`
+    and have no PR number and no release, so they stay named and unstruck
+    until a `docs:` follow-up carries both."""
+    text = PLAN_FACE.read_text(encoding="utf-8")
+    struck = "\n".join(struck for struck, _ in _struck_blocks(text))
+    for item in ("Inline scans the meta-scan cannot see",
+                 "Duplicated chokepoint scans"):
+        assert item in text, f"{item!r} is an open item and must stay named"
+        assert item not in struck, (
+            f"{item!r} is struck through with no PR number and no release: a "
+            "document does not mark its own landing"
+        )
+
+
 def test_every_ledger_bite_the_plan_names_has_an_entry():
     """Landed or not, each one is named. The unlanded ones are how a reader
     tells "nothing outstanding" from "nobody wrote it down"."""
     text = PLAN_FACE.read_text(encoding="utf-8")
-    absent = [
-        name for name in LANDED_BITES + UNLANDED_BITES if name not in text
-    ]
+    all_bites = LANDED_BITES + UNLANDED_BITES
+    named = set(terms_found(text, all_bites))
+    absent = sorted(set(all_bites) - named)
     assert not absent, (
         "these ledger bites are named in the Homestead · Affairs plan and "
         f"nowhere in docs/PLAN-affairs-face.md: {absent}"

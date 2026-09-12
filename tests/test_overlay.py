@@ -24,6 +24,8 @@ from homestead_ledger.fingerprint import fingerprint as make_fingerprint
 from homestead_ledger.packs import overlay as pack
 from homestead_ledger.store import Canonical, Sidecar
 
+from tests._scans import terms_found
+
 LABEL = "chk-t"
 
 
@@ -313,8 +315,7 @@ def test_the_visible_log_carries_a_reference_never_the_tagged_content(tmp_path, 
     for line in lines:
         assert line["ref"] == f"{overlay.MATTER}/{fp}"
         blob = json.dumps(line)
-        assert "groceries" not in blob
-        assert "bribe" not in blob
+        assert terms_found(blob, ("groceries", "bribe")) == []
     # and record() itself refuses a free-string event (F-4's own guard,
     # exercised directly rather than assumed)
     with pytest.raises(TypeError):

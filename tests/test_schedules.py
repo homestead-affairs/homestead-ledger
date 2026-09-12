@@ -19,6 +19,8 @@ from homestead.keep import rungs as rungs_mod
 from homestead_ledger import accounts, schedules
 from homestead_ledger.store import Sidecar
 
+from tests._scans import terms_found
+
 pytestmark = pytest.mark.usefixtures("_home")
 
 
@@ -92,10 +94,11 @@ def test_an_absent_field_is_a_missing_key_in_the_document_not_a_null(store):
     receipt = schedules.export(store, confirm=lambda wire: True)
     body = receipt.artifact.read_text("utf-8")
     (row,) = json.loads(body)["content"]["rows"]
+    # the exact key set below already proves "balance_as_of" is absent, not
+    # merely null
     assert row == {"label": "visa-chase", "kind": "credit_card",
                    "institution": "Chase"}
-    assert "balance_as_of" not in row
-    assert "null" not in body
+    assert terms_found(body, ("null",)) == []
 
 
 def test_the_document_row_keys_cannot_drift_from_the_composition(store):
@@ -237,9 +240,9 @@ def test_the_planted_number_never_appears_in_the_export_document_or_file(store):
     _plant(store)
     receipt = schedules.export(store, confirm=lambda wire: True)
     body = receipt.artifact.read_text("utf-8")
-    assert _PLANTED_NUMBER not in body
+    assert terms_found(body, (_PLANTED_NUMBER,)) == []
     doc = json.loads(body)["content"]
-    assert _PLANTED_NUMBER not in json.dumps(doc)
+    assert terms_found(json.dumps(doc), (_PLANTED_NUMBER,)) == []
 
 
 def test_neither_log_carries_a_number_a_balance_or_a_party(store):
@@ -249,13 +252,13 @@ def test_neither_log_carries_a_number_a_balance_or_a_party(store):
     is the institution the account resolves to."""
     _plant(store)
     receipt = schedules.export(store, confirm=lambda wire: True)
-    assert _PLANTED_BALANCE in receipt.artifact.read_text("utf-8")
+    assert terms_found(receipt.artifact.read_text("utf-8"), (_PLANTED_BALANCE,)) == [_PLANTED_BALANCE]
 
     integrity = (paths.logs_dir() / "integrity.jsonl").read_text("utf-8")
     visible = (paths.logs_dir() / "visible.jsonl").read_text("utf-8")
+    forbidden = (_PLANTED_NUMBER, _PLANTED_BALANCE, "Chase", "visa-plant")
     for log in (integrity, visible):
-        for planted in (_PLANTED_NUMBER, _PLANTED_BALANCE, "Chase", "visa-plant"):
-            assert planted not in log
+        assert terms_found(log, forbidden) == []
     row = json.loads(integrity.strip().splitlines()[-1])
     assert (row["matter"], row["item_type"], row["item_id"], row["purpose"]) == (
         "schedules", "debts", "export", "export",
@@ -308,8 +311,8 @@ def test_export_writes_one_artifact_one_integrity_row_one_visible_line(store):
     after_integrity = len(integrity_path.read_text("utf-8").splitlines())
     assert after_integrity == before_integrity + 1
 
-    visible = (paths.logs_dir() / "visible.jsonl").read_text("utf-8").splitlines()
-    assert any('"exported"' in line for line in visible)
+    visible = (paths.logs_dir() / "visible.jsonl").read_text("utf-8")
+    assert terms_found(visible, ('"exported"',)) == ['"exported"']
 
 
 def test_the_documents_rung_is_composed_over_the_rows_not_hard_coded(store):
@@ -506,33 +509,29 @@ def test_the_readme_quotes_the_notice_verbatim():
     from pathlib import Path
 
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text("utf-8")
-    assert schedules.NOTICE in readme
+    assert terms_found(readme, (schedules.NOTICE,)) == [schedules.NOTICE]
 
 
 # ── I-23: no hand-kept liability-kind list in this module ──────────────────
 
 
 def test_no_hardcoded_kind_literal_in_schedules_py():
+    """2026-09-11: delegates to `test_registry`'s own
+    `_account_name_enumerations` -- the same I-23 structural scan, already
+    owned and planted there (G9d-inline-scans, "Inline scans the meta-scan
+    cannot see")."""
     import ast
     from pathlib import Path
 
     from homestead_ledger import registry
+    from tests.test_registry import _account_name_enumerations
 
     names = set(registry.all_accounts())
     tree = ast.parse(
         (Path(__file__).resolve().parent.parent / "homestead_ledger" / "schedules.py")
         .read_text("utf-8")
     )
-    hits = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.List, ast.Set, ast.Tuple)):
-            for elt in node.elts:
-                if isinstance(elt, ast.Constant) and elt.value in names:
-                    hits.append(node.lineno)
-        elif isinstance(node, ast.Compare):
-            for operand in (node.left, *node.comparators):
-                if isinstance(operand, ast.Constant) and operand.value in names:
-                    hits.append(node.lineno)
+    hits = _account_name_enumerations(tree, names)
     assert hits == [], (
         f"schedules.py hardcodes an account-kind literal at {hits} — I-23 "
         "says iterate registry.all_accounts()/registry.account(kind) instead."

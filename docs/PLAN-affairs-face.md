@@ -159,7 +159,7 @@ the browser door's own G8 pins". The release is 0.11.0, cut by #46, which
 also carries G7b's `build(deps):` floor raise — one release, two bites,
 because #47 merged between #45 and the release-please PR.)
 
-*Two open UI gaps the merged code itself carries, recorded here rather than
+*~~Two open UI gaps the merged code itself carries, recorded here rather than
 struck as done or flagged as drift (neither claim is false, both are simply
 unfinished): the browser's Add Account form (`server.py::_post_account`)
 already accepts `owner`/`restricted` in its JSON body and `add_account`
@@ -169,7 +169,12 @@ call can set them today. And `include_business` is read from every
 relevant endpoint's query string (`server.py`'s `_get_subscriptions`,
 `_get_budget`, `_get_schedules`), but no page ships an "include business
 accounts" checkbox to set it — the flag exists and is tested
-(`tests/test_business_books.py`), it just has no browser control yet.*
+(`tests/test_business_books.py`), it just has no browser control yet.~~*
+(2026-09-11, G9c-business-books-ui, #50, released 0.12.0 — "business-books
+controls on the page — owner and restricted on the account form, allowable
+uses, include-business switch": both gaps are closed, the Add Account form
+now carries `owner`/`restricted` and every relevant page carries the
+include-business switch.)
 
 **X7-drift-<repo>** — `tests/test_docs_drift.py` grep-guards for known
 stale sentences; the meta-scan `tests/test_scans_fire.py` (every AST-guard
@@ -188,9 +193,11 @@ Not drift (no sentence anywhere claims otherwise) and not a struck bite —
 things the tree carries unfinished, written down so the next sweep does not
 have to rediscover them.
 
-- **The two G8 UI gaps** above: `owner`/`restricted` have no field on the
+- ~~**The two G8 UI gaps** above: `owner`/`restricted` have no field on the
   browser's Add Account form, and `include_business` has no checkbox on any
-  page. Both are wired and tested server-side; only the HTML is missing.
+  page. Both are wired and tested server-side; only the HTML is missing.~~
+  (2026-09-11, G9c-business-books-ui, #50, released 0.12.0 — closed the same
+  way as the paragraph above.)
 - **Inline scans the meta-scan cannot see.** `tests/test_scans_fire.py`
   reads module-level helpers. A guard written inline in a test body is
   invisible to it and can never be planted — the X7 audit factored out the
@@ -199,12 +206,26 @@ have to rediscover them.
   shape (for example `tests/test_view.py`'s module-scope tkinter check and
   `tests/test_nestor_seam.py`'s lazy-import check). Each is asserted against
   the real tree and none has been shown to fire on a violation.
+  (2026-09-11: **built** on `claude/ledger-inline-scans` — an inline half of
+  `tests/test_scans_fire.py` that walks every test body for the same shapes,
+  with `test_view.py`'s and `test_nestor_seam.py`'s checks factored into
+  planted module-level helpers. Not struck: a document does not mark its own
+  landing, and this branch has no PR number and no release yet. The strike,
+  with `#NN` and the release `CHANGELOG.md` confirms, is a `docs:` follow-up
+  the orchestrator makes once both exist.)
 - **Duplicated chokepoint scans.** `tests/test_queue.py`,
   `tests/test_recurring.py`, `tests/test_transfers.py`,
   `tests/test_budget.py` and `tests/test_business_books.py` each re-implement
   the `.payload`-reach walk that `tests/test_invariants_chokepoint.py`
   already owns and plants. The mechanism is proven once; the copies are not,
   and a copy that drifts is the shape this whole sweep is about.
+  (2026-09-11: **built** on `claude/ledger-inline-scans` — `test_queue.py`,
+  `test_recurring.py`, `test_budget.py` and `test_business_books.py` now call
+  `test_invariants_chokepoint`'s own `_payload_reaches`/`_canonical_reaches`
+  rather than re-walking the AST; `test_transfers.py` already delegated and
+  carried no copy to remove. Not struck, for the same reason as the item
+  above: no PR number, no release, and a document does not mark its own
+  landing.)
 - **Closed here, recorded so it is not re-opened as an open item:** the
   cover's distribution gate. The sweep's first pass called
   `accounts.cover`'s missing `by_matter` wiring an open item; the audit found

@@ -20,6 +20,8 @@ from homestead_ledger import accounts, books, cli, overlay, schedules, sync, tra
 from homestead_ledger.cli import run_cli
 from homestead_ledger.store import Sidecar
 
+from tests._scans import terms_found
+
 # ── the floor this bite raises: 0.13.0, where the fleet took structured values ─
 
 
@@ -612,20 +614,38 @@ def test_the_canonical_table_literal_is_the_engines_own():
 # ── I-23: the matters are discovered, never listed ─────────────────────────
 
 
-def test_sidecar_matters_are_discovered_from_the_packs(store):
-    """Every pack that declares a `MATTER`, found the way `registry.py`
-    finds an `ACCOUNT` — held against an independent read of the pack
-    sources, so a matter added to one and not the other fails here."""
+def _matters_declared_on_disk(pack_dir: Path) -> frozenset[str]:
+    """Every `MATTER = "..."` a pack module declares, read independently of
+    `registry.py`'s own discovery -- so a matter added to one and not the
+    other fails here rather than agreeing with itself."""
     import re
 
-    pack_dir = Path(sync.packs.__file__).parent
-    on_disk = {
+    return frozenset(
         m.group(1)
         for path in pack_dir.glob("*.py")
         for m in re.finditer(r'^MATTER = "([a-z0-9-]+)"$', path.read_text("utf-8"), re.M)
-    }
+    )
+
+
+def test_sidecar_matters_are_discovered_from_the_packs(store):
+    """Every pack that declares a `MATTER`, found the way `registry.py`
+    finds an `ACCOUNT` — held against an independent read of the pack
+    sources, so a matter added to one and not the other fails here.
+
+    2026-09-11: the regex walk is now `_matters_declared_on_disk`, planted
+    below (G9d-inline-scans, "Inline scans the meta-scan cannot see")."""
+    pack_dir = Path(sync.packs.__file__).parent
+    on_disk = _matters_declared_on_disk(pack_dir)
     assert on_disk == set(sync._sidecar_matters())
     assert on_disk <= set(sync.known_matters(store))
+
+
+def test_the_matters_on_disk_scan_fires_on_a_planted_pack(tmp_path):
+    """Planted: a pack module declaring a matter the reader must find
+    without help from `registry.py`."""
+    (tmp_path / "planted_pack.py").write_text('MATTER = "planted-matter"\n', encoding="utf-8")
+    (tmp_path / "not_a_pack.py").write_text("x = 1\n", encoding="utf-8")
+    assert _matters_declared_on_disk(tmp_path) == frozenset({"planted-matter"})
 
 
 def test_known_matters_picks_up_a_planted_sidecar_pack(tmp_path):
@@ -964,9 +984,7 @@ def test_the_visible_line_carries_the_household_and_the_envelope_and_nothing_els
     line = [l for l in visible.splitlines() if "record_synced" in l]
     assert len(line) == 1
     assert envelope.household in line[0] and envelope.envelope_id in line[0]
-    assert "PLANTED-INSTITUTION-NEVER-LOGGED" not in visible
-    assert _PLANTED_NUMBER not in visible
+    assert terms_found(visible, ("PLANTED-INSTITUTION-NEVER-LOGGED", _PLANTED_NUMBER)) == []
 
     integrity = (paths.logs_dir() / "integrity.jsonl").read_text("utf-8")
-    assert "PLANTED-INSTITUTION-NEVER-LOGGED" not in integrity
-    assert _PLANTED_NUMBER not in integrity
+    assert terms_found(integrity, ("PLANTED-INSTITUTION-NEVER-LOGGED", _PLANTED_NUMBER)) == []

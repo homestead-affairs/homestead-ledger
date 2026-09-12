@@ -21,6 +21,8 @@ from homestead_ledger import accounts, obligations, queue
 from homestead_ledger.cadence import UnknownCadence
 from homestead_ledger.store import Sidecar
 
+from tests._scans import terms_found
+
 AMOUNT = "1450.00"
 ACCOUNT_NUMBER_PLANT = "9821"     # a bank account number, to grep the log for
 
@@ -140,8 +142,7 @@ def test_the_visible_log_carries_a_reference_only(store, tmp_path):
     )
     log_path = paths.logs_dir() / "visible.jsonl"
     text = log_path.read_text("utf-8")
-    assert ACCOUNT_NUMBER_PLANT not in text
-    assert AMOUNT not in text
+    assert terms_found(text, (ACCOUNT_NUMBER_PLANT, AMOUNT)) == []
     entry = json.loads(text.strip().splitlines()[-1])
     assert entry["event"] == Event.ITEM_RESOLVED.value
     assert entry["ref"] == "obligations/rent"

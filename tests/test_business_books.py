@@ -28,6 +28,8 @@ from homestead_ledger.cli import run_cli
 from homestead_ledger.packs import accounts as accounts_pack
 from homestead_ledger.store import Canonical, Sidecar
 
+from tests._scans import terms_found
+
 pytestmark = pytest.mark.usefixtures("_home")
 
 
@@ -605,18 +607,18 @@ def test_the_planted_total_never_appears_in_list_rows_or_either_log(store, grant
     rows, _needs_use = grant_report.list_rows(
         Canonical(), store, grant_account, "2026-01", "2026-01",
     )
-    assert _PLANTED_TOTAL not in json.dumps(rows)
+    assert terms_found(json.dumps(rows), (_PLANTED_TOTAL,)) == []
 
     receipt = grant_report.export(
         Canonical(), store, grant_account, "2026-01", "2026-01", confirm=lambda w: True,
     )
-    assert _PLANTED_TOTAL in receipt.artifact.read_text("utf-8")  # the export itself does carry it
+    # the export itself does carry it
+    assert terms_found(receipt.artifact.read_text("utf-8"), (_PLANTED_TOTAL,)) == [_PLANTED_TOTAL]
 
     integrity = (paths.logs_dir() / "integrity.jsonl").read_text("utf-8")
     visible = (paths.logs_dir() / "visible.jsonl").read_text("utf-8")
     for log in (integrity, visible):
-        assert _PLANTED_TOTAL not in log
-        assert "big one" not in log
+        assert terms_found(log, (_PLANTED_TOTAL, "big one")) == []
 
 
 def test_export_document_carries_grant_report_notice(store, grant_account):
@@ -698,12 +700,14 @@ def test_grant_report_is_off_the_chokepoint_allow_list():
 
 
 def test_grant_report_module_reaches_no_payload():
+    """2026-09-11: delegates to `test_invariants_chokepoint`'s own
+    `_payload_reaches` rather than re-walking the AST here — the one place
+    that scan is owned and planted (G9d-inline-scans, "Duplicated chokepoint
+    scans")."""
+    from tests.test_invariants_chokepoint import _payload_reaches
+
     source = pathlib.Path(grant_report.__file__).read_text("utf-8")
-    tree = ast.parse(source)
-    hits = [
-        node.lineno for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and node.attr == "payload"
-    ]
+    hits = _payload_reaches(ast.parse(source))
     assert hits == []
 
 
@@ -752,7 +756,7 @@ def test_allowable_uses_crosses_sync_at_l3_the_pack_declares(store):
 
 def test_smoke_imports_grant_report():
     source = pathlib.Path(demo_mod.__file__).parent.parent.joinpath("__main__.py").read_text("utf-8")
-    assert "grant_report" in source
+    assert terms_found(source, ("grant_report",)) == ["grant_report"]
 
 
 def test_demo_seeds_one_business_and_one_restricted_account(store):
@@ -925,7 +929,7 @@ def test_a_business_accounts_number_never_renders_on_any_new_surface(store, caps
         if log.exists():
             seen.append(log.read_text("utf-8"))
     for text in seen:
-        assert _PLANTED_NUMBER not in text
+        assert terms_found(text, (_PLANTED_NUMBER,)) == []
     # and it really is on file, one record, so the grep above means something
     assert accounts.detail(store, "biz-grant")["number"] == ("L5", None)
 
@@ -945,9 +949,8 @@ def test_the_export_writes_one_integrity_row_of_references_only(store, grant_acc
     after = integrity.read_text("utf-8").splitlines()
     assert len(after) == len(before) + 1
     row = after[-1]
-    assert grant_account in row and "export" in row
-    for leak in ("4242.42", "software", "Vendor Invoice"):
-        assert leak not in row
+    assert terms_found(row, (grant_account, "export")) == [grant_account, "export"]
+    assert terms_found(row, ("4242.42", "software", "Vendor Invoice")) == []
 
 
 def test_include_business_is_an_argument_and_never_a_stored_default(store):

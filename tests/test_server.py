@@ -1064,11 +1064,49 @@ def test_api_schedules_mirrors_rows_exactly_and_derives_the_amounts(ui):
     assert "1200.00" not in json.dumps(data)
 
 
+def _nested_function_body(source: str, name: str, next_name: str) -> str:
+    """The source of the nested `def <name>` inside `source`, cut at the next
+    `def <next_name>`. A slice of the module's own text, so a membership
+    question of it is a scan of the tree and not of a string built here."""
+    after = source.split(f"def {name}")
+    assert len(after) == 2, f"expected exactly one `def {name}` in the source"
+    return after[1].split(f"def {next_name}")[0]
+
+
+def test_the_nested_function_body_scan_fires_on_a_planted_route(tmp_path):
+    """Planted: a `_route_post` that does name a schedules path. The cut must
+    return the POST router's body and nothing of the function after it, or
+    the export-door check below would pass on a door that exists."""
+    planted = (
+        "def build_server():\n"
+        "    def _route_get(path):\n"
+        "        return '/api/schedules/export'\n"
+        "    def _route_post(path):\n"
+        "        return '/api/schedules/export'\n"
+        "    def _field(name):\n"
+        "        return '/api/schedules/export'\n"
+    )
+    block = _nested_function_body(planted, "_route_post", "_field")
+    assert "schedule" in block, "the planted POST route must be reported"
+    assert "_route_get" not in block and "def _field" not in block, (
+        "the cut must not spill into the functions either side of it"
+    )
+    clean = planted.replace("    def _route_post(path):\n        return '/api/schedules/export'\n",
+                            "    def _route_post(path):\n        return None\n")
+    assert "schedule" not in _nested_function_body(clean, "_route_post", "_field")
+
+
 def test_there_is_no_export_door_on_the_server(ui):
     """An export is an operator act at the terminal, confirmed there. The
     browser has a read door and no write one — neither a GET nor a POST
     reaches an export, and `_route_post` names no schedules path at all, so
-    a door cannot be added without this failing."""
+    a door cannot be added without this failing.
+
+    2026-09-11 (audit): the `_route_post` cut is now
+    `_nested_function_body`, planted above — it was an inline scan of
+    `build_server`'s own source, read through `inspect.getsource` rather
+    than `read_text`, which is why the first pass of
+    `tests/test_scans_fire.py`'s inline half could not see it."""
     import inspect
 
     for path in ("/api/schedules/export", "/api/schedule/export"):
@@ -1083,8 +1121,9 @@ def test_there_is_no_export_door_on_the_server(ui):
     status, _ = ui.get("/api/schedules")
     assert status == 200                                  # the read door is there
 
-    source = inspect.getsource(server.build_server)
-    post_block = source.split("def _route_post")[1].split("def _field")[0]
+    post_block = _nested_function_body(
+        inspect.getsource(server.build_server), "_route_post", "_field"
+    )
     assert "schedule" not in post_block
 
 
@@ -1901,10 +1940,30 @@ def test_api_grant_report_ignores_the_include_business_flag(ui):
     assert plain[1]["needs_use"] == 1
 
 
+def _files_containing(files: list, term: bytes) -> list[str]:
+    """Every file in `files` whose raw bytes carry `term` -- reported by
+    `.as_posix()` path, never a Windows-suffix assertion."""
+    return [p.as_posix() for p in files if term in p.read_bytes()]
+
+
+def test_the_files_containing_scan_fires_on_a_planted_write(tmp_path):
+    """Planted: a file that does carry the term, beside one that does not --
+    both are named or cleared correctly."""
+    clean = tmp_path / "clean.bin"
+    clean.write_bytes(b"nothing to see")
+    dirty = tmp_path / "dirty.bin"
+    dirty.write_bytes(b"the word include_business landed here")
+    hits = _files_containing([clean, dirty], b"include_business")
+    assert hits == [dirty.as_posix()]
+
+
 def test_the_include_business_flag_is_never_written_anywhere(ui):
     """A per-call scope that landed in the keep would be a permission the
     next call inherits. Nothing under `HOMESTEAD_HOME` may carry the word
-    after a call that passed it."""
+    after a call that passed it.
+
+    2026-09-11: the raw byte-grep is now `_files_containing`, planted above
+    (G9d-inline-scans, "Inline scans the meta-scan cannot see")."""
     ui.add_account(label="biz-chk", kind="checking", number="2222")
     _post_transaction(ui, "biz-chk", date="2026-01-05", amount="-9.99", description="Cloudy")
     for path in (
@@ -1918,7 +1977,7 @@ def test_the_include_business_flag_is_never_written_anywhere(ui):
     # whether the word landed in it at all, in any encoding it could ride in
     files = [p for p in sorted(ui.home.rglob("*")) if p.is_file()]
     assert files, "nothing was written at all — this scan would pass vacuously"
-    written = [p.as_posix() for p in files if b"include_business" in p.read_bytes()]
+    written = _files_containing(files, b"include_business")
     assert not written, f"the per-call flag was stored at {written}"
 
 
