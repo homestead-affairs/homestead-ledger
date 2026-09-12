@@ -12,10 +12,18 @@ has *not* landed reads as if nothing is outstanding. The ledger bites the
 Homestead · Affairs plan names are W0-LEDGER, G2a-account-packs,
 G2c-importer-dates, G2b-account-instances, G3-cadence-paidby, G4-overlay,
 G4-transfers, G4-budget, G4-schedules-export, G5-sync, G7b-floor-0.13,
-G8-business-books and X7-drift-ledger; twelve have landed (G8 as #45 and
+G8-business-books and X7-drift-ledger; ~~twelve have landed (G8 as #45 and
 G7b as #47, both released together in 0.11.0, which #46 cut), and only
 X7-drift-ledger has not — this bite cannot strike itself before its own PR
-merges. All thirteen must be named here.
+merges. All thirteen must be named here.~~ (2026-09-12: X7-drift-ledger
+landed as #48, released 0.11.1, and the three Wave 7 follow-ups landed too —
+G9b-fleet-ci-leg #49 and G9c-business-books-ui #50 in 0.12.0, and
+G9d-inline-scans #53, which is test-only and so has **no release**: for a
+bite whose commit type is hidden from the changelog, the second half of the
+evidence is the merge sha, checked below against this repo's history as an
+ancestor of `HEAD`. Sixteen bites, all landed, all named; `UNLANDED_BITES`
+is empty until the next sweep names one, and its plant uses a made-up name
+so the mechanism is still exercised.)
 
 Every struck PR number is also cross-checked against this repo's own
 `git log --first-parent`, so a number typed from memory fails rather than
@@ -52,9 +60,15 @@ LANDED_BITES = (
     "W0-LEDGER", "G2a-account-packs", "G2c-importer-dates",
     "G2b-account-instances", "G3-cadence-paidby", "G4-overlay",
     "G4-transfers", "G4-budget", "G4-schedules-export", "G5-sync",
-    "G7b-floor-0.13", "G8-business-books",
+    "G7b-floor-0.13", "G8-business-books", "X7-drift-ledger",
+    "G9b-fleet-ci-leg", "G9c-business-books-ui", "G9d-inline-scans",
 )
-UNLANDED_BITES = ("X7-drift-ledger",)
+UNLANDED_BITES: tuple[str, ...] = ()  # ~~("X7-drift-ledger",)~~ landed 2026-09-12 (#48)
+
+#: The second half of the evidence for a bite whose commit type release-please
+#: hides (`test:`, `ci:`, `docs:`): no release ever names it, so the strike
+#: names the merge instead, and the merge is checked against history below.
+_MERGE_SHA_RE = re.compile(r"merged\s+`?([0-9a-f]{7,40})`?")
 
 
 def _struck_blocks(text: str) -> list[tuple[str, str]]:
@@ -94,8 +108,8 @@ def _strikes_missing_evidence(text: str) -> list[str]:
         lacks = []
         if not _PR_RE.search(tail):
             lacks.append("PR number")
-        if not _RELEASE_RE.search(tail):
-            lacks.append("release version")
+        if not (_RELEASE_RE.search(tail) or _MERGE_SHA_RE.search(tail)):
+            lacks.append("release version (or, for a hidden-type bite, the merge sha)")
         if lacks:
             missing.append(f"{struck.strip()[:60]!r} lacks {lacks}")
     return missing
@@ -169,20 +183,83 @@ def test_a_branch_may_not_strike_the_open_item_it_closed_itself(tmp_path):
     )
 
 
-def test_the_two_g9d_open_items_are_named_and_unstruck():
-    """The refusal, held against the real document. The inline-scan and
-    duplicated-chokepoint items were built on `claude/ledger-inline-scans`
-    and have no PR number and no release, so they stay named and unstruck
-    until a `docs:` follow-up carries both."""
+def test_the_two_g9d_open_items_are_struck_with_the_merge_they_landed_in():
+    """~~The refusal, held against the real document: the two items stay
+    named and unstruck until a `docs:` follow-up carries both halves.~~
+    (2026-09-12: the follow-up is this commit. #53 merged as `74fd58f`;
+    `test:` is hidden from the changelog, so the evidence is the PR number
+    and the merge sha, and the sha is held against history in
+    `test_every_struck_merge_sha_is_an_ancestor_of_head`.)"""
     text = PLAN_FACE.read_text(encoding="utf-8")
-    struck = "\n".join(struck for struck, _ in _struck_blocks(text))
     for item in ("Inline scans the meta-scan cannot see",
                  "Duplicated chokepoint scans"):
-        assert item in text, f"{item!r} is an open item and must stay named"
-        assert item not in struck, (
-            f"{item!r} is struck through with no PR number and no release: a "
-            "document does not mark its own landing"
+        assert item in text, f"{item!r} must stay named"
+        tails = [tail for struck, tail in _struck_blocks(text) if item in struck]
+        assert tails, f"{item!r} landed in #53 and must be struck"
+        assert "#53" in tails[0] and _MERGE_SHA_RE.search(tails[0]), (
+            f"{item!r}'s evidence must name #53 and the merge sha"
         )
+
+
+def _struck_merge_shas(text: str) -> list[str]:
+    return sorted({m.group(1) for _, tail in _struck_blocks(text)
+                   for m in _MERGE_SHA_RE.finditer(tail)})
+
+
+def _is_ancestor_of_head(sha: str) -> bool | None:
+    """`True`/`False` from git, `None` when there is no usable history."""
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+            cwd=APP, capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git
+        return None
+    if done.returncode == 0:
+        return True
+    if done.returncode == 1:
+        return False
+    return None  # not a git checkout, or the object is missing (shallow)
+
+
+def test_every_struck_merge_sha_is_an_ancestor_of_head():
+    """A merge sha typed from memory is the same wishful claim a bare `#NN`
+    is. Each one this face names must be reachable from `HEAD`."""
+    import pytest
+
+    if _merged_pr_numbers() is None:
+        pytest.skip("no usable git history here (sdist or shallow checkout)")
+    shas = _struck_merge_shas(PLAN_FACE.read_text(encoding="utf-8"))
+    assert shas, "no struck bite names a merge sha yet"
+    for sha in shas:
+        verdict = _is_ancestor_of_head(sha)
+        if verdict is None:
+            pytest.skip(f"{sha} is not resolvable here (shallow checkout)")
+        assert verdict, f"docs/PLAN-affairs-face.md names merge {sha}, which is not in this history"
+
+
+def test_the_merge_sha_guard_fires_on_a_planted_unknown_sha():
+    """Planted: a well-formed strike whose merge sha no history carries. The
+    evidence check accepts it (the shape is right) and the ancestor check
+    must be the one that refuses it."""
+    import pytest
+
+    if _merged_pr_numbers() is None:
+        pytest.skip("no usable git history here (sdist or shallow checkout)")
+    planted = "~~**X9-planted-bite** does a thing.~~ (#53, merged `0000000deadbeef`)\n"
+    assert not _strikes_missing_evidence(planted)
+    assert _struck_merge_shas(planted) == ["0000000deadbeef"]
+    assert _is_ancestor_of_head("0000000deadbeef") is not True
+
+
+def test_the_evidence_guard_still_wants_a_sha_after_the_word_merged():
+    """Planted: "merged" with no sha is the phrase the audit refused, one
+    word shorter. It is reported for the release half."""
+    planted = "~~**X9-planted-bite** does a thing.~~ (#53, merged, trust me)\n"
+    missing = _strikes_missing_evidence(planted)
+    assert len(missing) == 1 and "release version" in missing[0]
 
 
 def test_every_ledger_bite_the_plan_names_has_an_entry():
@@ -217,16 +294,15 @@ def test_the_wishful_strike_guard_fires_on_a_planted_early_strikethrough(tmp_pat
     over-eager follow-up commit would leave it once the release-please PR
     merges. The guard must name it."""
     planted = tmp_path / "PLAN-early-strike.md"
+    # ~~The plant used to strike X7-drift-ledger itself~~ (landed 2026-09-12);
+    # it now plants a bite no history knows, against the same helper.
     planted.write_text(
-        PLAN_FACE.read_text(encoding="utf-8").replace(
-            "**X7-drift-<repo>**",
-            "~~**X7-drift-ledger**~~ (#99, released 9.9.9)",
-            1,
-        ),
+        PLAN_FACE.read_text(encoding="utf-8")
+        + "\n- ~~**X9-planted-bite** does a thing.~~ (#99, released 9.9.9)\n",
         encoding="utf-8",
     )
     text = planted.read_text(encoding="utf-8")
-    assert _bites_struck_through(text, UNLANDED_BITES) == ["X7-drift-ledger"], (
+    assert _bites_struck_through(text, ("X9-planted-bite",)) == ["X9-planted-bite"], (
         "the plant did not apply, or the guard cannot see a struck bite name"
     )
 

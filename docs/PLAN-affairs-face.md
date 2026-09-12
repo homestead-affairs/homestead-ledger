@@ -176,7 +176,7 @@ uses, include-business switch": both gaps are closed, the Add Account form
 now carries `owner`/`restricted` and every relevant page carries the
 include-business switch.)
 
-**X7-drift-<repo>** — `tests/test_docs_drift.py` grep-guards for known
+~~**X7-drift-ledger** (`X7-drift-<repo>`) — `tests/test_docs_drift.py` grep-guards for known
 stale sentences; the meta-scan `tests/test_scans_fire.py` (every AST-guard
 helper must have a planted-violation test; itself planted); README status
 tables; `docs/PLAN-affairs-face.md` = this plan with items struck through
@@ -185,7 +185,40 @@ as they land. *(This bite, X7-drift-ledger. Unstruck on its own branch,
 orchestrator has opened and merged its PR; the strikethrough and PR number
 land in the same commit the orchestrator makes, or a follow-up on this
 branch once merged — the same posture `claude/health-drift` recorded for
-its own identical case.)*
+its own identical case.)*~~ (#48, released 0.11.1 — the sweep is `test:`,
+but the same PR carried `fix: the cover's second gate reads the household's
+spread, not the roster's shape`, and that `fix:` is what cut 0.11.1 via #51.
+Struck 2026-09-12 by the `docs:` follow-up, after the PR and the release.)
+
+- ~~**G9b-fleet-ci-leg** `ci:` — no CI job installed `psycopg`, so the fleet
+  dial test skipped on every OS; a `fleet` leg installs `psycopg[binary]`
+  (no database needed), runs the whole suite, sits in the `test` gate's
+  `needs`, and a guard in `tests/test_invariants_release.py` keeps it
+  there.~~ (#49, released 0.12.0 — `ci:` is hidden from the changelog, so
+  no line names it there; 0.12.0 is the release that first carried it, cut
+  by #52 from the same main. The audit found the leg never installed the
+  pytest it ran, and a guard half that passed vacuously; both fixed on the
+  PR. Struck 2026-09-12 by the `docs:` follow-up.)
+
+- ~~**G9c-business-books-ui** `feat:` — the two G8 browser gaps: `owner` and
+  `restricted` on the Add Account form, an allowable-uses mini-form per
+  restricted account, and an include-business switch on Budget, Recurring
+  and Schedules, read per call and never persisted.~~ (#50, released 0.12.0
+  — `feat: business-books controls on the page — owner and restricted on
+  the account form, allowable uses, include-business switch`; the audit
+  bounded the allowable-uses list at 32 and fixed the drift sweep's
+  `_js_function_body` helper on the same PR. Struck 2026-09-12 by the
+  `docs:` follow-up; the paragraph and open item above carry the same
+  evidence.)
+
+- ~~**G9d-inline-scans** `test:` — the inline half of the meta-scan, every
+  inline scan factored into a planted helper, the five chokepoint copies
+  replaced by the one owner.~~ (#53, merged `74fd58f`; `test:` is hidden from
+  the changelog and nothing else in the PR is release-worthy, so **no
+  release names it** — the evidence for a hidden-type bite is the merge
+  itself, and `tests/test_plan_affairs_face.py` checks that sha is an
+  ancestor of `HEAD`. Struck 2026-09-12 by the `docs:` follow-up. Its two
+  open items below are struck with the same evidence.)
 
 ## Open items this face records
 
@@ -198,7 +231,7 @@ have to rediscover them.
   page. Both are wired and tested server-side; only the HTML is missing.~~
   (2026-09-11, G9c-business-books-ui, #50, released 0.12.0 — closed the same
   way as the paragraph above.)
-- **Inline scans the meta-scan cannot see.** `tests/test_scans_fire.py`
+- ~~**Inline scans the meta-scan cannot see.** `tests/test_scans_fire.py`
   reads module-level helpers. A guard written inline in a test body is
   invisible to it and can never be planted — the X7 audit factored out the
   three page scans in `tests/test_server.py` and the second-copy guard in
@@ -212,8 +245,9 @@ have to rediscover them.
   planted module-level helpers. Not struck: a document does not mark its own
   landing, and this branch has no PR number and no release yet. The strike,
   with `#NN` and the release `CHANGELOG.md` confirms, is a `docs:` follow-up
-  the orchestrator makes once both exist.)
-- **Duplicated chokepoint scans.** `tests/test_queue.py`,
+  the orchestrator makes once both exist.)~~ (#53, merged `74fd58f` —
+  G9d-inline-scans; test-only, no release names it; struck 2026-09-12.)
+- ~~**Duplicated chokepoint scans.** `tests/test_queue.py`,
   `tests/test_recurring.py`, `tests/test_transfers.py`,
   `tests/test_budget.py` and `tests/test_business_books.py` each re-implement
   the `.payload`-reach walk that `tests/test_invariants_chokepoint.py`
@@ -225,7 +259,8 @@ have to rediscover them.
   rather than re-walking the AST; `test_transfers.py` already delegated and
   carried no copy to remove. Not struck, for the same reason as the item
   above: no PR number, no release, and a document does not mark its own
-  landing.)
+  landing.)~~ (#53, merged `74fd58f` — G9d-inline-scans; test-only, no
+  release names it; struck 2026-09-12.)
 - **Closed here, recorded so it is not re-opened as an open item:** the
   cover's distribution gate. The sweep's first pass called
   `accounts.cover`'s missing `by_matter` wiring an open item; the audit found
